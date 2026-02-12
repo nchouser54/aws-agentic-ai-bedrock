@@ -87,6 +87,7 @@ Teams adapter endpoint:
 - `POST /chatbot/teams`
 - Request body follows Teams/Bot activity shape (uses `text`)
 - Optional header auth: `X-Teams-Adapter-Token: <token>`
+- Deployment is optional and **disabled by default** (`teams_adapter_enabled=false`)
 
 ## Terraform deployment
 

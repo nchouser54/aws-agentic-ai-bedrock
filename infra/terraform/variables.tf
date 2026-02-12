@@ -85,7 +85,7 @@ variable "chatbot_model_id" {
 variable "teams_adapter_enabled" {
   description = "Enable Microsoft Teams adapter endpoint"
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "teams_adapter_token" {

@@ -25,5 +25,5 @@ chatbot_enabled = true
 chatbot_model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
 
 # Teams adapter endpoint
-teams_adapter_enabled = true
+teams_adapter_enabled = false
 teams_adapter_token   = ""
