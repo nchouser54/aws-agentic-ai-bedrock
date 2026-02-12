@@ -367,9 +367,37 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
   }
 }
 
+resource "aws_lambda_function" "teams_chatbot_adapter" {
+  count            = var.chatbot_enabled && var.teams_adapter_enabled ? 1 : 0
+  function_name    = "${local.name_prefix}-teams-chatbot-adapter"
+  role             = aws_iam_role.chatbot_lambda[0].arn
+  runtime          = "python3.12"
+  handler          = "chatbot.teams_adapter.lambda_handler"
+  filename         = data.archive_file.lambda_bundle.output_path
+  source_code_hash = data.archive_file.lambda_bundle.output_base64sha256
+  timeout          = 30
+  memory_size      = 512
+
+  environment {
+    variables = {
+      AWS_REGION                       = "us-gov-west-1"
+      CHATBOT_MODEL_ID                 = var.chatbot_model_id
+      BEDROCK_MODEL_ID                 = var.bedrock_model_id
+      ATLASSIAN_CREDENTIALS_SECRET_ARN = aws_secretsmanager_secret.atlassian_credentials.arn
+      TEAMS_ADAPTER_TOKEN              = var.teams_adapter_token
+    }
+  }
+}
+
 resource "aws_cloudwatch_log_group" "chatbot" {
   count             = var.chatbot_enabled ? 1 : 0
   name              = "/aws/lambda/${aws_lambda_function.jira_confluence_chatbot[0].function_name}"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_cloudwatch_log_group" "teams_chatbot" {
+  count             = var.chatbot_enabled && var.teams_adapter_enabled ? 1 : 0
+  name              = "/aws/lambda/${aws_lambda_function.teams_chatbot_adapter[0].function_name}"
   retention_in_days = var.log_retention_days
 }
 
@@ -416,6 +444,22 @@ resource "aws_apigatewayv2_route" "chatbot" {
   target    = "integrations/${aws_apigatewayv2_integration.chatbot_lambda[0].id}"
 }
 
+resource "aws_apigatewayv2_integration" "teams_chatbot_lambda" {
+  count                  = var.chatbot_enabled && var.teams_adapter_enabled ? 1 : 0
+  api_id                 = aws_apigatewayv2_api.webhook.id
+  integration_type       = "AWS_PROXY"
+  integration_method     = "POST"
+  integration_uri        = aws_lambda_function.teams_chatbot_adapter[0].invoke_arn
+  payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_route" "teams_chatbot" {
+  count     = var.chatbot_enabled && var.teams_adapter_enabled ? 1 : 0
+  api_id    = aws_apigatewayv2_api.webhook.id
+  route_key = "POST /chatbot/teams"
+  target    = "integrations/${aws_apigatewayv2_integration.teams_chatbot_lambda[0].id}"
+}
+
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.webhook.id
   name        = "$default"
@@ -440,6 +484,15 @@ resource "aws_lambda_permission" "allow_apigw_chatbot" {
   statement_id  = "AllowExecutionFromAPIGatewayChatbot"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.jira_confluence_chatbot[0].function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.webhook.execution_arn}/*/*"
+}
+
+resource "aws_lambda_permission" "allow_apigw_teams_chatbot" {
+  count         = var.chatbot_enabled && var.teams_adapter_enabled ? 1 : 0
+  statement_id  = "AllowExecutionFromAPIGatewayTeamsChatbot"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.teams_chatbot_adapter[0].function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.webhook.execution_arn}/*/*"
 }

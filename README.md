@@ -82,6 +82,12 @@ Chatbot endpoint:
   - `jira_jql` (optional)
   - `confluence_cql` (optional)
 
+Teams adapter endpoint:
+
+- `POST /chatbot/teams`
+- Request body follows Teams/Bot activity shape (uses `text`)
+- Optional header auth: `X-Teams-Adapter-Token: <token>`
+
 ## Terraform deployment
 
 ### Prerequisites
@@ -242,6 +248,13 @@ Recommended rollout:
 Example request body:
 
 - `{"query":"Summarize top blockers for release","jira_jql":"project=PLAT AND statusCategory!=Done","confluence_cql":"type=page AND space=ENG"}`
+
+### Teams adapter setup
+
+1. Enable `teams_adapter_enabled=true` in Terraform.
+2. (Optional) set `teams_adapter_token` and configure your caller to send `X-Teams-Adapter-Token`.
+3. Deploy and capture `teams_chatbot_url` output.
+4. Configure your Teams bot/webhook relay to POST activity payloads to `/chatbot/teams`.
 
 ## Security notes
 

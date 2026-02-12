@@ -27,3 +27,8 @@ output "chatbot_url" {
   description = "Jira/Confluence chatbot query endpoint"
   value       = var.chatbot_enabled ? "${aws_apigatewayv2_api.webhook.api_endpoint}/chatbot/query" : ""
 }
+
+output "teams_chatbot_url" {
+  description = "Microsoft Teams adapter endpoint"
+  value       = var.chatbot_enabled && var.teams_adapter_enabled ? "${aws_apigatewayv2_api.webhook.api_endpoint}/chatbot/teams" : ""
+}

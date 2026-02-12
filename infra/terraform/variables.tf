@@ -81,3 +81,16 @@ variable "chatbot_model_id" {
   type        = string
   default     = "anthropic.claude-3-sonnet-20240229-v1:0"
 }
+
+variable "teams_adapter_enabled" {
+  description = "Enable Microsoft Teams adapter endpoint"
+  type        = bool
+  default     = true
+}
+
+variable "teams_adapter_token" {
+  description = "Optional shared token required in X-Teams-Adapter-Token header"
+  type        = string
+  default     = ""
+  sensitive   = true
+}

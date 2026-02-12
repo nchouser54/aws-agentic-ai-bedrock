@@ -31,23 +31,12 @@ def _format_confluence(results: list[dict[str, Any]]) -> str:
     return "\n".join(rows) if rows else "No Confluence pages found."
 
 
-def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
-    if event.get("requestContext", {}).get("http", {}).get("method") != "POST":
-        return {"statusCode": 405, "body": json.dumps({"error": "method_not_allowed"})}
-
-    try:
-        body = json.loads(event.get("body") or "{}")
-    except json.JSONDecodeError:
-        return {"statusCode": 400, "body": json.dumps({"error": "invalid_json"})}
-
-    query = str(body.get("query") or "").strip()
-    if not query:
-        return {"statusCode": 400, "body": json.dumps({"error": "query_required"})}
-
-    jira_jql = str(body.get("jira_jql") or "").strip() or "order by updated DESC"
-    confluence_cql = str(body.get("confluence_cql") or "").strip() or "type=page order by lastmodified desc"
-
-    correlation_id = event.get("requestContext", {}).get("requestId", "unknown")
+def handle_query(
+    query: str,
+    jira_jql: str,
+    confluence_cql: str,
+    correlation_id: str,
+) -> dict[str, Any]:
     local_logger = get_logger("jira_confluence_chatbot", correlation_id=correlation_id)
 
     atlassian = AtlassianClient(credentials_secret_arn=os.environ["ATLASSIAN_CREDENTIALS_SECRET_ARN"])
@@ -81,13 +70,33 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         extra={"extra": {"jira_items": len(jira_items), "confluence_items": len(conf_items)}},
     )
 
-    response_body = {
+    return {
         "answer": answer,
         "sources": {
             "jira_count": len(jira_items),
             "confluence_count": len(conf_items),
         },
     }
+
+
+def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
+    if event.get("requestContext", {}).get("http", {}).get("method") != "POST":
+        return {"statusCode": 405, "body": json.dumps({"error": "method_not_allowed"})}
+
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return {"statusCode": 400, "body": json.dumps({"error": "invalid_json"})}
+
+    query = str(body.get("query") or "").strip()
+    if not query:
+        return {"statusCode": 400, "body": json.dumps({"error": "query_required"})}
+
+    jira_jql = str(body.get("jira_jql") or "").strip() or "order by updated DESC"
+    confluence_cql = str(body.get("confluence_cql") or "").strip() or "type=page order by lastmodified desc"
+
+    correlation_id = event.get("requestContext", {}).get("requestId", "unknown")
+    response_body = handle_query(query, jira_jql, confluence_cql, correlation_id)
 
     return {
         "statusCode": 200,
