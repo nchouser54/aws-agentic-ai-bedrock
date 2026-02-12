@@ -272,6 +272,9 @@ resource "aws_lambda_function" "pr_review_worker" {
       GITHUB_APP_PRIVATE_KEY_SECRET_ARN = aws_secretsmanager_secret.github_app_private_key_pem.arn
       GITHUB_APP_IDS_SECRET_ARN         = aws_secretsmanager_secret.github_app_ids.arn
       METRICS_NAMESPACE                 = "${var.project_name}/${var.environment}"
+      AUTO_PR_ENABLED                   = tostring(var.auto_pr_enabled)
+      AUTO_PR_MAX_FILES                 = tostring(var.auto_pr_max_files)
+      AUTO_PR_BRANCH_PREFIX             = var.auto_pr_branch_prefix
     }
   }
 }

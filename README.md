@@ -36,7 +36,7 @@ Create a **GitHub App** (organization or enterprise owned) and configure:
   - `Pull request`
 - **Repository permissions:**
   - `Pull requests`: **Read & write** (required to create PR reviews)
-  - `Contents`: **Read-only**
+  - `Contents`: **Read & write** (required for autonomous remediation PR commits)
   - `Metadata`: **Read-only**
 
 Install the app on desired repositories/org repos.
@@ -61,6 +61,9 @@ Worker Lambda env vars:
 - `BEDROCK_MODEL_ID` (fallback model)
 - `GITHUB_API_BASE=https://api.github.com`
 - `DRY_RUN=true|false`
+- `AUTO_PR_ENABLED=true|false`
+- `AUTO_PR_MAX_FILES` (default `5`)
+- `AUTO_PR_BRANCH_PREFIX` (default `ai-autofix`)
 
 Webhook Lambda env vars:
 
@@ -163,6 +166,21 @@ JSON logs include correlation context fields:
 
 Set `DRY_RUN=true` to skip GitHub review posting and log intended payload only.
 
+### Autonomous remediation PR mode
+
+When `AUTO_PR_ENABLED=true`, the worker attempts to create a follow-up autofix PR:
+
+- Uses model-provided `suggested_patch` entries only.
+- Skips sensitive files (`.env`, keys, secrets-related paths).
+- Applies unified-diff patches to changed files.
+- Creates a branch (`AUTO_PR_BRANCH_PREFIX/...`) and opens a PR targeting the original base branch.
+
+Recommended rollout:
+
+1. Keep `DRY_RUN=true` and `AUTO_PR_ENABLED=true` to inspect logs first.
+2. Move to `DRY_RUN=false` in non-prod sandbox repos.
+3. Enable for production repos after approval.
+
 ## Troubleshooting
 
 ### Signature verification failures
@@ -185,6 +203,12 @@ Set `DRY_RUN=true` to skip GitHub review posting and log intended payload only.
 
 - Inline comments only post when file+line mapping to PR diff `position` is safe.
 - Unmappable findings are retained in the review body.
+
+### Autofix PR not created
+
+- Confirm `AUTO_PR_ENABLED=true` and `DRY_RUN=false`.
+- Verify GitHub App has `Contents: Read & write`.
+- Check whether findings included valid `suggested_patch` unified diffs.
 
 ## Security notes
 

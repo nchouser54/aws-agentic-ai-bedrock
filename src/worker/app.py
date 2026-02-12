@@ -14,6 +14,7 @@ from shared.github_app_auth import GitHubAppAuth
 from shared.github_client import GitHubClient
 from shared.logging import get_logger
 from shared.schema import Finding, ReviewResult, parse_review_result
+from worker.patch_apply import PatchApplyError, apply_unified_patch
 from worker.review_mapper import map_new_line_to_diff_position
 
 logger = get_logger("pr_review_worker")
@@ -23,6 +24,8 @@ _cloudwatch = boto3.client("cloudwatch")
 
 SAFE_PATCH_CHAR_BUDGET = int(os.getenv("PATCH_CHAR_BUDGET", "45000"))
 IDEMPOTENCY_TTL_SECONDS = int(os.getenv("IDEMPOTENCY_TTL_SECONDS", str(7 * 24 * 60 * 60)))
+AUTO_PR_MAX_FILES = int(os.getenv("AUTO_PR_MAX_FILES", "5"))
+AUTO_PR_BRANCH_PREFIX = os.getenv("AUTO_PR_BRANCH_PREFIX", "ai-autofix")
 
 
 SENSITIVE_FILE_PATTERNS = (
@@ -219,6 +222,135 @@ def _build_inline_comments(findings: list[Finding], files_by_name: dict[str, dic
     return comments
 
 
+def _autopr_enabled() -> bool:
+    return os.getenv("AUTO_PR_ENABLED", "false").lower() == "true"
+
+
+def _build_autopr_changes(
+    gh: GitHubClient,
+    owner: str,
+    repo: str,
+    head_ref: str,
+    findings: list[Finding],
+) -> list[tuple[str, str, str]]:
+    """Build a list of (path, old_sha, updated_content) changes for safe fixable findings."""
+    updates: list[tuple[str, str, str]] = []
+    updated_files: set[str] = set()
+
+    for finding in findings:
+        if not finding.suggested_patch:
+            continue
+        if _is_sensitive_file(finding.file):
+            continue
+        if finding.file in updated_files:
+            continue
+        if len(updates) >= AUTO_PR_MAX_FILES:
+            break
+
+        try:
+            original_content, sha = gh.get_file_contents(owner, repo, finding.file, head_ref)
+            updated_content = apply_unified_patch(original_content, finding.suggested_patch)
+        except (PatchApplyError, ValueError):
+            continue
+
+        if updated_content == original_content:
+            continue
+
+        updates.append((finding.file, sha, updated_content))
+        updated_files.add(finding.file)
+
+    return updates
+
+
+def _create_autofix_pr(
+    gh: GitHubClient,
+    owner: str,
+    repo: str,
+    pr: dict[str, Any],
+    findings: list[Finding],
+    local_logger,
+    dry_run: bool,
+) -> None:
+    if not _autopr_enabled():
+        return
+
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    head_sha = head.get("sha")
+    head_ref = head.get("ref")
+    base_ref = base.get("ref")
+
+    if not head_sha or not head_ref or not base_ref:
+        local_logger.info("auto_pr_skipped_missing_refs")
+        return
+
+    changes = _build_autopr_changes(gh, owner, repo, head_ref, findings)
+    if not changes:
+        local_logger.info("auto_pr_skipped_no_applicable_changes")
+        return
+
+    short_sha = head_sha[:8]
+    branch_name = f"{AUTO_PR_BRANCH_PREFIX}/pr-{pr.get('number')}-{short_sha}"
+
+    if dry_run:
+        local_logger.info(
+            "dry_run_auto_pr",
+            extra={
+                "extra": {
+                    "branch": branch_name,
+                    "base": base_ref,
+                    "files": [path for path, _, _ in changes],
+                    "count": len(changes),
+                }
+            },
+        )
+        return
+
+    base_ref_data = gh.get_ref(owner, repo, f"heads/{base_ref}")
+    base_sha = ((base_ref_data.get("object") or {}).get("sha"))
+    if not base_sha:
+        local_logger.info("auto_pr_skipped_base_sha_missing")
+        return
+
+    try:
+        gh.create_ref(owner, repo, f"refs/heads/{branch_name}", base_sha)
+    except Exception:  # noqa: BLE001
+        # Branch likely already exists; continue using it.
+        pass
+
+    for path, file_sha, content in changes:
+        gh.put_file_contents(
+            owner=owner,
+            repo=repo,
+            path=path,
+            branch=branch_name,
+            message=f"AI autofix: update {path}",
+            content=content,
+            sha=file_sha,
+        )
+
+    source_pr_number = pr.get("number")
+    source_pr_title = pr.get("title") or "PR"
+    body = (
+        f"Automated follow-up fixes generated from AI review of #{source_pr_number}.\n\n"
+        "Please validate all changes before merge."
+    )
+    title = f"AI Autofix for #{source_pr_number}: {source_pr_title}"
+
+    created_pr = gh.create_pull_request(
+        owner=owner,
+        repo=repo,
+        title=title,
+        head=branch_name,
+        base=base_ref,
+        body=body,
+    )
+    local_logger.info(
+        "auto_pr_created",
+        extra={"extra": {"auto_pr_number": created_pr.get("number"), "auto_pr_url": created_pr.get("html_url")}},
+    )
+
+
 def _process_record(record: dict[str, Any]) -> None:
     started = time.time()
     message = json.loads(record["body"])
@@ -294,6 +426,16 @@ def _process_record(record: dict[str, Any]) -> None:
             comments=inline_comments or None,
         )
         local_logger.info("review_posted", extra={"extra": review_payload})
+
+    _create_autofix_pr(
+        gh=gh,
+        owner=owner,
+        repo=repo,
+        pr=pr,
+        findings=result.findings,
+        local_logger=local_logger,
+        dry_run=dry_run,
+    )
 
     duration_ms = (time.time() - started) * 1000
     _emit_metric("reviews_success", 1)

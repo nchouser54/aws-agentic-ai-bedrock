@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from typing import Callable, Optional
 
 import requests
@@ -86,5 +87,70 @@ class GitHubClient:
             "POST",
             f"/repos/{owner}/{repo}/pulls/{pull_number}/reviews",
             json=payload,
+        )
+        return response.json()
+
+    def get_ref(self, owner: str, repo: str, ref: str) -> dict:
+        response = self._request("GET", f"/repos/{owner}/{repo}/git/ref/{ref}")
+        return response.json()
+
+    def create_ref(self, owner: str, repo: str, ref: str, sha: str) -> dict:
+        response = self._request(
+            "POST",
+            f"/repos/{owner}/{repo}/git/refs",
+            json={"ref": ref, "sha": sha},
+        )
+        return response.json()
+
+    def get_file_contents(self, owner: str, repo: str, path: str, ref: str) -> tuple[str, str]:
+        response = self._request("GET", f"/repos/{owner}/{repo}/contents/{path}", params={"ref": ref})
+        data = response.json()
+        encoded = data.get("content", "").replace("\n", "")
+        decoded = base64.b64decode(encoded).decode("utf-8")
+        return decoded, data["sha"]
+
+    def put_file_contents(
+        self,
+        owner: str,
+        repo: str,
+        path: str,
+        branch: str,
+        message: str,
+        content: str,
+        sha: Optional[str] = None,
+    ) -> dict:
+        payload: dict = {
+            "message": message,
+            "content": base64.b64encode(content.encode("utf-8")).decode("utf-8"),
+            "branch": branch,
+        }
+        if sha:
+            payload["sha"] = sha
+
+        response = self._request(
+            "PUT",
+            f"/repos/{owner}/{repo}/contents/{path}",
+            json=payload,
+        )
+        return response.json()
+
+    def create_pull_request(
+        self,
+        owner: str,
+        repo: str,
+        title: str,
+        head: str,
+        base: str,
+        body: str,
+    ) -> dict:
+        response = self._request(
+            "POST",
+            f"/repos/{owner}/{repo}/pulls",
+            json={
+                "title": title,
+                "head": head,
+                "base": base,
+                "body": body,
+            },
         )
         return response.json()

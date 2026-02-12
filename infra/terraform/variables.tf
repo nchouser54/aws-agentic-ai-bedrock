@@ -45,3 +45,21 @@ variable "dry_run" {
   type        = bool
   default     = true
 }
+
+variable "auto_pr_enabled" {
+  description = "Enable autonomous remediation PR creation"
+  type        = bool
+  default     = false
+}
+
+variable "auto_pr_max_files" {
+  description = "Maximum number of files to update in one autonomous remediation PR"
+  type        = number
+  default     = 5
+}
+
+variable "auto_pr_branch_prefix" {
+  description = "Branch prefix for autonomous remediation PR branches"
+  type        = string
+  default     = "ai-autofix"
+}

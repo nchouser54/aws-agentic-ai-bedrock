@@ -13,3 +13,8 @@ bedrock_agent_alias_id = ""
 bedrock_model_id       = "anthropic.claude-3-sonnet-20240229-v1:0"
 
 dry_run = true
+
+# Autonomous remediation PR mode (off by default for safety)
+auto_pr_enabled       = false
+auto_pr_max_files     = 5
+auto_pr_branch_prefix = "ai-autofix"
