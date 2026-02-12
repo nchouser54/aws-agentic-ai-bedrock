@@ -115,6 +115,18 @@ Webhook Lambda env vars:
 
 > Note: local invokes still expect AWS credentials/resources for full path behavior unless mocked.
 
+## Quality gates (lint + tests)
+
+This repository includes CI checks for pull requests and pushes to `main`:
+
+- Ruff linting (`python -m ruff check src tests scripts`)
+- Pytest unit tests (`python -m pytest -q`)
+
+Run the same checks locally:
+
+- `make install`
+- `make check`
+
 ## Operations runbook
 
 ### Idempotency

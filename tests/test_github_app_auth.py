@@ -1,4 +1,4 @@
-import jwt
+from unittest.mock import patch
 
 from shared.github_app_auth import GitHubAppAuth
 
@@ -49,8 +49,13 @@ def test_create_app_jwt_contains_issuer() -> None:
         secrets_client=FakeSecretsClient(),
     )
 
-    token = auth.create_app_jwt()
-    claims = jwt.decode(token, options={"verify_signature": False, "verify_exp": False})
+    with patch("shared.github_app_auth.jwt.encode", return_value="signed-token") as encode_mock:
+        token = auth.create_app_jwt()
+
+    assert token == "signed-token"
+    args, kwargs = encode_mock.call_args
+    claims = args[0]
     assert claims["iss"] == "12345"
     assert "iat" in claims
     assert "exp" in claims
+    assert kwargs["algorithm"] == "RS256"
