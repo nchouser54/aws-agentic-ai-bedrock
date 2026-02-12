@@ -18,3 +18,8 @@ dry_run = true
 auto_pr_enabled       = false
 auto_pr_max_files     = 5
 auto_pr_branch_prefix = "ai-autofix"
+review_comment_mode   = "inline_best_effort"
+
+# Jira/Confluence chatbot service
+chatbot_enabled = true
+chatbot_model_id = "anthropic.claude-3-sonnet-20240229-v1:0"

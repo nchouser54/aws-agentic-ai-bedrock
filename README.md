@@ -64,12 +64,23 @@ Worker Lambda env vars:
 - `AUTO_PR_ENABLED=true|false`
 - `AUTO_PR_MAX_FILES` (default `5`)
 - `AUTO_PR_BRANCH_PREFIX` (default `ai-autofix`)
+- `REVIEW_COMMENT_MODE=summary_only|inline_best_effort|strict_inline`
+- `CHATBOT_MODEL_ID` (Jira/Confluence chatbot model)
+- `ATLASSIAN_CREDENTIALS_SECRET_ARN`
 
 Webhook Lambda env vars:
 
 - `WEBHOOK_SECRET_ARN`
 - `QUEUE_URL`
 - `GITHUB_ALLOWED_REPOS` (optional CSV allow-list)
+
+Chatbot endpoint:
+
+- `POST /chatbot/query`
+- JSON body:
+  - `query` (required)
+  - `jira_jql` (optional)
+  - `confluence_cql` (optional)
 
 ## Terraform deployment
 
@@ -166,6 +177,14 @@ JSON logs include correlation context fields:
 
 Set `DRY_RUN=true` to skip GitHub review posting and log intended payload only.
 
+### PR review options
+
+You can choose how PR comments are posted via `REVIEW_COMMENT_MODE`:
+
+- `summary_only`: post summary review body only, no inline comments.
+- `inline_best_effort` (default): post inline comments where mapping is safe; keep others in summary body.
+- `strict_inline`: if any mapping is uncertain, suppress all inline comments and keep findings in summary body.
+
 ### Autonomous remediation PR mode
 
 When `AUTO_PR_ENABLED=true`, the worker attempts to create a follow-up autofix PR:
@@ -209,6 +228,20 @@ Recommended rollout:
 - Confirm `AUTO_PR_ENABLED=true` and `DRY_RUN=false`.
 - Verify GitHub App has `Contents: Read & write`.
 - Check whether findings included valid `suggested_patch` unified diffs.
+
+### Jira/Confluence chatbot setup
+
+1. Populate Secrets Manager secret `atlassian_credentials` with JSON:
+  - `jira_base_url`
+  - `confluence_base_url`
+  - `email`
+  - `api_token`
+2. Deploy Terraform and capture `chatbot_url` output.
+3. Send requests to `POST /chatbot/query`.
+
+Example request body:
+
+- `{"query":"Summarize top blockers for release","jira_jql":"project=PLAT AND statusCategory!=Done","confluence_cql":"type=page AND space=ENG"}`
 
 ## Security notes
 

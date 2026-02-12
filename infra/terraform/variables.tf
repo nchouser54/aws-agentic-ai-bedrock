@@ -63,3 +63,21 @@ variable "auto_pr_branch_prefix" {
   type        = string
   default     = "ai-autofix"
 }
+
+variable "review_comment_mode" {
+  description = "PR review comment mode: summary_only, inline_best_effort, strict_inline"
+  type        = string
+  default     = "inline_best_effort"
+}
+
+variable "chatbot_enabled" {
+  description = "Enable Jira/Confluence chatbot Lambda and API route"
+  type        = bool
+  default     = true
+}
+
+variable "chatbot_model_id" {
+  description = "Bedrock model ID for Jira/Confluence chatbot"
+  type        = string
+  default     = "anthropic.claude-3-sonnet-20240229-v1:0"
+}

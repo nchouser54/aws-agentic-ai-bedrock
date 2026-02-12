@@ -26,6 +26,7 @@ SAFE_PATCH_CHAR_BUDGET = int(os.getenv("PATCH_CHAR_BUDGET", "45000"))
 IDEMPOTENCY_TTL_SECONDS = int(os.getenv("IDEMPOTENCY_TTL_SECONDS", str(7 * 24 * 60 * 60)))
 AUTO_PR_MAX_FILES = int(os.getenv("AUTO_PR_MAX_FILES", "5"))
 AUTO_PR_BRANCH_PREFIX = os.getenv("AUTO_PR_BRANCH_PREFIX", "ai-autofix")
+REVIEW_COMMENT_MODE = os.getenv("REVIEW_COMMENT_MODE", "inline_best_effort")
 
 
 SENSITIVE_FILE_PATTERNS = (
@@ -188,8 +189,12 @@ def _format_review_body(result: ReviewResult) -> str:
     return "\n".join(lines)
 
 
-def _build_inline_comments(findings: list[Finding], files_by_name: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+def _build_inline_comments(
+    findings: list[Finding],
+    files_by_name: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
     comments: list[dict[str, Any]] = []
+    unmapped_count = 0
 
     for finding in findings:
         if finding.start_line is None:
@@ -205,6 +210,7 @@ def _build_inline_comments(findings: list[Finding], files_by_name: dict[str, dic
 
         position = map_new_line_to_diff_position(patch, finding.start_line)
         if position is None:
+            unmapped_count += 1
             continue
 
         body = finding.message
@@ -219,6 +225,21 @@ def _build_inline_comments(findings: list[Finding], files_by_name: dict[str, dic
             }
         )
 
+    return comments, unmapped_count
+
+
+def _select_inline_comments(
+    findings: list[Finding],
+    files_by_name: dict[str, dict[str, Any]],
+    review_mode: str,
+) -> list[dict[str, Any]]:
+    mode = (review_mode or "inline_best_effort").strip().lower()
+    comments, unmapped = _build_inline_comments(findings, files_by_name)
+
+    if mode == "summary_only":
+        return []
+    if mode == "strict_inline" and unmapped > 0:
+        return []
     return comments
 
 
@@ -404,7 +425,7 @@ def _process_record(record: dict[str, Any]) -> None:
 
     body = _format_review_body(result)
     files_by_name = {f.get("filename"): f for f in files}
-    inline_comments = _build_inline_comments(result.findings, files_by_name)
+    inline_comments = _select_inline_comments(result.findings, files_by_name, REVIEW_COMMENT_MODE)
 
     review_payload = {
         "repo": repo_full_name,

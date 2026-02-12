@@ -16,8 +16,14 @@ output "idempotency_table_name" {
 output "secret_arns" {
   description = "Secret ARNs to populate after deploy"
   value = {
-    github_webhook_secret     = aws_secretsmanager_secret.github_webhook_secret.arn
-    github_app_private_key    = aws_secretsmanager_secret.github_app_private_key_pem.arn
-    github_app_ids            = aws_secretsmanager_secret.github_app_ids.arn
+    github_webhook_secret  = aws_secretsmanager_secret.github_webhook_secret.arn
+    github_app_private_key = aws_secretsmanager_secret.github_app_private_key_pem.arn
+    github_app_ids         = aws_secretsmanager_secret.github_app_ids.arn
+    atlassian_credentials  = aws_secretsmanager_secret.atlassian_credentials.arn
   }
+}
+
+output "chatbot_url" {
+  description = "Jira/Confluence chatbot query endpoint"
+  value       = var.chatbot_enabled ? "${aws_apigatewayv2_api.webhook.api_endpoint}/chatbot/query" : ""
 }

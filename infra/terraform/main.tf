@@ -125,6 +125,22 @@ resource "aws_iam_role" "worker_lambda" {
   })
 }
 
+resource "aws_iam_role" "chatbot_lambda" {
+  count = var.chatbot_enabled ? 1 : 0
+  name  = "${local.name_prefix}-chatbot-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "lambda.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
 resource "aws_iam_policy" "webhook_policy" {
   name = "${local.name_prefix}-webhook-policy"
 
@@ -141,18 +157,18 @@ resource "aws_iam_policy" "webhook_policy" {
         Resource = "arn:aws-us-gov:logs:us-gov-west-1:${data.aws_caller_identity.current.account_id}:*"
       },
       {
-        Effect = "Allow"
-        Action = ["sqs:SendMessage"]
+        Effect   = "Allow"
+        Action   = ["sqs:SendMessage"]
         Resource = aws_sqs_queue.pr_review_queue.arn
       },
       {
-        Effect = "Allow"
-        Action = ["secretsmanager:GetSecretValue"]
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
         Resource = aws_secretsmanager_secret.github_webhook_secret.arn
       },
       {
-        Effect = "Allow"
-        Action = ["kms:Decrypt"]
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
         Resource = aws_kms_key.app.arn
       }
     ]
@@ -208,13 +224,48 @@ resource "aws_iam_policy" "worker_policy" {
         Resource = "*"
       },
       {
-        Effect = "Allow"
-        Action = ["cloudwatch:PutMetricData"]
+        Effect   = "Allow"
+        Action   = ["cloudwatch:PutMetricData"]
         Resource = "*"
       },
       {
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = aws_kms_key.app.arn
+      }
+    ]
+  })
+}
+
+resource "aws_iam_policy" "chatbot_policy" {
+  count = var.chatbot_enabled ? 1 : 0
+  name  = "${local.name_prefix}-chatbot-policy"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
         Effect = "Allow"
-        Action = ["kms:Decrypt"]
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws-us-gov:logs:us-gov-west-1:${data.aws_caller_identity.current.account_id}:*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = aws_secretsmanager_secret.atlassian_credentials.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["bedrock:InvokeModel"]
+        Resource = "*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
         Resource = aws_kms_key.app.arn
       }
     ]
@@ -229,6 +280,12 @@ resource "aws_iam_role_policy_attachment" "webhook_policy" {
 resource "aws_iam_role_policy_attachment" "worker_policy" {
   role       = aws_iam_role.worker_lambda.name
   policy_arn = aws_iam_policy.worker_policy.arn
+}
+
+resource "aws_iam_role_policy_attachment" "chatbot_policy" {
+  count      = var.chatbot_enabled ? 1 : 0
+  role       = aws_iam_role.chatbot_lambda[0].name
+  policy_arn = aws_iam_policy.chatbot_policy[0].arn
 }
 
 resource "aws_lambda_function" "webhook_receiver" {
@@ -262,7 +319,7 @@ resource "aws_lambda_function" "pr_review_worker" {
 
   environment {
     variables = {
-      AWS_REGION                         = "us-gov-west-1"
+      AWS_REGION                        = "us-gov-west-1"
       BEDROCK_AGENT_ID                  = var.bedrock_agent_id
       BEDROCK_AGENT_ALIAS_ID            = var.bedrock_agent_alias_id
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
@@ -289,12 +346,39 @@ resource "aws_cloudwatch_log_group" "worker" {
   retention_in_days = var.log_retention_days
 }
 
+resource "aws_lambda_function" "jira_confluence_chatbot" {
+  count            = var.chatbot_enabled ? 1 : 0
+  function_name    = "${local.name_prefix}-jira-confluence-chatbot"
+  role             = aws_iam_role.chatbot_lambda[0].arn
+  runtime          = "python3.12"
+  handler          = "chatbot.app.lambda_handler"
+  filename         = data.archive_file.lambda_bundle.output_path
+  source_code_hash = data.archive_file.lambda_bundle.output_base64sha256
+  timeout          = 30
+  memory_size      = 512
+
+  environment {
+    variables = {
+      AWS_REGION                       = "us-gov-west-1"
+      CHATBOT_MODEL_ID                 = var.chatbot_model_id
+      BEDROCK_MODEL_ID                 = var.bedrock_model_id
+      ATLASSIAN_CREDENTIALS_SECRET_ARN = aws_secretsmanager_secret.atlassian_credentials.arn
+    }
+  }
+}
+
+resource "aws_cloudwatch_log_group" "chatbot" {
+  count             = var.chatbot_enabled ? 1 : 0
+  name              = "/aws/lambda/${aws_lambda_function.jira_confluence_chatbot[0].function_name}"
+  retention_in_days = var.log_retention_days
+}
+
 resource "aws_lambda_event_source_mapping" "worker_sqs" {
-  event_source_arn        = aws_sqs_queue.pr_review_queue.arn
-  function_name           = aws_lambda_function.pr_review_worker.arn
-  batch_size              = 5
+  event_source_arn                   = aws_sqs_queue.pr_review_queue.arn
+  function_name                      = aws_lambda_function.pr_review_worker.arn
+  batch_size                         = 5
   maximum_batching_window_in_seconds = 1
-  function_response_types = ["ReportBatchItemFailures"]
+  function_response_types            = ["ReportBatchItemFailures"]
 }
 
 resource "aws_apigatewayv2_api" "webhook" {
@@ -316,6 +400,22 @@ resource "aws_apigatewayv2_route" "webhook" {
   target    = "integrations/${aws_apigatewayv2_integration.webhook_lambda.id}"
 }
 
+resource "aws_apigatewayv2_integration" "chatbot_lambda" {
+  count                  = var.chatbot_enabled ? 1 : 0
+  api_id                 = aws_apigatewayv2_api.webhook.id
+  integration_type       = "AWS_PROXY"
+  integration_method     = "POST"
+  integration_uri        = aws_lambda_function.jira_confluence_chatbot[0].invoke_arn
+  payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_route" "chatbot" {
+  count     = var.chatbot_enabled ? 1 : 0
+  api_id    = aws_apigatewayv2_api.webhook.id
+  route_key = "POST /chatbot/query"
+  target    = "integrations/${aws_apigatewayv2_integration.chatbot_lambda[0].id}"
+}
+
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.webhook.id
   name        = "$default"
@@ -331,6 +431,15 @@ resource "aws_lambda_permission" "allow_apigw" {
   statement_id  = "AllowExecutionFromAPIGateway"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.webhook_receiver.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.webhook.execution_arn}/*/*"
+}
+
+resource "aws_lambda_permission" "allow_apigw_chatbot" {
+  count         = var.chatbot_enabled ? 1 : 0
+  statement_id  = "AllowExecutionFromAPIGatewayChatbot"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.jira_confluence_chatbot[0].function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.webhook.execution_arn}/*/*"
 }
