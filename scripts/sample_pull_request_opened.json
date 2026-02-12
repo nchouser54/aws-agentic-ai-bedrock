@@ -1,0 +1,15 @@
+{
+  "action": "opened",
+  "installation": { "id": 12345678 },
+  "repository": {
+    "full_name": "example-org/example-repo"
+  },
+  "pull_request": {
+    "number": 42,
+    "head": {
+      "sha": "0123456789abcdef0123456789abcdef01234567"
+    },
+    "title": "Add AI reviewer",
+    "body": "This PR adds initial reviewer setup."
+  }
+}

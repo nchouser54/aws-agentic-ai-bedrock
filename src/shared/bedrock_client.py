@@ -1,0 +1,97 @@
+from __future__ import annotations
+
+import json
+import uuid
+from typing import Optional
+
+import boto3
+from botocore.client import BaseClient
+
+
+class BedrockReviewClient:
+    def __init__(
+        self,
+        region: str,
+        model_id: str,
+        agent_id: Optional[str] = None,
+        agent_alias_id: Optional[str] = None,
+        agent_runtime: Optional[BaseClient] = None,
+        bedrock_runtime: Optional[BaseClient] = None,
+    ) -> None:
+        self._model_id = model_id
+        self._agent_id = agent_id
+        self._agent_alias_id = agent_alias_id
+        self._agent_runtime = agent_runtime or boto3.client("bedrock-agent-runtime", region_name=region)
+        self._bedrock_runtime = bedrock_runtime or boto3.client("bedrock-runtime", region_name=region)
+
+    def analyze_pr(self, prompt: str) -> dict:
+        if self._agent_id and self._agent_alias_id:
+            try:
+                agent_result = self._invoke_agent(prompt)
+                return self._parse_text_to_json(agent_result)
+            except Exception:  # noqa: BLE001
+                # Fall back to direct model invocation.
+                pass
+
+        model_result = self._invoke_model(prompt)
+        return self._parse_text_to_json(model_result)
+
+    def _invoke_agent(self, prompt: str) -> str:
+        response = self._agent_runtime.invoke_agent(
+            agentId=self._agent_id,
+            agentAliasId=self._agent_alias_id,
+            sessionId=f"pr-review-{uuid.uuid4()}",
+            inputText=prompt,
+        )
+
+        chunks: list[str] = []
+        for event in response.get("completion", []):
+            chunk = event.get("chunk")
+            if not chunk:
+                continue
+            raw = chunk.get("bytes", b"")
+            if isinstance(raw, bytes):
+                chunks.append(raw.decode("utf-8", errors="ignore"))
+            else:
+                chunks.append(str(raw))
+
+        return "".join(chunks)
+
+    def _invoke_model(self, prompt: str) -> str:
+        body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 1500,
+            "temperature": 0.1,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": prompt}],
+                }
+            ],
+        }
+        response = self._bedrock_runtime.invoke_model(
+            modelId=self._model_id,
+            contentType="application/json",
+            accept="application/json",
+            body=json.dumps(body),
+        )
+        payload = json.loads(response["body"].read())
+        content = payload.get("content", [])
+        if not content:
+            return json.dumps(payload)
+        text = content[0].get("text")
+        if not text:
+            return json.dumps(payload)
+        return text
+
+    @staticmethod
+    def _parse_text_to_json(text: str) -> dict:
+        stripped = text.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            return json.loads(stripped)
+
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise ValueError("Bedrock response did not contain a JSON object")
+        return json.loads(stripped[start : end + 1])

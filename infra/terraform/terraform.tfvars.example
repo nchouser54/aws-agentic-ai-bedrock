@@ -1,0 +1,15 @@
+project_name       = "ai-pr-reviewer"
+environment        = "prod"
+log_retention_days = 30
+
+# Optional explicit allow-list. Empty list means allow all repos where app is installed.
+github_allowed_repos = [
+  # "my-org/my-repo"
+]
+
+# Bedrock config
+bedrock_agent_id       = ""
+bedrock_agent_alias_id = ""
+bedrock_model_id       = "anthropic.claude-3-sonnet-20240229-v1:0"
+
+dry_run = true
