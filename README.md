@@ -229,7 +229,7 @@ In the UI, provide:
 Optional GitHub login in web app:
 
 - Expand **GitHub Login (device flow, optional)**
-- Set **GitHub OAuth Base URL** (`https://github.com` for github.com, or your GHES host)
+- Set **GitHub OAuth Base URL** to your **NG-hosted GitHub** base URL (GHES host)
 - Enter your GitHub OAuth App Client ID
 - Click **Login with GitHub** and complete verification on GitHub
 - The app will auto-fill `bearer` auth mode/token for chatbot calls
