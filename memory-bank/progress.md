@@ -42,6 +42,9 @@
 - [x] Add websocket streaming transport handler for chatbot query chunks (`action=query`)
 - [x] Add Terraform websocket API resources, invoke permission, and output URL
 - [x] Add websocket unit tests for chunk/done frame flow and unsupported route handling
+- [x] Enforce websocket API token auth for `$connect` and query routes in chatbot lambda
+- [x] Add websocket auth unit tests (unauthorized/authorized connect and unauthorized query)
+- [x] Clean up README/SETUP markdown diagnostics (tables, fence spacing/language, list formatting)
 
 ## Doing
 

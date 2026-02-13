@@ -18,6 +18,8 @@
 - Implement phase-3 chatbot memory hygiene (actor-scoped memory, quotas, compaction, clear-memory APIs).
 - Implement phase-4 image safety and per-actor/per-conversation rate controls.
 - Implement phase-5 true websocket streaming transport for chatbot responses.
+- Harden websocket auth path to enforce API token checks on `$connect` and websocket query events.
+- Reduce markdown diagnostics in README/SETUP to keep docs maintenance signal clean.
 
 ## Current Blockers
 

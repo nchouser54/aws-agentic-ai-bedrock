@@ -1,5 +1,7 @@
 # Complete Setup Guide
 
+<!-- markdownlint-disable MD024 MD060 MD032 -->
+
 This document provides detailed setup instructions for every feature in the AI PR Reviewer.
 It is written for **company-hosted / self-hosted** environments:
 
@@ -32,7 +34,7 @@ All features also work with Atlassian Cloud and GitHub.com — see the [Cloud vs
 
 ## Architecture Overview
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────┐
 │                    GitHub Enterprise Server                    │
 │  (webhook fires on PR events → hits API Gateway endpoint)     │
@@ -67,7 +69,7 @@ All features also work with Atlassian Cloud and GitHub.com — see the [Cloud vs
 ## Feature Matrix — What's Shared
 
 | Shared Asset | PR Reviewer | Chatbot | Jira in PRs | Release Notes | KB Sync | Teams | Sprint Report | Test Gen | PR Description |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **KMS key** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **API Gateway** | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ |
 | **GitHub App secrets** | ✅ | — | ✅ | ✅ | — | — | ✅ | ✅ | ✅ |
@@ -113,7 +115,7 @@ make terraform-fmt-check
 Create a **GitHub App** on your GitHub Enterprise Server instance:
 
 | Setting | Value |
-|---|---|
+| --- | --- |
 | **Homepage URL** | Anything (e.g., your team's wiki page) |
 | **Webhook URL** | Will be set after first deploy (Terraform output `webhook_url`) |
 | **Webhook secret** | Generate a strong random string — you'll store this in Secrets Manager |
@@ -121,19 +123,22 @@ Create a **GitHub App** on your GitHub Enterprise Server instance:
 | **Repository permissions** | `Pull requests: Read & write`, `Contents: Read & write`, `Metadata: Read-only` |
 
 After creation:
+
 - Note the **App ID** and **Installation ID** (install the app on your org/repos)
 - Download the **private key PEM file**
 
 ### 3. Jira & Confluence Credentials
 
 For **Data Center / Server** (on-premises):
+
 - A service account username with read access to Jira projects and Confluence spaces
 - A **personal access token** (PAT) for that service account
 - The base URLs (e.g., `https://jira.example.com`, `https://confluence.example.com`)
 
 For **Cloud** (atlassian.net):
+
 - A service account email address
-- An **API token** from https://id.atlassian.com/manage-profile/security/api-tokens
+- An **API token** from <https://id.atlassian.com/manage-profile/security/api-tokens>
 - The base URL (e.g., `https://yourcompany.atlassian.net` for both Jira and Confluence)
 
 ### 4. Terraform Init & Secrets Population
@@ -146,6 +151,7 @@ cp terraform.tfvars.example terraform.tfvars
 Edit `terraform.tfvars` with your values (see [Terraform Variables Reference](#terraform-variables-reference)).
 
 **Critical: Set `github_api_base`** for GitHub Enterprise Server:
+
 ```hcl
 # GitHub Enterprise Server
 github_api_base = "https://github.example.com/api/v3"
@@ -155,6 +161,7 @@ github_api_base = "https://github.example.com/api/v3"
 ```
 
 Deploy infrastructure:
+
 ```bash
 terraform init
 terraform plan
@@ -164,14 +171,15 @@ terraform apply
 After first deploy, **populate secrets** in AWS Secrets Manager (replace the placeholder values):
 
 | Secret | Contents |
-|---|---|
+| --- | --- |
 | `github_webhook_secret` | Your GitHub App webhook secret string |
 | `github_app_private_key_pem` | The full PEM file contents (including BEGIN/END lines) |
 | `github_app_ids` | JSON: `{"app_id": "12345", "installation_id": "67890"}` |
 | `atlassian_credentials` | See [Secrets Manager Reference](#secrets-manager-reference) |
 
 Then set the **Webhook URL** in your GitHub App settings:
-```
+
+```text
 # From Terraform output:
 terraform output webhook_url
 ```
@@ -620,7 +628,8 @@ Plain string — the webhook secret you configured in your GitHub App.
 ### `github_app_private_key_pem`
 
 The full PEM private key file content:
-```
+
+```text
 -----BEGIN RSA PRIVATE KEY-----
 MIIEowIBAAKCAQ...
 -----END RSA PRIVATE KEY-----
@@ -640,6 +649,7 @@ Find these in your GitHub App settings.
 ### `atlassian_credentials`
 
 **For Data Center / Server (company-hosted):**
+
 ```json
 {
   "jira_base_url": "https://jira.example.com",
@@ -651,6 +661,7 @@ Find these in your GitHub App settings.
 ```
 
 **For Cloud (atlassian.net):**
+
 ```json
 {
   "jira_base_url": "https://yourcompany.atlassian.net",
@@ -676,7 +687,7 @@ Find these in your GitHub App settings.
 ### Jira/Confluence: 401 Unauthorized
 
 - **Data Center:** Verify PAT is still valid and the service account has project access
-- **Cloud:** Verify the API token at https://id.atlassian.com/manage-profile/security/api-tokens
+- **Cloud:** Verify the API token at <https://id.atlassian.com/manage-profile/security/api-tokens>
 - Check that `platform` field in the secret matches your deployment (`cloud` vs `datacenter`)
 
 ### Jira/Confluence: 404 Not Found
@@ -709,6 +720,7 @@ Find these in your GitHub App settings.
   - Security groups allowing outbound HTTPS (443) to GHES/Jira/Confluence hosts
   - NAT Gateway for S3/Secrets Manager/Bedrock access (or VPC endpoints)
 - Add VPC config to the Lambda resources in `main.tf`:
+
   ```hcl
   vpc_config {
     subnet_ids         = var.lambda_subnet_ids
