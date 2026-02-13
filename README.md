@@ -89,9 +89,34 @@ Chatbot endpoint:
 - `POST /chatbot/query`
 - JSON body:
   - `query` (required)
+  - `assistant_mode` (optional: `contextual|general`; defaults to `contextual`)
+  - `llm_provider` (optional: `bedrock|anthropic_direct`; defaults to `bedrock`)
+  - `model_id` (optional override; validated against allow-list when configured)
   - `jira_jql` (optional)
   - `confluence_cql` (optional)
   - `retrieval_mode` (optional: `live|kb|hybrid`; defaults to `hybrid`)
+
+Assistant mode behavior:
+
+- `contextual`: existing Jira/Confluence/KB/GitHub context-aware flow.
+- `general`: freeform AI chat (no Jira/Confluence/KB retrieval context).
+
+Provider behavior:
+
+- `bedrock`: uses Bedrock runtime and supports model override (including enabled Amazon-hosted Bedrock models).
+- `anthropic_direct`: optional direct Anthropic API path using your own API key.
+
+Anthropic direct configuration (optional):
+
+- `CHATBOT_ENABLE_ANTHROPIC_DIRECT=true`
+- `CHATBOT_ANTHROPIC_API_KEY` or `CHATBOT_ANTHROPIC_API_KEY_SECRET_ARN`
+- `CHATBOT_ANTHROPIC_MODEL_ID` (default when request does not supply `model_id`)
+- `CHATBOT_ANTHROPIC_API_BASE` (default `https://api.anthropic.com`)
+
+Bedrock model selection controls:
+
+- `CHATBOT_ALLOWED_MODEL_IDS` (CSV; optional allow-list for request `model_id`)
+- If unset, any model ID available to the account/region can be requested.
 
 Optional live GitHub lookup (disabled by default):
 
@@ -225,6 +250,9 @@ In the UI, provide:
 - Chatbot URL (`chatbot_url` Terraform output)
 - Auth mode (`token`, `bearer`, or `none`)
 - Auth value (API token or bearer token)
+- Assistant Mode (`contextual` or `general`)
+- LLM Provider (`bedrock` or `anthropic_direct`)
+- Optional Model ID override (for example Amazon-hosted Bedrock model IDs)
 
 Optional GitHub login in web app:
 

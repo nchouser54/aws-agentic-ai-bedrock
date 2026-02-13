@@ -5,6 +5,8 @@ from chatbot.app import (
     _format_confluence,
     _format_jira,
     _format_kb,
+    _normalize_assistant_mode,
+    _normalize_llm_provider,
     _normalize_retrieval_mode,
     _validate_query_filter,
     handle_query,
@@ -55,6 +57,18 @@ def test_normalize_retrieval_mode_invalid_returns_hybrid() -> None:
     assert _normalize_retrieval_mode(None) == "hybrid"
 
 
+def test_normalize_assistant_mode() -> None:
+    assert _normalize_assistant_mode("general") == "general"
+    assert _normalize_assistant_mode("contextual") == "contextual"
+    assert _normalize_assistant_mode("invalid") == "contextual"
+
+
+def test_normalize_llm_provider() -> None:
+    assert _normalize_llm_provider("bedrock") == "bedrock"
+    assert _normalize_llm_provider("anthropic_direct") == "anthropic_direct"
+    assert _normalize_llm_provider("other") == "bedrock"
+
+
 def test_validate_query_filter_ok() -> None:
     assert _validate_query_filter("project=ENG order by updated DESC") is True
 
@@ -89,6 +103,8 @@ def test_handle_query_live_mode(mock_atlassian_cls, mock_chat_cls) -> None:
 
     assert out["answer"] == "Live mode answer"
     assert out["sources"]["context_source"] == "live"
+    assert out["sources"]["assistant_mode"] == "contextual"
+    assert out["sources"]["provider"] == "bedrock"
     assert out["sources"]["jira_count"] == 1
     assert out["sources"]["confluence_count"] == 1
     assert out["sources"]["github_count"] == 0
@@ -239,6 +255,89 @@ def test_handle_query_circuit_breaker(mock_atlassian_cls, mock_kb_cls, mock_chat
     assert out["sources"]["context_source"] == "hybrid_fallback"
     assert out["sources"]["kb_count"] == 0
     assert out["sources"]["jira_count"] == 1
+
+
+@patch("chatbot.app.BedrockChatClient")
+def test_handle_query_general_mode_skips_context(mock_chat_cls) -> None:
+    mock_chat = MagicMock()
+    mock_chat.answer.return_value = "General answer"
+    mock_chat_cls.return_value = mock_chat
+
+    with patch.dict(
+        "os.environ",
+        {
+            "CHATBOT_MODEL_ID": "anthropic.model",
+            "ATLASSIAN_CREDENTIALS_SECRET_ARN": "arn:fake",
+        },
+        clear=False,
+    ):
+        out = handle_query(
+            "brainstorm migration plan",
+            "project=ENG",
+            "type=page",
+            "corr-general",
+            retrieval_mode="hybrid",
+            assistant_mode="general",
+            llm_provider="bedrock",
+        )
+
+    assert out["answer"] == "General answer"
+    assert out["sources"]["assistant_mode"] == "general"
+    assert out["sources"]["context_source"] == "none"
+    assert out["sources"]["jira_count"] == 0
+
+
+@patch("chatbot.app._load_anthropic_api_key", return_value="anthropic-key")
+@patch("chatbot.app.AnthropicChatClient")
+def test_handle_query_general_mode_anthropic_direct(mock_anthropic_cls, _mock_key) -> None:
+    mock_client = MagicMock()
+    mock_client.answer.return_value = "Anthropic direct answer"
+    mock_anthropic_cls.return_value = mock_client
+
+    with patch.dict(
+        "os.environ",
+        {
+            "CHATBOT_ENABLE_ANTHROPIC_DIRECT": "true",
+            "CHATBOT_ANTHROPIC_MODEL_ID": "claude-sonnet-4-5",
+        },
+        clear=False,
+    ):
+        out = handle_query(
+            "write a summary",
+            "order by updated DESC",
+            "type=page",
+            "corr-anth",
+            assistant_mode="general",
+            llm_provider="anthropic_direct",
+        )
+
+    assert out["answer"] == "Anthropic direct answer"
+    assert out["sources"]["provider"] == "anthropic_direct"
+
+
+def test_handle_query_model_not_allowed_raises_value_error() -> None:
+    with patch.dict(
+        "os.environ",
+        {
+            "CHATBOT_ALLOWED_MODEL_IDS": "amazon.nova-pro-v1:0,anthropic.claude-3-7-sonnet-v1:0",
+            "ATLASSIAN_CREDENTIALS_SECRET_ARN": "arn:fake",
+        },
+        clear=False,
+    ):
+        try:
+            handle_query(
+                "test",
+                "order by updated DESC",
+                "type=page",
+                "corr-model",
+                assistant_mode="general",
+                llm_provider="bedrock",
+                model_id="anthropic.claude-3-sonnet-20240229-v1:0",
+            )
+        except ValueError as exc:
+            assert str(exc) == "model_not_allowed"
+        else:
+            raise AssertionError("Expected ValueError for disallowed model")
 
 
 # --- lambda_handler HTTP layer tests ---

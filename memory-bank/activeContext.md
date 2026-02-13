@@ -7,6 +7,8 @@
 - Keep existing PR-review and Teams adapter behavior backward compatible.
 - Provide an easy web chatbot access path with optional GitHub login for bearer auth.
 - Enforce enterprise hosted GitHub OAuth endpoint usage in the chatbot web login flow.
+- Support general AI chat mode and model/provider selection in chatbot requests.
+- Allow optional direct Anthropic provider while keeping Bedrock as default.
 
 ## Current Blockers
 

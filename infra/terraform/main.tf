@@ -460,6 +460,7 @@ resource "aws_iam_policy" "chatbot_policy" {
           var.chatbot_enabled && var.teams_adapter_enabled ? aws_secretsmanager_secret.teams_adapter_token[0].arn : "",
           var.chatbot_enabled && var.chatbot_github_live_enabled ? aws_secretsmanager_secret.github_app_private_key_pem.arn : "",
           var.chatbot_enabled && var.chatbot_github_live_enabled ? aws_secretsmanager_secret.github_app_ids.arn : "",
+          var.chatbot_enabled && var.chatbot_enable_anthropic_direct && length(trimspace(var.chatbot_anthropic_api_key_secret_arn)) > 0 ? var.chatbot_anthropic_api_key_secret_arn : "",
         ])
       },
       {
@@ -668,6 +669,13 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
       CHATBOT_MODEL_ID                  = var.chatbot_model_id
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
       CHATBOT_RETRIEVAL_MODE            = var.chatbot_retrieval_mode
+      CHATBOT_DEFAULT_ASSISTANT_MODE    = var.chatbot_default_assistant_mode
+      CHATBOT_LLM_PROVIDER              = var.chatbot_llm_provider
+      CHATBOT_ALLOWED_MODEL_IDS         = join(",", var.chatbot_allowed_model_ids)
+      CHATBOT_ENABLE_ANTHROPIC_DIRECT   = tostring(var.chatbot_enable_anthropic_direct)
+      CHATBOT_ANTHROPIC_API_KEY_SECRET_ARN = var.chatbot_anthropic_api_key_secret_arn
+      CHATBOT_ANTHROPIC_API_BASE        = var.chatbot_anthropic_api_base
+      CHATBOT_ANTHROPIC_MODEL_ID        = var.chatbot_anthropic_model_id
       BEDROCK_KNOWLEDGE_BASE_ID         = var.bedrock_knowledge_base_id
       BEDROCK_KB_TOP_K                  = tostring(var.bedrock_kb_top_k)
       ATLASSIAN_CREDENTIALS_SECRET_ARN  = aws_secretsmanager_secret.atlassian_credentials.arn

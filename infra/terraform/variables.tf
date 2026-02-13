@@ -104,6 +104,58 @@ variable "chatbot_retrieval_mode" {
   }
 }
 
+variable "chatbot_default_assistant_mode" {
+  description = "Default chatbot assistant mode: contextual or general"
+  type        = string
+  default     = "contextual"
+
+  validation {
+    condition     = contains(["contextual", "general"], var.chatbot_default_assistant_mode)
+    error_message = "Must be one of: contextual, general."
+  }
+}
+
+variable "chatbot_llm_provider" {
+  description = "Default chatbot LLM provider: bedrock or anthropic_direct"
+  type        = string
+  default     = "bedrock"
+
+  validation {
+    condition     = contains(["bedrock", "anthropic_direct"], var.chatbot_llm_provider)
+    error_message = "Must be one of: bedrock, anthropic_direct."
+  }
+}
+
+variable "chatbot_allowed_model_ids" {
+  description = "Optional allow-list of Bedrock model IDs that the chatbot may use when model_id override is supplied"
+  type        = list(string)
+  default     = []
+}
+
+variable "chatbot_enable_anthropic_direct" {
+  description = "Enable direct Anthropic API provider path in chatbot"
+  type        = bool
+  default     = false
+}
+
+variable "chatbot_anthropic_api_key_secret_arn" {
+  description = "Optional Secrets Manager ARN containing Anthropic API key for direct provider path"
+  type        = string
+  default     = ""
+}
+
+variable "chatbot_anthropic_api_base" {
+  description = "Base URL for direct Anthropic API provider"
+  type        = string
+  default     = "https://api.anthropic.com"
+}
+
+variable "chatbot_anthropic_model_id" {
+  description = "Default Anthropic direct model ID used when request model_id is not provided"
+  type        = string
+  default     = "claude-sonnet-4-5"
+}
+
 variable "chatbot_github_live_enabled" {
   description = "Enable optional live GitHub code/doc lookup during chatbot live/hybrid fallback mode"
   type        = bool
