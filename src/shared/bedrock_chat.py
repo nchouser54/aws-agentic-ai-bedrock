@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from typing import Optional
 
@@ -21,26 +20,21 @@ class BedrockChatClient:
         self._runtime = bedrock_runtime or boto3.client("bedrock-runtime", region_name=region)
 
     def answer(self, system_prompt: str, user_prompt: str) -> str:
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": self._max_tokens,
-            "temperature": 0.2,
-            "system": system_prompt,
-            "messages": [
+        response = self._runtime.converse(
+            modelId=self._model_id,
+            system=[{"text": system_prompt}],
+            messages=[
                 {
                     "role": "user",
-                    "content": [{"type": "text", "text": user_prompt}],
+                    "content": [{"text": user_prompt}],
                 }
             ],
-        }
-        response = self._runtime.invoke_model(
-            modelId=self._model_id,
-            contentType="application/json",
-            accept="application/json",
-            body=json.dumps(body),
+            inferenceConfig={
+                "maxTokens": self._max_tokens,
+                "temperature": 0.2,
+            },
         )
-        payload = json.loads(response["body"].read())
-        content = payload.get("content", [])
-        if not content:
+        content = (((response.get("output") or {}).get("message") or {}).get("content") or [])
+        if not content or not isinstance(content[0], dict):
             return "I could not produce a response."
-        return content[0].get("text", "I could not produce a response.")
+        return str(content[0].get("text") or "I could not produce a response.")

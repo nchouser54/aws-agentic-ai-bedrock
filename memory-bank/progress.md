@@ -12,7 +12,12 @@
 - [x] Add small local chatbot webapp (`webapp/*`, `scripts/run_chatbot_webapp.py`)
 - [x] Add optional GitHub login (OAuth device flow) in webapp with bearer auto-fill
 - [x] Enforce enterprise hosted GitHub OAuth base URL in webapp login flow
-- [x] Verify test suite after webapp/auth UX updates (`169 passed`)
+- [x] Add chatbot `general` AI mode for freeform prompts (context retrieval optional)
+- [x] Add LLM provider routing (`bedrock` and optional `anthropic_direct`)
+- [x] Add optional request `model_id` override with Bedrock allow-list support
+- [x] Add webapp controls for assistant mode/provider/model override
+- [x] Add Terraform knobs for provider defaults and Anthropic direct configuration
+- [x] Verify test suite after chat/provider/model updates (`174 passed`)
 
 ## Doing
 

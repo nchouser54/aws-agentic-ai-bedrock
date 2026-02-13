@@ -3,6 +3,9 @@ const ids = {
   authMode: document.getElementById("authMode"),
   authValue: document.getElementById("authValue"),
   retrievalMode: document.getElementById("retrievalMode"),
+  assistantMode: document.getElementById("assistantMode"),
+  llmProvider: document.getElementById("llmProvider"),
+  modelId: document.getElementById("modelId"),
   query: document.getElementById("query"),
   jiraJql: document.getElementById("jiraJql"),
   confluenceCql: document.getElementById("confluenceCql"),
@@ -34,6 +37,9 @@ function loadSettings() {
     ids.authMode.value = s.authMode || "token";
     ids.authValue.value = s.authValue || "";
     ids.retrievalMode.value = s.retrievalMode || "hybrid";
+    ids.assistantMode.value = s.assistantMode || "contextual";
+    ids.llmProvider.value = s.llmProvider || "bedrock";
+    ids.modelId.value = s.modelId || "";
     ids.jiraJql.value = s.jiraJql || "";
     ids.confluenceCql.value = s.confluenceCql || "";
     ids.githubOauthBaseUrl.value = s.githubOauthBaseUrl || "";
@@ -50,6 +56,9 @@ function saveSettings() {
     authMode: ids.authMode.value,
     authValue: ids.authValue.value,
     retrievalMode: ids.retrievalMode.value,
+    assistantMode: ids.assistantMode.value,
+    llmProvider: ids.llmProvider.value,
+    modelId: ids.modelId.value.trim(),
     jiraJql: ids.jiraJql.value.trim(),
     confluenceCql: ids.confluenceCql.value.trim(),
     githubOauthBaseUrl: ids.githubOauthBaseUrl.value.trim(),
@@ -231,8 +240,13 @@ async function askChatbot() {
 
   const payload = {
     query,
+    assistant_mode: ids.assistantMode.value,
+    llm_provider: ids.llmProvider.value,
     retrieval_mode: ids.retrievalMode.value,
   };
+
+  const modelId = ids.modelId.value.trim();
+  if (modelId) payload.model_id = modelId;
 
   const jiraJql = ids.jiraJql.value.trim();
   const confluenceCql = ids.confluenceCql.value.trim();

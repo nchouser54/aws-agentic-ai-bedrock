@@ -38,7 +38,32 @@
               <option value="live">live</option>
             </select>
           </label>
+          <label>
+            Assistant Mode
+            <select id="assistantMode">
+              <option value="contextual">contextual (Jira/Confluence/KB aware)</option>
+              <option value="general">general AI chat</option>
+            </select>
+          </label>
+          <label>
+            LLM Provider
+            <select id="llmProvider">
+              <option value="bedrock">bedrock</option>
+              <option value="anthropic_direct">anthropic_direct (optional)</option>
+            </select>
+          </label>
+          <label>
+            Model ID (optional override)
+            <input id="modelId" list="modelSuggestions" placeholder="amazon.nova-pro-v1:0 or anthropic.claude-3-7-sonnet-v1:0" />
+          </label>
         </div>
+        <datalist id="modelSuggestions">
+          <option value="amazon.nova-lite-v1:0"></option>
+          <option value="amazon.nova-pro-v1:0"></option>
+          <option value="amazon.titan-text-premier-v1:0"></option>
+          <option value="anthropic.claude-3-7-sonnet-20250219-v1:0"></option>
+          <option value="anthropic.claude-3-5-sonnet-20241022-v2:0"></option>
+        </datalist>
         <details class="gh-login" id="ghLoginPanel">
           <summary>GitHub Login (device flow, optional)</summary>
           <p class="muted small">
