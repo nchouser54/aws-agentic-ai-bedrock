@@ -191,6 +191,24 @@ Run the same checks locally:
 - `make install`
 - `make check`
 
+## PR metadata standards
+
+To keep merge history clean and release notes accurate, use scoped PR titles since squash-merge uses the PR title as the commit subject.
+
+Preferred format:
+
+- `feat(scope): short outcome`
+- `fix(scope): short outcome`
+- `chore(scope): short outcome`
+
+Examples:
+
+- `feat(reviewer): add Jira enrichment for ticket-aware findings`
+- `feat(platform): add sprint report, test-gen, and PR description agents`
+- `chore(ci): add lint/test and terraform quality gates`
+
+Use the repository PR template at `.github/pull_request_template.md` to keep scope and validation checks consistent.
+
 ## Operations runbook
 
 ### Idempotency
