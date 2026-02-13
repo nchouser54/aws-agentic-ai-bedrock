@@ -35,6 +35,10 @@
 - [x] Add chatbot memory hygiene controls (summary compaction and per-user/per-conversation request quotas)
 - [x] Add Terraform wiring for memory hygiene env vars, IAM delete permission, and API routes
 - [x] Add chatbot tests for memory clear routes and rate-limit HTTP handling
+- [x] Add image safety prompt filtering with configurable blocked phrase list
+- [x] Add image route per-user and per-conversation per-minute quotas
+- [x] Add Terraform variables/env wiring for image safety and quotas
+- [x] Add image route tests for safety blocking and 429 quota responses
 
 ## Doing
 

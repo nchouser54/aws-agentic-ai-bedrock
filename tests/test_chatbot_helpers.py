@@ -501,6 +501,44 @@ def test_lambda_handler_image_route(mock_image) -> None:
     mock_image.assert_called_once()
 
 
+def test_lambda_handler_image_prompt_blocked() -> None:
+    import chatbot.app as chatbot_mod
+
+    chatbot_mod._cached_api_token = None
+    env = {
+        "CHATBOT_API_TOKEN_SECRET_ARN": "",
+        "CHATBOT_API_TOKEN": "",
+        "CHATBOT_IMAGE_SAFETY_ENABLED": "true",
+        "CHATBOT_IMAGE_BANNED_TERMS": "graphic gore,nudity",
+    }
+    with patch.dict("os.environ", env, clear=False):
+        event = _api_event(body={"query": "Create graphic gore battle art"})
+        event["rawPath"] = "/chatbot/image"
+        event["requestContext"]["http"]["path"] = "/chatbot/image"
+        out = lambda_handler(event, None)
+
+    assert out["statusCode"] == 400
+    body = json.loads(out["body"])
+    assert body["error"] == "image_prompt_blocked"
+
+
+@patch("chatbot.app._generate_image", return_value={"images": ["ZmFrZQ=="], "count": 1})
+@patch("chatbot.app._enforce_image_rate_quotas", side_effect=ValueError("rate_limit_exceeded"))
+def test_lambda_handler_image_rate_limit(_mock_quota, _mock_generate) -> None:
+    import chatbot.app as chatbot_mod
+
+    chatbot_mod._cached_api_token = None
+    with patch.dict("os.environ", {"CHATBOT_API_TOKEN_SECRET_ARN": "", "CHATBOT_API_TOKEN": ""}, clear=False):
+        event = _api_event(body={"query": "Draw a skyline"})
+        event["rawPath"] = "/chatbot/image"
+        event["requestContext"]["http"]["path"] = "/chatbot/image"
+        out = lambda_handler(event, None)
+
+    assert out["statusCode"] == 429
+    body = json.loads(out["body"])
+    assert body["error"] == "rate_limit_exceeded"
+
+
 def test_lambda_handler_query_too_long() -> None:
     import chatbot.app as chatbot_mod
     chatbot_mod._cached_api_token = None

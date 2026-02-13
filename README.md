@@ -135,6 +135,13 @@ Image generation endpoint:
   - `size` (optional `WIDTHxHEIGHT`, defaults to `CHATBOT_IMAGE_SIZE`)
 - Returns base64-encoded image payload(s) in `images`.
 
+Image safety and rate controls:
+
+- `CHATBOT_IMAGE_SAFETY_ENABLED=true|false`
+- `CHATBOT_IMAGE_BANNED_TERMS` (CSV blocked phrases)
+- `CHATBOT_IMAGE_USER_REQUESTS_PER_MINUTE` (default `30`)
+- `CHATBOT_IMAGE_CONVERSATION_REQUESTS_PER_MINUTE` (default `10`)
+
 Conversation memory options (optional):
 
 - `CHATBOT_MEMORY_ENABLED=true|false`

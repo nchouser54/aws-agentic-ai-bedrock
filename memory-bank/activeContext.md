@@ -16,6 +16,7 @@
 - Execute phase-1 implementation for cross-environment toolchain consistency checks and docs.
 - Implement phase-2 chatbot observability foundation (custom metrics, alarms, dashboard).
 - Implement phase-3 chatbot memory hygiene (actor-scoped memory, quotas, compaction, clear-memory APIs).
+- Implement phase-4 image safety and per-actor/per-conversation rate controls.
 
 ## Current Blockers
 

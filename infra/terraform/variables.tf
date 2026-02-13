@@ -252,6 +252,48 @@ variable "chatbot_image_default_size" {
   default     = "1024x1024"
 }
 
+variable "chatbot_image_safety_enabled" {
+  description = "Enable conservative image prompt safety filtering"
+  type        = bool
+  default     = true
+}
+
+variable "chatbot_image_banned_terms" {
+  description = "Case-insensitive blocked phrases for image prompts"
+  type        = list(string)
+  default = [
+    "explicit sexual",
+    "nudity",
+    "child sexual",
+    "self-harm",
+    "graphic gore",
+    "extreme violence",
+    "dismemberment",
+  ]
+}
+
+variable "chatbot_image_user_requests_per_minute" {
+  description = "Per-user image generation request quota per minute"
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.chatbot_image_user_requests_per_minute >= 1
+    error_message = "Must be at least 1."
+  }
+}
+
+variable "chatbot_image_conversation_requests_per_minute" {
+  description = "Per-conversation image generation request quota per minute"
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.chatbot_image_conversation_requests_per_minute >= 1
+    error_message = "Must be at least 1."
+  }
+}
+
 variable "chatbot_observability_enabled" {
   description = "Enable chatbot custom metrics dashboard and related CloudWatch alarms"
   type        = bool

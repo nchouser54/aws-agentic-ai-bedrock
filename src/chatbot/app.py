@@ -223,6 +223,26 @@ def _conversation_requests_per_minute_limit() -> int:
     return max(1, int(os.getenv("CHATBOT_CONVERSATION_REQUESTS_PER_MINUTE", "60")))
 
 
+def _image_user_requests_per_minute_limit() -> int:
+    return max(1, int(os.getenv("CHATBOT_IMAGE_USER_REQUESTS_PER_MINUTE", "30")))
+
+
+def _image_conversation_requests_per_minute_limit() -> int:
+    return max(1, int(os.getenv("CHATBOT_IMAGE_CONVERSATION_REQUESTS_PER_MINUTE", "10")))
+
+
+def _image_safety_enabled() -> bool:
+    return os.getenv("CHATBOT_IMAGE_SAFETY_ENABLED", "true").strip().lower() == "true"
+
+
+def _image_banned_terms() -> list[str]:
+    raw = os.getenv(
+        "CHATBOT_IMAGE_BANNED_TERMS",
+        "explicit sexual,nudity,child sexual,self-harm,graphic gore,extreme violence,dismemberment",
+    )
+    return [term.strip().lower() for term in raw.split(",") if term.strip()]
+
+
 def _normalize_conversation_id(value: str | None) -> str | None:
     candidate = (value or "").strip()
     if not candidate:
@@ -317,6 +337,28 @@ def _enforce_rate_quotas(actor_id: str, conversation_id: str | None) -> None:
         bucket_key=f"quota_conv#{actor_id}#{conv}",
         limit=_conversation_requests_per_minute_limit(),
     )
+
+
+def _enforce_image_rate_quotas(actor_id: str, conversation_id: str | None) -> None:
+    conv = conversation_id or "default"
+    _record_quota_event_and_validate(
+        bucket_key=f"quota_img_user#{actor_id}",
+        limit=_image_user_requests_per_minute_limit(),
+    )
+    _record_quota_event_and_validate(
+        bucket_key=f"quota_img_conv#{actor_id}#{conv}",
+        limit=_image_conversation_requests_per_minute_limit(),
+    )
+
+
+def _enforce_image_prompt_policy(prompt: str) -> None:
+    if not _image_safety_enabled():
+        return
+
+    normalized_prompt = prompt.lower()
+    for banned in _image_banned_terms():
+        if banned in normalized_prompt:
+            raise ValueError("image_prompt_blocked")
 
 
 def _summarize_history(history: list[dict[str, str]], max_items: int = 10) -> str:
@@ -1059,7 +1101,10 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 status_code=400,
                 payload={"error": "query_required"},
             )
+        image_conversation_id = _normalize_conversation_id(str(body.get("conversation_id") or "").strip() or None)
         try:
+            _enforce_image_rate_quotas(actor_id, image_conversation_id)
+            _enforce_image_prompt_policy(query)
             image_payload = _generate_image(
                 prompt=query,
                 model_id=str(body.get("model_id") or "").strip() or None,
@@ -1071,12 +1116,14 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 dimensions={"Route": "image", "Method": method},
             )
         except ValueError as exc:
+            error_code = str(exc)
+            status_code = 429 if error_code == "rate_limit_exceeded" else 400
             return _respond(
                 method=method,
                 path=path,
                 started_at=started_at,
-                status_code=400,
-                payload={"error": str(exc)},
+                status_code=status_code,
+                payload={"error": error_code},
             )
         except Exception:
             logger.exception("chatbot_image_generation_error")
