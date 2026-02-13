@@ -89,6 +89,19 @@ def main() -> int:
     if tfvars.get("kb_sync_enabled", "").lower() != "true":
         warnings.append("kb_sync_enabled is not true (scheduled sync disabled)")
 
+    github_kb_enabled = tfvars.get("github_kb_sync_enabled", "").lower() == "true"
+    if github_kb_enabled:
+        repos = tfvars.get("github_kb_repos", "")
+        if repos in {"", "[]"}:
+            failures.append("github_kb_sync_enabled=true but github_kb_repos is empty")
+
+        gh_data_source = tfvars.get("github_kb_data_source_id", "")
+        base_data_source = tfvars.get("bedrock_kb_data_source_id", "")
+        if gh_data_source in placeholder_markers and base_data_source in placeholder_markers:
+            failures.append(
+                "github_kb_sync_enabled=true but neither github_kb_data_source_id nor bedrock_kb_data_source_id is set"
+            )
+
     if tfvars.get("dry_run", "").lower() != "true":
         warnings.append("dry_run is not true; first non-prod rollout is safer with dry_run=true")
 

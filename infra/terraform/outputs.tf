@@ -38,9 +38,14 @@ output "kb_sync_function_name" {
   value       = var.kb_sync_enabled ? aws_lambda_function.confluence_kb_sync[0].function_name : ""
 }
 
+output "github_kb_sync_function_name" {
+  description = "Scheduled GitHub docs to Knowledge Base sync Lambda function name"
+  value       = var.github_kb_sync_enabled ? aws_lambda_function.github_kb_sync[0].function_name : ""
+}
+
 output "kb_sync_documents_bucket" {
   description = "S3 bucket storing normalized Confluence documents for KB ingestion"
-  value       = var.kb_sync_enabled ? aws_s3_bucket.kb_sync_documents[0].bucket : ""
+  value       = var.kb_sync_enabled || var.github_kb_sync_enabled ? aws_s3_bucket.kb_sync_documents[0].bucket : ""
 }
 
 output "release_notes_url" {

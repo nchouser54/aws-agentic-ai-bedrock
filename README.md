@@ -170,6 +170,7 @@ PR description generator endpoint:
 - `test_gen_url`
 - `pr_description_url`
 - `release_notes_url`
+- `github_kb_sync_function_name`
 
 ## Local testing
 
@@ -372,6 +373,25 @@ Terraform variables:
 When enabled, Terraform outputs:
 
 - `kb_sync_function_name`
+- `kb_sync_documents_bucket`
+
+### Scheduled GitHub docs -> Knowledge Base sync
+
+Optional scheduled sync job reads documentation files from selected GitHub repos, normalizes them into S3, and starts a Bedrock Knowledge Base ingestion job.
+
+Terraform variables:
+
+- `github_kb_sync_enabled`
+- `github_kb_data_source_id` (optional; falls back to `bedrock_kb_data_source_id`)
+- `github_kb_sync_schedule_expression`
+- `github_kb_sync_s3_prefix`
+- `github_kb_repos`
+- `github_kb_include_patterns`
+- `github_kb_max_files_per_repo`
+
+When enabled, Terraform outputs:
+
+- `github_kb_sync_function_name`
 - `kb_sync_documents_bucket`
 
 ### Teams adapter setup
