@@ -11,7 +11,7 @@
 - [x] Pass lint and unit tests (`ruff`, `pytest`)
 - [x] Add small local chatbot webapp (`webapp/*`, `scripts/run_chatbot_webapp.py`)
 - [x] Add optional GitHub login (OAuth device flow) in webapp with bearer auto-fill
-- [x] Enforce NG-hosted GitHub OAuth base URL in webapp login flow
+- [x] Enforce enterprise hosted GitHub OAuth base URL in webapp login flow
 - [x] Verify test suite after webapp/auth UX updates (`169 passed`)
 
 ## Doing

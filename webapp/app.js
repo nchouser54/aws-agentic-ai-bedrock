@@ -75,7 +75,7 @@ async function startGitHubLogin() {
   const scope = ids.githubScope.value.trim() || "read:user read:org";
 
   if (!oauthBase) {
-    setGitHubLoginStatus("Set GitHub OAuth Base URL to your NG-hosted GitHub URL.", "err");
+    setGitHubLoginStatus("Set GitHub OAuth Base URL to your enterprise hosted GitHub URL.", "err");
     return;
   }
 
@@ -85,7 +85,7 @@ async function startGitHubLogin() {
   }
 
   if (/^https:\/\/github\.com$/i.test(oauthBase)) {
-    setGitHubLoginStatus("Use your NG-hosted GitHub URL (github.com is not allowed in this environment).", "err");
+    setGitHubLoginStatus("Use your enterprise hosted GitHub URL (github.com is not allowed in this environment).", "err");
     return;
   }
 
