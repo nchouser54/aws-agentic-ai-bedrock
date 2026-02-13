@@ -19,6 +19,11 @@
 - [x] Add GovCloud model discovery endpoint and webapp refresh for active Bedrock models
 - [x] Add Terraform knobs for provider defaults and Anthropic direct configuration
 - [x] Verify test suite after chat/provider/model updates (`174 passed`)
+- [x] Add optional chatbot conversation memory (DynamoDB-backed)
+- [x] Add stream-style response payload support and webapp progressive rendering
+- [x] Add chatbot image generation endpoint and webapp image preview
+- [x] Add Terraform wiring for chatbot memory table, IAM, and image route/env
+- [x] Add tests covering stream/memory helpers and image endpoint routing
 
 ## Doing
 

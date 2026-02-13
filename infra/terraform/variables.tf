@@ -179,6 +179,46 @@ variable "chatbot_github_live_max_results" {
   }
 }
 
+variable "chatbot_memory_enabled" {
+  description = "Enable DynamoDB-backed chatbot conversation memory"
+  type        = bool
+  default     = false
+}
+
+variable "chatbot_memory_max_turns" {
+  description = "Maximum number of recent memory turns included in each chatbot prompt"
+  type        = number
+  default     = 6
+
+  validation {
+    condition     = var.chatbot_memory_max_turns >= 1
+    error_message = "Must be at least 1."
+  }
+}
+
+variable "chatbot_memory_ttl_days" {
+  description = "Days before stored chatbot conversation turns expire"
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.chatbot_memory_ttl_days >= 1
+    error_message = "Must be at least 1."
+  }
+}
+
+variable "chatbot_image_model_id" {
+  description = "Bedrock image model ID for /chatbot/image endpoint"
+  type        = string
+  default     = "amazon.nova-canvas-v1:0"
+}
+
+variable "chatbot_image_default_size" {
+  description = "Default image size for /chatbot/image in WIDTHxHEIGHT format"
+  type        = string
+  default     = "1024x1024"
+}
+
 variable "bedrock_knowledge_base_id" {
   description = "Optional Bedrock Knowledge Base ID used by chatbot and sync jobs"
   type        = string
