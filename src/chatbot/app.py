@@ -3,6 +3,8 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,7 @@ logger = get_logger("jira_confluence_chatbot")
 ALLOWED_RETRIEVAL_MODES = {"live", "kb", "hybrid"}
 ALLOWED_ASSISTANT_MODES = {"contextual", "general"}
 ALLOWED_LLM_PROVIDERS = {"bedrock", "anthropic_direct"}
+_VALID_CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 _cached_api_token: str | None = None
 _cached_anthropic_api_key: str | None = None
@@ -101,6 +104,185 @@ def _resolve_model_id(provider: str, requested_model_id: str | None) -> str:
     if provider == "anthropic_direct":
         return requested or os.getenv("CHATBOT_ANTHROPIC_MODEL_ID", "claude-sonnet-4-5")
     return requested or os.getenv("CHATBOT_MODEL_ID", os.environ.get("BEDROCK_MODEL_ID", ""))
+
+
+def _chat_memory_enabled() -> bool:
+    return os.getenv("CHATBOT_MEMORY_ENABLED", "false").strip().lower() == "true"
+
+
+def _chat_memory_table() -> str:
+    return os.getenv("CHATBOT_MEMORY_TABLE", "").strip()
+
+
+def _normalize_conversation_id(value: str | None) -> str | None:
+    candidate = (value or "").strip()
+    if not candidate:
+        return None
+    if not _VALID_CONVERSATION_ID_RE.match(candidate):
+        raise ValueError("conversation_id_invalid")
+    return candidate
+
+
+def _load_conversation_history(conversation_id: str | None) -> list[dict[str, str]]:
+    if not conversation_id or not _chat_memory_enabled():
+        return []
+
+    table = _chat_memory_table()
+    if not table:
+        return []
+
+    max_turns = max(1, int(os.getenv("CHATBOT_MEMORY_MAX_TURNS", "6")))
+    client = boto3.client("dynamodb", region_name=os.getenv("AWS_REGION", DEFAULT_REGION))
+    try:
+        resp = client.query(
+            TableName=table,
+            KeyConditionExpression="conversation_id = :cid",
+            ExpressionAttributeValues={":cid": {"S": conversation_id}},
+            ScanIndexForward=False,
+            Limit=max_turns * 2,
+        )
+    except Exception:
+        logger.warning("chat_memory_read_failed", extra={"extra": {"conversation_id": conversation_id}})
+        return []
+
+    items = list(resp.get("Items") or [])
+    items.reverse()
+
+    history: list[dict[str, str]] = []
+    for item in items:
+        role = str((item.get("role") or {}).get("S") or "").strip().lower()
+        content = str((item.get("content") or {}).get("S") or "").strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        history.append({"role": role, "content": content})
+
+    return history[-(max_turns * 2) :]
+
+
+def _append_conversation_turn(conversation_id: str | None, user_query: str, answer: str) -> None:
+    if not conversation_id or not _chat_memory_enabled():
+        return
+
+    table = _chat_memory_table()
+    if not table:
+        return
+
+    ttl_days = max(1, int(os.getenv("CHATBOT_MEMORY_TTL_DAYS", "30")))
+    now_ms = int(time.time() * 1000)
+    expires_at = int(time.time()) + (ttl_days * 24 * 60 * 60)
+    client = boto3.client("dynamodb", region_name=os.getenv("AWS_REGION", DEFAULT_REGION))
+
+    try:
+        client.put_item(
+            TableName=table,
+            Item={
+                "conversation_id": {"S": conversation_id},
+                "timestamp_ms": {"N": str(now_ms)},
+                "role": {"S": "user"},
+                "content": {"S": user_query},
+                "expires_at": {"N": str(expires_at)},
+            },
+        )
+        client.put_item(
+            TableName=table,
+            Item={
+                "conversation_id": {"S": conversation_id},
+                "timestamp_ms": {"N": str(now_ms + 1)},
+                "role": {"S": "assistant"},
+                "content": {"S": answer},
+                "expires_at": {"N": str(expires_at)},
+            },
+        )
+    except Exception:
+        logger.warning("chat_memory_write_failed", extra={"extra": {"conversation_id": conversation_id}})
+
+
+def _format_history_for_prompt(history: list[dict[str, str]]) -> str:
+    if not history:
+        return ""
+    lines: list[str] = []
+    for item in history:
+        role = "User" if item.get("role") == "user" else "Assistant"
+        lines.append(f"{role}: {item.get('content', '')}")
+    return "\n".join(lines)
+
+
+def _chunk_text(value: str, chunk_chars: int) -> list[str]:
+    size = max(20, min(chunk_chars, 1000))
+    if not value:
+        return []
+    return [value[i : i + size] for i in range(0, len(value), size)]
+
+
+def _extract_image_b64_payloads(payload: Any) -> list[str]:
+    if isinstance(payload, list):
+        out: list[str] = []
+        for item in payload:
+            out.extend(_extract_image_b64_payloads(item))
+        return out
+
+    if isinstance(payload, dict):
+        out: list[str] = []
+        for key in ("images", "artifacts", "output", "results", "result"):
+            if key in payload:
+                out.extend(_extract_image_b64_payloads(payload.get(key)))
+        for key in ("base64", "b64", "image", "imageBase64", "bytes"):
+            raw = payload.get(key)
+            if isinstance(raw, str) and raw.strip():
+                out.append(raw.strip())
+        return out
+
+    if isinstance(payload, str) and payload.strip():
+        return [payload.strip()]
+
+    return []
+
+
+def _generate_image(prompt: str, model_id: str | None = None, size: str | None = None) -> dict[str, Any]:
+    chosen_model = (model_id or "").strip() or os.getenv("CHATBOT_IMAGE_MODEL_ID", "amazon.nova-canvas-v1:0")
+
+    chosen_size = (size or os.getenv("CHATBOT_IMAGE_SIZE", "1024x1024")).strip().lower()
+    width = 1024
+    height = 1024
+    if "x" in chosen_size:
+        try:
+            raw_w, raw_h = chosen_size.split("x", 1)
+            width = max(256, min(int(raw_w), 2048))
+            height = max(256, min(int(raw_h), 2048))
+        except Exception:
+            width, height = 1024, 1024
+
+    runtime = boto3.client("bedrock-runtime", region_name=os.getenv("AWS_REGION", DEFAULT_REGION))
+    payload = {
+        "taskType": "TEXT_IMAGE",
+        "textToImageParams": {"text": prompt},
+        "imageGenerationConfig": {
+            "numberOfImages": 1,
+            "quality": "standard",
+            "width": width,
+            "height": height,
+        },
+    }
+    resp = runtime.invoke_model(
+        modelId=chosen_model,
+        contentType="application/json",
+        accept="application/json",
+        body=json.dumps(payload).encode("utf-8"),
+    )
+
+    raw_body = resp.get("body")
+    decoded = raw_body.read() if hasattr(raw_body, "read") else raw_body
+    body = json.loads(decoded or "{}")
+    images = _extract_image_b64_payloads(body)
+    if not images:
+        raise ValueError("image_generation_failed")
+
+    return {
+        "images": images,
+        "count": len(images),
+        "model_id": chosen_model,
+        "size": f"{width}x{height}",
+    }
 
 
 def _answer_with_provider(
@@ -303,31 +485,49 @@ def handle_query(
     assistant_mode: str | None = None,
     llm_provider: str | None = None,
     model_id: str | None = None,
+    conversation_id: str | None = None,
+    stream: bool = False,
+    stream_chunk_chars: int = 120,
 ) -> dict[str, Any]:
     local_logger = get_logger("jira_confluence_chatbot", correlation_id=correlation_id)
 
     resolved_assistant_mode = _normalize_assistant_mode(assistant_mode)
     resolved_llm_provider = _normalize_llm_provider(llm_provider)
     resolved_model_id = _resolve_model_id(resolved_llm_provider, model_id)
+    resolved_conversation_id = _normalize_conversation_id(conversation_id)
+    history = _load_conversation_history(resolved_conversation_id)
+    history_text = _format_history_for_prompt(history)
 
     if resolved_assistant_mode == "general":
         system_prompt = (
             "You are a helpful enterprise AI assistant. Provide clear, practical answers. "
             "If policies or environment constraints are unknown, state assumptions explicitly."
         )
+        general_user_prompt = (
+            f"Conversation history:\n{history_text}\n\nLatest user question:\n{query}"
+            if history_text
+            else query
+        )
         answer = _answer_with_provider(
             provider=resolved_llm_provider,
             model_id=resolved_model_id,
             system_prompt=system_prompt,
-            user_prompt=query,
+            user_prompt=general_user_prompt,
         )
+        _append_conversation_turn(resolved_conversation_id, query, answer)
+
+        chunks = _chunk_text(answer, stream_chunk_chars) if stream else []
 
         return {
             "answer": answer,
+            "conversation_id": resolved_conversation_id,
+            "stream": {"enabled": stream, "chunk_count": len(chunks), "chunks": chunks},
             "sources": {
                 "assistant_mode": resolved_assistant_mode,
                 "provider": resolved_llm_provider,
                 "model_id": resolved_model_id,
+                "memory_enabled": _chat_memory_enabled(),
+                "memory_turns": len(history),
                 "mode": "none",
                 "context_source": "none",
                 "kb_count": 0,
@@ -382,6 +582,7 @@ def handle_query(
     )
     user_prompt = (
         f"User question:\n{query}\n\n"
+        f"Conversation history:\n{history_text or 'None'}\n\n"
         f"Knowledge Base context:\n{context_blob['knowledge_base']}\n\n"
         f"Jira context:\n{context_blob['jira']}\n\n"
         f"Confluence context:\n{context_blob['confluence']}\n"
@@ -394,6 +595,9 @@ def handle_query(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
     )
+    _append_conversation_turn(resolved_conversation_id, query, answer)
+
+    chunks = _chunk_text(answer, stream_chunk_chars) if stream else []
 
     local_logger.info(
         "chatbot_answered",
@@ -414,10 +618,14 @@ def handle_query(
 
     return {
         "answer": answer,
+        "conversation_id": resolved_conversation_id,
+        "stream": {"enabled": stream, "chunk_count": len(chunks), "chunks": chunks},
         "sources": {
             "assistant_mode": resolved_assistant_mode,
             "provider": resolved_llm_provider,
             "model_id": resolved_model_id,
+            "memory_enabled": _chat_memory_enabled(),
+            "memory_turns": len(history),
             "mode": mode,
             "context_source": context_source,
             "kb_count": len(kb_items),
@@ -474,6 +682,28 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         return {"statusCode": 400, "body": json.dumps({"error": "invalid_json"})}
 
     query = str(body.get("query") or "").strip()
+    is_image_route = path.endswith("/chatbot/image")
+    if is_image_route:
+        if not query:
+            return {"statusCode": 400, "body": json.dumps({"error": "query_required"})}
+        try:
+            image_payload = _generate_image(
+                prompt=query,
+                model_id=str(body.get("model_id") or "").strip() or None,
+                size=str(body.get("size") or "").strip() or None,
+            )
+        except ValueError as exc:
+            return {"statusCode": 400, "body": json.dumps({"error": str(exc)})}
+        except Exception:
+            logger.exception("chatbot_image_generation_error")
+            return {"statusCode": 500, "body": json.dumps({"error": "image_generation_failed"})}
+
+        return {
+            "statusCode": 200,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps(image_payload),
+        }
+
     if not query:
         return {"statusCode": 400, "body": json.dumps({"error": "query_required"})}
 
@@ -487,7 +717,10 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     assistant_mode = _normalize_assistant_mode(body.get("assistant_mode"))
     llm_provider = _normalize_llm_provider(body.get("llm_provider"))
     model_id = str(body.get("model_id") or "").strip() or None
+    conversation_id = str(body.get("conversation_id") or "").strip() or None
     retrieval_mode = _normalize_retrieval_mode(body.get("retrieval_mode"))
+    stream = bool(body.get("stream") is True)
+    stream_chunk_chars = int(body.get("stream_chunk_chars") or 120)
 
     # CQL/JQL validation is only required for contextual mode
     if assistant_mode == "contextual":
@@ -507,6 +740,9 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             assistant_mode=assistant_mode,
             llm_provider=llm_provider,
             model_id=model_id,
+            conversation_id=conversation_id,
+            stream=stream,
+            stream_chunk_chars=stream_chunk_chars,
         )
     except ValueError as exc:
         return {

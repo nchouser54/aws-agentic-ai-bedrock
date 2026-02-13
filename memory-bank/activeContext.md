@@ -10,6 +10,9 @@
 - Support general AI chat mode and model/provider selection in chatbot requests.
 - Allow optional direct Anthropic provider while keeping Bedrock as default.
 - Expose dynamic GovCloud Bedrock model discovery for chat model selection (`GET /chatbot/models`).
+- Add optional conversation memory for chatbot threads.
+- Add stream-style chunked response payloads for improved UI rendering.
+- Add image generation endpoint (`POST /chatbot/image`) and webapp integration.
 
 ## Current Blockers
 

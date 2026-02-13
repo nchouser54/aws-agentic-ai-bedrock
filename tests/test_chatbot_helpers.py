@@ -2,11 +2,13 @@ import json
 from unittest.mock import MagicMock, patch
 
 from chatbot.app import (
+    _chunk_text,
     _format_confluence,
     _format_jira,
     _format_kb,
     _list_bedrock_models,
     _normalize_assistant_mode,
+    _normalize_conversation_id,
     _normalize_llm_provider,
     _normalize_retrieval_mode,
     _validate_query_filter,
@@ -68,6 +70,28 @@ def test_normalize_llm_provider() -> None:
     assert _normalize_llm_provider("bedrock") == "bedrock"
     assert _normalize_llm_provider("anthropic_direct") == "anthropic_direct"
     assert _normalize_llm_provider("other") == "bedrock"
+
+
+def test_normalize_conversation_id() -> None:
+    assert _normalize_conversation_id("thread_1") == "thread_1"
+    assert _normalize_conversation_id("") is None
+
+
+def test_normalize_conversation_id_invalid() -> None:
+    try:
+        _normalize_conversation_id("not valid spaces")
+    except ValueError as exc:
+        assert str(exc) == "conversation_id_invalid"
+    else:
+        raise AssertionError("Expected ValueError")
+
+
+def test_chunk_text() -> None:
+    small_chunks = _chunk_text("abcdefghij", 4)
+    assert small_chunks == ["abcdefghij"]
+
+    chunks = _chunk_text("abcdefghijklmnopqrstuv", 10)
+    assert chunks == ["abcdefghijklmnopqrst", "uv"]
 
 
 def test_validate_query_filter_ok() -> None:
@@ -316,6 +340,46 @@ def test_handle_query_general_mode_anthropic_direct(mock_anthropic_cls, _mock_ke
     assert out["sources"]["provider"] == "anthropic_direct"
 
 
+@patch("chatbot.app._append_conversation_turn")
+@patch("chatbot.app._load_conversation_history", return_value=[{"role": "user", "content": "prior q"}])
+@patch("chatbot.app.BedrockChatClient")
+def test_handle_query_stream_and_memory(
+    mock_chat_cls,
+    _mock_history,
+    mock_append,
+) -> None:
+    mock_chat = MagicMock()
+    mock_chat.answer.return_value = "This is a longer answer for stream testing."
+    mock_chat_cls.return_value = mock_chat
+
+    with patch.dict(
+        "os.environ",
+        {
+            "CHATBOT_MODEL_ID": "anthropic.model",
+            "ATLASSIAN_CREDENTIALS_SECRET_ARN": "arn:fake",
+        },
+        clear=False,
+    ):
+        out = handle_query(
+            "brainstorm migration plan",
+            "project=ENG",
+            "type=page",
+            "corr-stream",
+            retrieval_mode="hybrid",
+            assistant_mode="general",
+            llm_provider="bedrock",
+            stream=True,
+            stream_chunk_chars=8,
+            conversation_id="team-thread",
+        )
+
+    assert out["conversation_id"] == "team-thread"
+    assert out["stream"]["enabled"] is True
+    assert out["stream"]["chunk_count"] > 1
+    assert "chunks" in out["stream"]
+    mock_append.assert_called_once()
+
+
 def test_handle_query_model_not_allowed_raises_value_error() -> None:
     with patch.dict(
         "os.environ",
@@ -409,6 +473,32 @@ def test_lambda_handler_models_route(mock_models) -> None:
     assert body["count"] == 1
     assert body["models"][0]["model_id"] == "amazon.nova-pro-v1:0"
     mock_models.assert_called_once()
+
+
+@patch(
+    "chatbot.app._generate_image",
+    return_value={
+        "images": ["ZmFrZV9iYXNlNjQ="],
+        "count": 1,
+        "model_id": "amazon.nova-canvas-v1:0",
+        "size": "1024x1024",
+    },
+)
+def test_lambda_handler_image_route(mock_image) -> None:
+    import chatbot.app as chatbot_mod
+
+    chatbot_mod._cached_api_token = None
+    with patch.dict("os.environ", {"CHATBOT_API_TOKEN_SECRET_ARN": "", "CHATBOT_API_TOKEN": ""}, clear=False):
+        event = _api_event(body={"query": "Draw a skyline"})
+        event["rawPath"] = "/chatbot/image"
+        event["requestContext"]["http"]["path"] = "/chatbot/image"
+        out = lambda_handler(event, None)
+
+    assert out["statusCode"] == 200
+    body = json.loads(out["body"])
+    assert body["count"] == 1
+    assert body["model_id"] == "amazon.nova-canvas-v1:0"
+    mock_image.assert_called_once()
 
 
 def test_lambda_handler_query_too_long() -> None:

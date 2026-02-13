@@ -6,6 +6,8 @@ const ids = {
   assistantMode: document.getElementById("assistantMode"),
   llmProvider: document.getElementById("llmProvider"),
   modelId: document.getElementById("modelId"),
+  conversationId: document.getElementById("conversationId"),
+  streamMode: document.getElementById("streamMode"),
   refreshModelsBtn: document.getElementById("refreshModelsBtn"),
   modelSuggestions: document.getElementById("modelSuggestions"),
   query: document.getElementById("query"),
@@ -19,7 +21,10 @@ const ids = {
   status: document.getElementById("status"),
   answer: document.getElementById("answer"),
   sources: document.getElementById("sources"),
+  imageWrap: document.getElementById("imageWrap"),
+  imagePreview: document.getElementById("imagePreview"),
   sendBtn: document.getElementById("sendBtn"),
+  imageBtn: document.getElementById("imageBtn"),
   saveBtn: document.getElementById("saveBtn"),
 };
 
@@ -42,6 +47,8 @@ function loadSettings() {
     ids.assistantMode.value = s.assistantMode || "contextual";
     ids.llmProvider.value = s.llmProvider || "bedrock";
     ids.modelId.value = s.modelId || "";
+    ids.conversationId.value = s.conversationId || "";
+    ids.streamMode.value = s.streamMode || "true";
     ids.jiraJql.value = s.jiraJql || "";
     ids.confluenceCql.value = s.confluenceCql || "";
     ids.githubOauthBaseUrl.value = s.githubOauthBaseUrl || "";
@@ -61,6 +68,8 @@ function saveSettings() {
     assistantMode: ids.assistantMode.value,
     llmProvider: ids.llmProvider.value,
     modelId: ids.modelId.value.trim(),
+    conversationId: ids.conversationId.value.trim(),
+    streamMode: ids.streamMode.value,
     jiraJql: ids.jiraJql.value.trim(),
     confluenceCql: ids.confluenceCql.value.trim(),
     githubOauthBaseUrl: ids.githubOauthBaseUrl.value.trim(),
@@ -223,6 +232,21 @@ function renderSources(sources = {}) {
   ids.sources.innerHTML = entries || "";
 }
 
+async function renderAnswerStream(chunks = [], fallbackText = "") {
+  if (!Array.isArray(chunks) || chunks.length === 0) {
+    ids.answer.textContent = fallbackText;
+    return;
+  }
+
+  ids.answer.textContent = "";
+  for (const chunk of chunks) {
+    ids.answer.textContent += String(chunk);
+    // Small delay gives a stream-like UX while keeping API simple.
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(35);
+  }
+}
+
 function deriveModelsEndpoint(queryEndpoint) {
   const endpoint = queryEndpoint.trim();
   if (!endpoint) return "";
@@ -283,6 +307,25 @@ async function refreshModels() {
   }
 }
 
+function deriveImageEndpoint(queryEndpoint) {
+  const endpoint = queryEndpoint.trim();
+  if (!endpoint) return "";
+
+  try {
+    const u = new URL(endpoint);
+    if (u.pathname.endsWith("/chatbot/query")) {
+      u.pathname = u.pathname.replace(/\/chatbot\/query$/, "/chatbot/image");
+      return u.toString();
+    }
+
+    const basePath = u.pathname.endsWith("/") ? u.pathname.slice(0, -1) : u.pathname;
+    u.pathname = `${basePath}/chatbot/image`;
+    return u.toString();
+  } catch {
+    return "";
+  }
+}
+
 async function askChatbot() {
   const endpoint = ids.chatbotUrl.value.trim();
   const query = ids.query.value.trim();
@@ -305,10 +348,15 @@ async function askChatbot() {
     assistant_mode: ids.assistantMode.value,
     llm_provider: ids.llmProvider.value,
     retrieval_mode: ids.retrievalMode.value,
+    stream: ids.streamMode.value === "true",
+    stream_chunk_chars: 140,
   };
 
   const modelId = ids.modelId.value.trim();
   if (modelId) payload.model_id = modelId;
+
+  const conversationId = ids.conversationId.value.trim();
+  if (conversationId) payload.conversation_id = conversationId;
 
   const jiraJql = ids.jiraJql.value.trim();
   const confluenceCql = ids.confluenceCql.value.trim();
@@ -326,24 +374,87 @@ async function askChatbot() {
     if (!res.ok) {
       ids.answer.textContent = JSON.stringify(body, null, 2) || `HTTP ${res.status}`;
       renderSources({});
+      ids.imageWrap.hidden = true;
       setStatus(`Request failed (${res.status}).`, "err");
       return;
     }
 
-    ids.answer.textContent = body.answer || JSON.stringify(body, null, 2);
+    const streamChunks = (((body || {}).stream || {}).chunks || []);
+    await renderAnswerStream(streamChunks, body.answer || JSON.stringify(body, null, 2));
     renderSources(body.sources || {});
+    ids.imageWrap.hidden = true;
     setStatus("Response received.", "ok");
   } catch (err) {
     ids.answer.textContent = String(err);
     renderSources({});
+    ids.imageWrap.hidden = true;
     setStatus("Network/CORS error. Check API URL and auth mode.", "err");
   } finally {
     ids.sendBtn.disabled = false;
   }
 }
 
+async function generateImage() {
+  const endpoint = deriveImageEndpoint(ids.chatbotUrl.value);
+  const query = ids.query.value.trim();
+
+  if (!endpoint) {
+    setStatus("Enter chatbot query URL first.", "err");
+    return;
+  }
+  if (!query) {
+    setStatus("Enter a prompt first (Query field).", "err");
+    return;
+  }
+
+  saveSettings();
+  ids.imageBtn.disabled = true;
+  setStatus("Generating image...", "muted");
+
+  const payload = { query };
+  const modelId = ids.modelId.value.trim();
+  if (modelId) payload.model_id = modelId;
+
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: buildHeaders(),
+      body: JSON.stringify(payload),
+    });
+
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      ids.answer.textContent = JSON.stringify(body, null, 2) || `HTTP ${res.status}`;
+      ids.imageWrap.hidden = true;
+      setStatus(`Image generation failed (${res.status}).`, "err");
+      return;
+    }
+
+    const imageB64 = ((body.images || [])[0] || "").trim();
+    if (!imageB64) {
+      ids.answer.textContent = JSON.stringify(body, null, 2);
+      ids.imageWrap.hidden = true;
+      setStatus("Image endpoint returned no images.", "err");
+      return;
+    }
+
+    ids.imagePreview.src = `data:image/png;base64,${imageB64}`;
+    ids.imageWrap.hidden = false;
+    ids.answer.textContent = `Image generated with ${body.model_id || "unknown model"} (${body.size || "default size"}).`;
+    renderSources({});
+    setStatus("Image ready.", "ok");
+  } catch (err) {
+    ids.imageWrap.hidden = true;
+    ids.answer.textContent = String(err);
+    setStatus("Image generation network/CORS error.", "err");
+  } finally {
+    ids.imageBtn.disabled = false;
+  }
+}
+
 ids.saveBtn.addEventListener("click", saveSettings);
 ids.sendBtn.addEventListener("click", askChatbot);
+ids.imageBtn.addEventListener("click", generateImage);
 ids.githubLoginBtn.addEventListener("click", startGitHubLogin);
 ids.refreshModelsBtn.addEventListener("click", refreshModels);
 

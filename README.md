@@ -89,6 +89,9 @@ Chatbot endpoint:
 - `POST /chatbot/query`
 - JSON body:
   - `query` (required)
+  - `conversation_id` (optional; enables per-thread memory when memory is enabled)
+  - `stream` (optional bool; returns chunked stream payload for stream-style UI)
+  - `stream_chunk_chars` (optional int; chunk size for stream payload)
   - `assistant_mode` (optional: `contextual|general`; defaults to `contextual`)
   - `llm_provider` (optional: `bedrock|anthropic_direct`; defaults to `bedrock`)
   - `model_id` (optional override; validated against allow-list when configured)
@@ -122,6 +125,22 @@ Model discovery endpoint:
 
 - `GET /chatbot/models`
 - Returns active text-capable Bedrock foundation models visible in the configured region (GovCloud), optionally filtered by `CHATBOT_ALLOWED_MODEL_IDS`.
+
+Image generation endpoint:
+
+- `POST /chatbot/image`
+- JSON body:
+  - `query` (required image prompt)
+  - `model_id` (optional Bedrock image model override)
+  - `size` (optional `WIDTHxHEIGHT`, defaults to `CHATBOT_IMAGE_SIZE`)
+- Returns base64-encoded image payload(s) in `images`.
+
+Conversation memory options (optional):
+
+- `CHATBOT_MEMORY_ENABLED=true|false`
+- `CHATBOT_MEMORY_TABLE=<dynamodb table name>`
+- `CHATBOT_MEMORY_MAX_TURNS` (default `6`)
+- `CHATBOT_MEMORY_TTL_DAYS` (default `30`)
 
 Optional live GitHub lookup (disabled by default):
 
@@ -258,10 +277,16 @@ In the UI, provide:
 - Assistant Mode (`contextual` or `general`)
 - LLM Provider (`bedrock` or `anthropic_direct`)
 - Optional Model ID override (for example Amazon-hosted Bedrock model IDs)
+- Optional Conversation ID to retain memory across messages
+- Stream-style response mode toggle
 
 To load currently active GovCloud model options into the model picker:
 
 - Click **Refresh GovCloud Models** in the web app.
+
+To generate an image from the same prompt field:
+
+- Click **Generate Image** in the web app.
 
 Optional GitHub login in web app:
 

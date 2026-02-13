@@ -2,6 +2,7 @@ locals {
   name_prefix                       = "${var.project_name}-${var.environment}"
   chatbot_auth_jwt_enabled          = var.chatbot_enabled && var.chatbot_auth_mode == "jwt"
   chatbot_auth_github_oauth_enabled = var.chatbot_enabled && var.chatbot_auth_mode == "github_oauth"
+  chatbot_memory_enabled            = var.chatbot_enabled && var.chatbot_memory_enabled
   chatbot_route_auth_type           = local.chatbot_auth_jwt_enabled ? "JWT" : local.chatbot_auth_github_oauth_enabled ? "CUSTOM" : "NONE"
   kb_sync_any_enabled               = var.kb_sync_enabled || var.github_kb_sync_enabled
 }
@@ -157,6 +158,34 @@ resource "aws_dynamodb_table" "idempotency" {
   attribute {
     name = "idempotency_key"
     type = "S"
+  }
+
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app.arn
+  }
+}
+
+resource "aws_dynamodb_table" "chatbot_memory" {
+  count        = local.chatbot_memory_enabled ? 1 : 0
+  name         = "${local.name_prefix}-chatbot-memory"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "conversation_id"
+  range_key    = "timestamp_ms"
+
+  attribute {
+    name = "conversation_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "timestamp_ms"
+    type = "N"
   }
 
   ttl {
@@ -441,7 +470,7 @@ resource "aws_iam_policy" "chatbot_policy" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Effect = "Allow"
         Action = [
@@ -478,7 +507,16 @@ resource "aws_iam_policy" "chatbot_policy" {
         Action   = ["kms:Decrypt"]
         Resource = aws_kms_key.app.arn
       }
-    ]
+      ], local.chatbot_memory_enabled ? [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:Query",
+          "dynamodb:PutItem"
+        ]
+        Resource = aws_dynamodb_table.chatbot_memory[0].arn
+      }
+    ] : [])
   })
 }
 
@@ -666,27 +704,33 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
 
   environment {
     variables = {
-      AWS_REGION                        = "us-gov-west-1"
-      CHATBOT_MODEL_ID                  = var.chatbot_model_id
-      BEDROCK_MODEL_ID                  = var.bedrock_model_id
-      CHATBOT_RETRIEVAL_MODE            = var.chatbot_retrieval_mode
-      CHATBOT_DEFAULT_ASSISTANT_MODE    = var.chatbot_default_assistant_mode
-      CHATBOT_LLM_PROVIDER              = var.chatbot_llm_provider
-      CHATBOT_ALLOWED_MODEL_IDS         = join(",", var.chatbot_allowed_model_ids)
-      CHATBOT_ENABLE_ANTHROPIC_DIRECT   = tostring(var.chatbot_enable_anthropic_direct)
+      AWS_REGION                           = "us-gov-west-1"
+      CHATBOT_MODEL_ID                     = var.chatbot_model_id
+      BEDROCK_MODEL_ID                     = var.bedrock_model_id
+      CHATBOT_RETRIEVAL_MODE               = var.chatbot_retrieval_mode
+      CHATBOT_DEFAULT_ASSISTANT_MODE       = var.chatbot_default_assistant_mode
+      CHATBOT_LLM_PROVIDER                 = var.chatbot_llm_provider
+      CHATBOT_ALLOWED_MODEL_IDS            = join(",", var.chatbot_allowed_model_ids)
+      CHATBOT_ENABLE_ANTHROPIC_DIRECT      = tostring(var.chatbot_enable_anthropic_direct)
       CHATBOT_ANTHROPIC_API_KEY_SECRET_ARN = var.chatbot_anthropic_api_key_secret_arn
-      CHATBOT_ANTHROPIC_API_BASE        = var.chatbot_anthropic_api_base
-      CHATBOT_ANTHROPIC_MODEL_ID        = var.chatbot_anthropic_model_id
-      BEDROCK_KNOWLEDGE_BASE_ID         = var.bedrock_knowledge_base_id
-      BEDROCK_KB_TOP_K                  = tostring(var.bedrock_kb_top_k)
-      ATLASSIAN_CREDENTIALS_SECRET_ARN  = aws_secretsmanager_secret.atlassian_credentials.arn
-      CHATBOT_API_TOKEN_SECRET_ARN      = var.chatbot_enabled ? aws_secretsmanager_secret.chatbot_api_token[0].arn : ""
-      GITHUB_CHAT_LIVE_ENABLED          = tostring(var.chatbot_github_live_enabled)
-      GITHUB_CHAT_REPOS                 = join(",", var.chatbot_github_live_repos)
-      GITHUB_CHAT_MAX_RESULTS           = tostring(var.chatbot_github_live_max_results)
-      GITHUB_API_BASE                   = var.github_api_base
-      GITHUB_APP_PRIVATE_KEY_SECRET_ARN = var.chatbot_github_live_enabled ? aws_secretsmanager_secret.github_app_private_key_pem.arn : ""
-      GITHUB_APP_IDS_SECRET_ARN         = var.chatbot_github_live_enabled ? aws_secretsmanager_secret.github_app_ids.arn : ""
+      CHATBOT_ANTHROPIC_API_BASE           = var.chatbot_anthropic_api_base
+      CHATBOT_ANTHROPIC_MODEL_ID           = var.chatbot_anthropic_model_id
+      CHATBOT_IMAGE_MODEL_ID               = var.chatbot_image_model_id
+      CHATBOT_IMAGE_SIZE                   = var.chatbot_image_default_size
+      CHATBOT_MEMORY_ENABLED               = tostring(var.chatbot_memory_enabled)
+      CHATBOT_MEMORY_TABLE                 = local.chatbot_memory_enabled ? aws_dynamodb_table.chatbot_memory[0].name : ""
+      CHATBOT_MEMORY_MAX_TURNS             = tostring(var.chatbot_memory_max_turns)
+      CHATBOT_MEMORY_TTL_DAYS              = tostring(var.chatbot_memory_ttl_days)
+      BEDROCK_KNOWLEDGE_BASE_ID            = var.bedrock_knowledge_base_id
+      BEDROCK_KB_TOP_K                     = tostring(var.bedrock_kb_top_k)
+      ATLASSIAN_CREDENTIALS_SECRET_ARN     = aws_secretsmanager_secret.atlassian_credentials.arn
+      CHATBOT_API_TOKEN_SECRET_ARN         = var.chatbot_enabled ? aws_secretsmanager_secret.chatbot_api_token[0].arn : ""
+      GITHUB_CHAT_LIVE_ENABLED             = tostring(var.chatbot_github_live_enabled)
+      GITHUB_CHAT_REPOS                    = join(",", var.chatbot_github_live_repos)
+      GITHUB_CHAT_MAX_RESULTS              = tostring(var.chatbot_github_live_max_results)
+      GITHUB_API_BASE                      = var.github_api_base
+      GITHUB_APP_PRIVATE_KEY_SECRET_ARN    = var.chatbot_github_live_enabled ? aws_secretsmanager_secret.github_app_private_key_pem.arn : ""
+      GITHUB_APP_IDS_SECRET_ARN            = var.chatbot_github_live_enabled ? aws_secretsmanager_secret.github_app_ids.arn : ""
     }
   }
 }
@@ -916,6 +960,17 @@ resource "aws_apigatewayv2_route" "chatbot_models" {
   count              = var.chatbot_enabled ? 1 : 0
   api_id             = aws_apigatewayv2_api.webhook.id
   route_key          = "GET /chatbot/models"
+  target             = "integrations/${aws_apigatewayv2_integration.chatbot_lambda[0].id}"
+  authorization_type = local.chatbot_route_auth_type
+  authorizer_id = local.chatbot_auth_jwt_enabled ? aws_apigatewayv2_authorizer.chatbot_jwt[0].id : (
+    local.chatbot_auth_github_oauth_enabled ? aws_apigatewayv2_authorizer.chatbot_github_oauth[0].id : null
+  )
+}
+
+resource "aws_apigatewayv2_route" "chatbot_image" {
+  count              = var.chatbot_enabled ? 1 : 0
+  api_id             = aws_apigatewayv2_api.webhook.id
+  route_key          = "POST /chatbot/image"
   target             = "integrations/${aws_apigatewayv2_integration.chatbot_lambda[0].id}"
   authorization_type = local.chatbot_route_auth_type
   authorizer_id = local.chatbot_auth_jwt_enabled ? aws_apigatewayv2_authorizer.chatbot_jwt[0].id : (
