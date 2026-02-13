@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Chatbot Console</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>AI Chatbot Console</h1>
+      <p class="subtitle">Small internal web client for <code>/chatbot/query</code>.</p>
+
+      <section class="panel">
+        <h2>Connection</h2>
+        <div class="grid two">
+          <label>
+            Chatbot URL
+            <input id="chatbotUrl" placeholder="https://.../chatbot/query" />
+          </label>
+          <label>
+            Auth Mode
+            <select id="authMode">
+              <option value="token">token (X-Api-Token)</option>
+              <option value="bearer">bearer (JWT / GitHub OAuth)</option>
+              <option value="none">none</option>
+            </select>
+          </label>
+          <label>
+            Auth Value
+            <input id="authValue" type="password" placeholder="token or bearer jwt" />
+          </label>
+          <label>
+            Retrieval Mode
+            <select id="retrievalMode">
+              <option value="hybrid">hybrid</option>
+              <option value="kb">kb</option>
+              <option value="live">live</option>
+            </select>
+          </label>
+        </div>
+        <details class="gh-login" id="ghLoginPanel">
+          <summary>GitHub Login (device flow, optional)</summary>
+          <p class="muted small">
+            Use a GitHub OAuth App client ID to sign in and auto-fill bearer auth. If your browser blocks this flow, use manual bearer token mode.
+          </p>
+          <div class="grid two">
+            <label>
+              GitHub OAuth Base URL
+              <input id="githubOauthBaseUrl" value="https://github.com" />
+            </label>
+            <label>
+              GitHub OAuth Client ID
+              <input id="githubClientId" placeholder="Iv1.0123456789abcdef" />
+            </label>
+            <label>
+              GitHub Scope
+              <input id="githubScope" value="read:user read:org" />
+            </label>
+          </div>
+          <div class="actions">
+            <button id="githubLoginBtn" type="button">Login with GitHub</button>
+          </div>
+          <div id="githubLoginStatus" class="status muted">Not started.</div>
+        </details>
+      </section>
+
+      <section class="panel">
+        <h2>Prompt</h2>
+        <div class="grid one">
+          <label>
+            Query
+            <textarea id="query" rows="4" placeholder="Ask about Jira, Confluence, or indexed GitHub docs..."></textarea>
+          </label>
+          <div class="grid two">
+            <label>
+              Jira JQL (optional)
+              <input id="jiraJql" placeholder="project=PLAT order by updated DESC" />
+            </label>
+            <label>
+              Confluence CQL (optional)
+              <input id="confluenceCql" placeholder="type=page order by lastmodified desc" />
+            </label>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="saveBtn" type="button">Save Settings</button>
+          <button id="sendBtn" type="button">Ask Chatbot</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Response</h2>
+        <div id="status" class="status muted">Ready.</div>
+        <pre id="answer" class="answer">No response yet.</pre>
+        <div id="sources" class="sources"></div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -204,6 +204,40 @@ PR description generator endpoint:
 - `python scripts/trigger_kb_sync.py --function-name <kb_sync_function_name>`
 - `python scripts/predeploy_nonprod_checks.py --tfvars infra/terraform/terraform.tfvars`
 
+### Small local web app (chatbot UI)
+
+This repository now includes a tiny browser UI for querying the chatbot API:
+
+- `webapp/index.html`
+- `webapp/app.js`
+- `webapp/styles.css`
+
+Run it locally:
+
+- `python scripts/run_chatbot_webapp.py --port 8080`
+
+Then open:
+
+- `http://localhost:8080`
+
+In the UI, provide:
+
+- Chatbot URL (`chatbot_url` Terraform output)
+- Auth mode (`token`, `bearer`, or `none`)
+- Auth value (API token or bearer token)
+
+Optional GitHub login in web app:
+
+- Expand **GitHub Login (device flow, optional)**
+- Set **GitHub OAuth Base URL** (`https://github.com` for github.com, or your GHES host)
+- Enter your GitHub OAuth App Client ID
+- Click **Login with GitHub** and complete verification on GitHub
+- The app will auto-fill `bearer` auth mode/token for chatbot calls
+
+If your environment blocks browser calls to GitHub OAuth endpoints, use manual `bearer` mode and paste a token.
+
+> Note: if your API Gateway CORS policy does not allow `http://localhost:8080`, browser requests may fail until CORS is enabled for that origin.
+
 > Note: local invokes still expect AWS credentials/resources for full path behavior unless mocked.
 
 Non-prod rollout checklist for KB mode and scheduled sync:
