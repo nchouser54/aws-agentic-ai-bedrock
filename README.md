@@ -141,6 +141,14 @@ Conversation memory options (optional):
 - `CHATBOT_MEMORY_TABLE=<dynamodb table name>`
 - `CHATBOT_MEMORY_MAX_TURNS` (default `6`)
 - `CHATBOT_MEMORY_TTL_DAYS` (default `30`)
+- `CHATBOT_MEMORY_COMPACTION_CHARS` (default `12000`; writes rolling summary entries when exceeded)
+- `CHATBOT_USER_REQUESTS_PER_MINUTE` (default `120`)
+- `CHATBOT_CONVERSATION_REQUESTS_PER_MINUTE` (default `60`)
+
+Memory hygiene endpoints:
+
+- `POST /chatbot/memory/clear` with `{ "conversation_id": "..." }`
+- `POST /chatbot/memory/clear-all` clears memory for the current authenticated actor scope
 
 Chatbot observability options:
 

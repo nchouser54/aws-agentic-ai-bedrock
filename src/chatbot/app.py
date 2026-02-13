@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import os
@@ -210,6 +211,18 @@ def _chat_memory_table() -> str:
     return os.getenv("CHATBOT_MEMORY_TABLE", "").strip()
 
 
+def _memory_compaction_chars() -> int:
+    return max(2000, int(os.getenv("CHATBOT_MEMORY_COMPACTION_CHARS", "12000")))
+
+
+def _user_requests_per_minute_limit() -> int:
+    return max(1, int(os.getenv("CHATBOT_USER_REQUESTS_PER_MINUTE", "120")))
+
+
+def _conversation_requests_per_minute_limit() -> int:
+    return max(1, int(os.getenv("CHATBOT_CONVERSATION_REQUESTS_PER_MINUTE", "60")))
+
+
 def _normalize_conversation_id(value: str | None) -> str | None:
     candidate = (value or "").strip()
     if not candidate:
@@ -219,7 +232,134 @@ def _normalize_conversation_id(value: str | None) -> str | None:
     return candidate
 
 
-def _load_conversation_history(conversation_id: str | None) -> list[dict[str, str]]:
+def _actor_id(event: dict[str, Any]) -> str:
+    request_context = event.get("requestContext") or {}
+    authorizer = request_context.get("authorizer") or {}
+
+    jwt_claims = ((authorizer.get("jwt") or {}).get("claims") or {}) if isinstance(authorizer, dict) else {}
+    if isinstance(jwt_claims, dict):
+        for key in ("sub", "preferred_username", "email"):
+            val = str(jwt_claims.get(key) or "").strip()
+            if val:
+                return f"jwt:{val}"
+
+    if isinstance(authorizer, dict):
+        principal = str(authorizer.get("principalId") or "").strip()
+        if principal:
+            return f"authorizer:{principal}"
+
+    headers = event.get("headers") or {}
+    token = ""
+    for key, value in headers.items():
+        if str(key).lower() == "x-api-token":
+            token = str(value or "").strip()
+            break
+    if token:
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+        return f"token:{token_hash}"
+
+    return "anonymous"
+
+
+def _conversation_storage_key(actor_id: str, conversation_id: str) -> str:
+    return f"conv#{actor_id}#{conversation_id}"
+
+
+def _record_quota_event_and_validate(bucket_key: str, limit: int) -> None:
+    if not _chat_memory_enabled():
+        return
+
+    table = _chat_memory_table()
+    if not table:
+        return
+
+    now_ms = int(time.time() * 1000)
+    window_start = now_ms - 60_000
+    expires_at = int(time.time()) + 2 * 24 * 60 * 60
+
+    client = boto3.client("dynamodb", region_name=os.getenv("AWS_REGION", DEFAULT_REGION))
+    try:
+        resp = client.query(
+            TableName=table,
+            KeyConditionExpression="conversation_id = :cid and timestamp_ms >= :start",
+            ExpressionAttributeValues={
+                ":cid": {"S": bucket_key},
+                ":start": {"N": str(window_start)},
+            },
+        )
+        count = len(resp.get("Items") or [])
+        if count >= limit:
+            raise ValueError("rate_limit_exceeded")
+
+        client.put_item(
+            TableName=table,
+            Item={
+                "conversation_id": {"S": bucket_key},
+                "timestamp_ms": {"N": str(now_ms)},
+                "role": {"S": "quota"},
+                "content": {"S": "1"},
+                "expires_at": {"N": str(expires_at)},
+            },
+        )
+    except ValueError:
+        raise
+    except Exception:
+        logger.warning("chat_quota_check_failed", extra={"extra": {"bucket_key": bucket_key}})
+
+
+def _enforce_rate_quotas(actor_id: str, conversation_id: str | None) -> None:
+    conv = conversation_id or "default"
+    _record_quota_event_and_validate(
+        bucket_key=f"quota_user#{actor_id}",
+        limit=_user_requests_per_minute_limit(),
+    )
+    _record_quota_event_and_validate(
+        bucket_key=f"quota_conv#{actor_id}#{conv}",
+        limit=_conversation_requests_per_minute_limit(),
+    )
+
+
+def _summarize_history(history: list[dict[str, str]], max_items: int = 10) -> str:
+    if not history:
+        return ""
+
+    rows: list[str] = []
+    for item in history[:max_items]:
+        role = "U" if item.get("role") == "user" else "A"
+        snippet = str(item.get("content") or "").strip().replace("\n", " ")
+        rows.append(f"- {role}: {snippet[:160]}")
+
+    return "Conversation summary:\n" + "\n".join(rows)
+
+
+def _track_conversation_index(actor_id: str, conversation_id: str) -> None:
+    if not _chat_memory_enabled():
+        return
+
+    table = _chat_memory_table()
+    if not table:
+        return
+
+    now_ms = int(time.time() * 1000)
+    expires_at = int(time.time()) + 60 * 24 * 60 * 60
+    client = boto3.client("dynamodb", region_name=os.getenv("AWS_REGION", DEFAULT_REGION))
+
+    try:
+        client.put_item(
+            TableName=table,
+            Item={
+                "conversation_id": {"S": f"conv_index#{actor_id}"},
+                "timestamp_ms": {"N": str(now_ms)},
+                "role": {"S": "index"},
+                "content": {"S": conversation_id},
+                "expires_at": {"N": str(expires_at)},
+            },
+        )
+    except Exception:
+        logger.warning("chat_memory_index_write_failed", extra={"extra": {"actor_id": actor_id}})
+
+
+def _load_conversation_history(actor_id: str, conversation_id: str | None) -> list[dict[str, str]]:
     if not conversation_id or not _chat_memory_enabled():
         return []
 
@@ -227,18 +367,20 @@ def _load_conversation_history(conversation_id: str | None) -> list[dict[str, st
     if not table:
         return []
 
+    conversation_key = _conversation_storage_key(actor_id, conversation_id)
+
     max_turns = max(1, int(os.getenv("CHATBOT_MEMORY_MAX_TURNS", "6")))
     client = boto3.client("dynamodb", region_name=os.getenv("AWS_REGION", DEFAULT_REGION))
     try:
         resp = client.query(
             TableName=table,
             KeyConditionExpression="conversation_id = :cid",
-            ExpressionAttributeValues={":cid": {"S": conversation_id}},
+            ExpressionAttributeValues={":cid": {"S": conversation_key}},
             ScanIndexForward=False,
             Limit=max_turns * 2,
         )
     except Exception:
-        logger.warning("chat_memory_read_failed", extra={"extra": {"conversation_id": conversation_id}})
+        logger.warning("chat_memory_read_failed", extra={"extra": {"conversation_id": conversation_key}})
         return []
 
     items = list(resp.get("Items") or [])
@@ -248,6 +390,9 @@ def _load_conversation_history(conversation_id: str | None) -> list[dict[str, st
     for item in items:
         role = str((item.get("role") or {}).get("S") or "").strip().lower()
         content = str((item.get("content") or {}).get("S") or "").strip()
+        if role == "summary" and content:
+            history.append({"role": "assistant", "content": f"[Conversation Summary]\n{content}"})
+            continue
         if role not in {"user", "assistant"} or not content:
             continue
         history.append({"role": role, "content": content})
@@ -255,7 +400,7 @@ def _load_conversation_history(conversation_id: str | None) -> list[dict[str, st
     return history[-(max_turns * 2) :]
 
 
-def _append_conversation_turn(conversation_id: str | None, user_query: str, answer: str) -> None:
+def _append_conversation_turn(actor_id: str, conversation_id: str | None, user_query: str, answer: str) -> None:
     if not conversation_id or not _chat_memory_enabled():
         return
 
@@ -263,16 +408,37 @@ def _append_conversation_turn(conversation_id: str | None, user_query: str, answ
     if not table:
         return
 
+    conversation_key = _conversation_storage_key(actor_id, conversation_id)
+
     ttl_days = max(1, int(os.getenv("CHATBOT_MEMORY_TTL_DAYS", "30")))
     now_ms = int(time.time() * 1000)
     expires_at = int(time.time()) + (ttl_days * 24 * 60 * 60)
     client = boto3.client("dynamodb", region_name=os.getenv("AWS_REGION", DEFAULT_REGION))
 
+    # Best-effort compaction summary for large histories.
+    history = _load_conversation_history(actor_id, conversation_id)
+    total_chars = sum(len(str(item.get("content") or "")) for item in history)
+    if total_chars > _memory_compaction_chars():
+        summary = _summarize_history(history)
+        try:
+            client.put_item(
+                TableName=table,
+                Item={
+                    "conversation_id": {"S": conversation_key},
+                    "timestamp_ms": {"N": str(now_ms - 1)},
+                    "role": {"S": "summary"},
+                    "content": {"S": summary},
+                    "expires_at": {"N": str(expires_at)},
+                },
+            )
+        except Exception:
+            logger.warning("chat_memory_compaction_failed", extra={"extra": {"conversation_id": conversation_key}})
+
     try:
         client.put_item(
             TableName=table,
             Item={
-                "conversation_id": {"S": conversation_id},
+                "conversation_id": {"S": conversation_key},
                 "timestamp_ms": {"N": str(now_ms)},
                 "role": {"S": "user"},
                 "content": {"S": user_query},
@@ -282,15 +448,85 @@ def _append_conversation_turn(conversation_id: str | None, user_query: str, answ
         client.put_item(
             TableName=table,
             Item={
-                "conversation_id": {"S": conversation_id},
+                "conversation_id": {"S": conversation_key},
                 "timestamp_ms": {"N": str(now_ms + 1)},
                 "role": {"S": "assistant"},
                 "content": {"S": answer},
                 "expires_at": {"N": str(expires_at)},
             },
         )
+        _track_conversation_index(actor_id, conversation_id)
     except Exception:
-        logger.warning("chat_memory_write_failed", extra={"extra": {"conversation_id": conversation_id}})
+        logger.warning("chat_memory_write_failed", extra={"extra": {"conversation_id": conversation_key}})
+
+
+def _delete_partition_items(partition_key: str) -> int:
+    table = _chat_memory_table()
+    if not table:
+        return 0
+
+    client = boto3.client("dynamodb", region_name=os.getenv("AWS_REGION", DEFAULT_REGION))
+    deleted = 0
+
+    try:
+        resp = client.query(
+            TableName=table,
+            KeyConditionExpression="conversation_id = :cid",
+            ExpressionAttributeValues={":cid": {"S": partition_key}},
+            ProjectionExpression="conversation_id, timestamp_ms",
+        )
+        for item in (resp.get("Items") or []):
+            client.delete_item(
+                TableName=table,
+                Key={
+                    "conversation_id": item["conversation_id"],
+                    "timestamp_ms": item["timestamp_ms"],
+                },
+            )
+            deleted += 1
+    except Exception:
+        logger.warning("chat_memory_delete_failed", extra={"extra": {"conversation_id": partition_key}})
+
+    return deleted
+
+
+def _clear_conversation_memory(actor_id: str, conversation_id: str) -> int:
+    return _delete_partition_items(_conversation_storage_key(actor_id, conversation_id))
+
+
+def _list_actor_conversations(actor_id: str) -> list[str]:
+    table = _chat_memory_table()
+    if not table:
+        return []
+
+    client = boto3.client("dynamodb", region_name=os.getenv("AWS_REGION", DEFAULT_REGION))
+    seen: set[str] = set()
+    ordered: list[str] = []
+    try:
+        resp = client.query(
+            TableName=table,
+            KeyConditionExpression="conversation_id = :cid",
+            ExpressionAttributeValues={":cid": {"S": f"conv_index#{actor_id}"}},
+            ScanIndexForward=False,
+            Limit=200,
+        )
+        for item in (resp.get("Items") or []):
+            conv_id = str((item.get("content") or {}).get("S") or "").strip()
+            if conv_id and conv_id not in seen:
+                seen.add(conv_id)
+                ordered.append(conv_id)
+    except Exception:
+        logger.warning("chat_memory_index_read_failed", extra={"extra": {"actor_id": actor_id}})
+
+    return ordered
+
+
+def _clear_all_memory_for_actor(actor_id: str) -> int:
+    deleted = 0
+    for conv_id in _list_actor_conversations(actor_id):
+        deleted += _clear_conversation_memory(actor_id, conv_id)
+    deleted += _delete_partition_items(f"conv_index#{actor_id}")
+    return deleted
 
 
 def _format_history_for_prompt(history: list[dict[str, str]]) -> str:
@@ -582,6 +818,7 @@ def handle_query(
     llm_provider: str | None = None,
     model_id: str | None = None,
     conversation_id: str | None = None,
+    actor_id: str = "anonymous",
     stream: bool = False,
     stream_chunk_chars: int = 120,
 ) -> dict[str, Any]:
@@ -591,7 +828,8 @@ def handle_query(
     resolved_llm_provider = _normalize_llm_provider(llm_provider)
     resolved_model_id = _resolve_model_id(resolved_llm_provider, model_id)
     resolved_conversation_id = _normalize_conversation_id(conversation_id)
-    history = _load_conversation_history(resolved_conversation_id)
+    _enforce_rate_quotas(actor_id, resolved_conversation_id)
+    history = _load_conversation_history(actor_id, resolved_conversation_id)
     history_text = _format_history_for_prompt(history)
 
     if resolved_assistant_mode == "general":
@@ -610,7 +848,7 @@ def handle_query(
             system_prompt=system_prompt,
             user_prompt=general_user_prompt,
         )
-        _append_conversation_turn(resolved_conversation_id, query, answer)
+        _append_conversation_turn(actor_id, resolved_conversation_id, query, answer)
 
         chunks = _chunk_text(answer, stream_chunk_chars) if stream else []
 
@@ -691,7 +929,7 @@ def handle_query(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
     )
-    _append_conversation_turn(resolved_conversation_id, query, answer)
+    _append_conversation_turn(actor_id, resolved_conversation_id, query, answer)
 
     chunks = _chunk_text(answer, stream_chunk_chars) if stream else []
 
@@ -810,6 +1048,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         )
 
     query = str(body.get("query") or "").strip()
+    actor_id = _actor_id(event)
     is_image_route = path.endswith("/chatbot/image")
     if is_image_route:
         if not query:
@@ -856,6 +1095,38 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             status_code=200,
             headers={"Content-Type": "application/json"},
             payload=image_payload,
+        )
+
+    if path.endswith("/chatbot/memory/clear"):
+        conversation_id = _normalize_conversation_id(str(body.get("conversation_id") or "").strip() or None)
+        if not conversation_id:
+            return _respond(
+                method=method,
+                path=path,
+                started_at=started_at,
+                status_code=400,
+                payload={"error": "conversation_id_required"},
+            )
+
+        deleted = _clear_conversation_memory(actor_id, conversation_id)
+        return _respond(
+            method=method,
+            path=path,
+            started_at=started_at,
+            status_code=200,
+            headers={"Content-Type": "application/json"},
+            payload={"cleared": True, "deleted_items": deleted, "conversation_id": conversation_id},
+        )
+
+    if path.endswith("/chatbot/memory/clear-all"):
+        deleted = _clear_all_memory_for_actor(actor_id)
+        return _respond(
+            method=method,
+            path=path,
+            started_at=started_at,
+            status_code=200,
+            headers={"Content-Type": "application/json"},
+            payload={"cleared": True, "deleted_items": deleted, "scope": "actor"},
         )
 
     if not query:
@@ -913,16 +1184,19 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             llm_provider=llm_provider,
             model_id=model_id,
             conversation_id=conversation_id,
+            actor_id=actor_id,
             stream=stream,
             stream_chunk_chars=stream_chunk_chars,
         )
     except ValueError as exc:
+        error_code = str(exc)
+        status_code = 429 if error_code == "rate_limit_exceeded" else 400
         return _respond(
             method=method,
             path=path,
             started_at=started_at,
-            status_code=400,
-            payload={"error": str(exc)},
+            status_code=status_code,
+            payload={"error": error_code},
         )
     except Exception:
         logger.exception("chatbot_internal_error", extra={"extra": {"correlation_id": correlation_id}})

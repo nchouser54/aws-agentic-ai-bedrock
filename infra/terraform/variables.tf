@@ -207,6 +207,39 @@ variable "chatbot_memory_ttl_days" {
   }
 }
 
+variable "chatbot_memory_compaction_chars" {
+  description = "Conversation character threshold that triggers summary compaction writes"
+  type        = number
+  default     = 12000
+
+  validation {
+    condition     = var.chatbot_memory_compaction_chars >= 2000
+    error_message = "Must be at least 2000."
+  }
+}
+
+variable "chatbot_user_requests_per_minute" {
+  description = "Per-user request quota per minute for chatbot query endpoint"
+  type        = number
+  default     = 120
+
+  validation {
+    condition     = var.chatbot_user_requests_per_minute >= 1
+    error_message = "Must be at least 1."
+  }
+}
+
+variable "chatbot_conversation_requests_per_minute" {
+  description = "Per-conversation request quota per minute for chatbot query endpoint"
+  type        = number
+  default     = 60
+
+  validation {
+    condition     = var.chatbot_conversation_requests_per_minute >= 1
+    error_message = "Must be at least 1."
+  }
+}
+
 variable "chatbot_image_model_id" {
   description = "Bedrock image model ID for /chatbot/image endpoint"
   type        = string

@@ -545,6 +545,43 @@ def test_lambda_handler_auth_passed() -> None:
     assert out["statusCode"] == 200
 
 
+def test_lambda_handler_memory_clear_route() -> None:
+    import chatbot.app as chatbot_mod
+
+    chatbot_mod._cached_api_token = None
+    with patch.dict("os.environ", {"CHATBOT_API_TOKEN_SECRET_ARN": "", "CHATBOT_API_TOKEN": ""}, clear=False):
+        with patch("chatbot.app._clear_conversation_memory", return_value=3) as clear_conv:
+            event = _api_event(body={"conversation_id": "team-thread"})
+            event["rawPath"] = "/chatbot/memory/clear"
+            event["requestContext"]["http"]["path"] = "/chatbot/memory/clear"
+            out = lambda_handler(event, None)
+
+    assert out["statusCode"] == 200
+    body = json.loads(out["body"])
+    assert body["cleared"] is True
+    assert body["deleted_items"] == 3
+    clear_conv.assert_called_once()
+
+
+def test_lambda_handler_memory_clear_all_route() -> None:
+    import chatbot.app as chatbot_mod
+
+    chatbot_mod._cached_api_token = None
+    with patch.dict("os.environ", {"CHATBOT_API_TOKEN_SECRET_ARN": "", "CHATBOT_API_TOKEN": ""}, clear=False):
+        with patch("chatbot.app._clear_all_memory_for_actor", return_value=7) as clear_all:
+            event = _api_event(body={})
+            event["rawPath"] = "/chatbot/memory/clear-all"
+            event["requestContext"]["http"]["path"] = "/chatbot/memory/clear-all"
+            out = lambda_handler(event, None)
+
+    assert out["statusCode"] == 200
+    body = json.loads(out["body"])
+    assert body["cleared"] is True
+    assert body["deleted_items"] == 7
+    assert body["scope"] == "actor"
+    clear_all.assert_called_once()
+
+
 def test_lambda_handler_emits_metrics_for_successful_query() -> None:
     import chatbot.app as chatbot_mod
 
@@ -564,6 +601,19 @@ def test_lambda_handler_emits_metrics_for_successful_query() -> None:
     metric_names = [call.args[0] for call in emit_metric.call_args_list]
     assert "ChatbotRequestCount" in metric_names
     assert "ChatbotLatencyMs" in metric_names
+
+
+@patch("chatbot.app.handle_query", side_effect=ValueError("rate_limit_exceeded"))
+def test_lambda_handler_returns_429_on_rate_limit(_mock_hq) -> None:
+    import chatbot.app as chatbot_mod
+
+    chatbot_mod._cached_api_token = None
+    with patch.dict("os.environ", {"CHATBOT_API_TOKEN_SECRET_ARN": "", "CHATBOT_API_TOKEN": ""}, clear=False):
+        out = lambda_handler(_api_event(body={"query": "test"}), None)
+
+    assert out["statusCode"] == 429
+    body = json.loads(out["body"])
+    assert body["error"] == "rate_limit_exceeded"
 
 
 @patch("chatbot.app.handle_query", side_effect=RuntimeError("boom"))
