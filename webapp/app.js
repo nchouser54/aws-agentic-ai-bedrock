@@ -36,7 +36,7 @@ function loadSettings() {
     ids.retrievalMode.value = s.retrievalMode || "hybrid";
     ids.jiraJql.value = s.jiraJql || "";
     ids.confluenceCql.value = s.confluenceCql || "";
-    ids.githubOauthBaseUrl.value = s.githubOauthBaseUrl || "https://github.com";
+    ids.githubOauthBaseUrl.value = s.githubOauthBaseUrl || "";
     ids.githubClientId.value = s.githubClientId || "";
     ids.githubScope.value = s.githubScope || "read:user read:org";
   } catch {
@@ -52,7 +52,7 @@ function saveSettings() {
     retrievalMode: ids.retrievalMode.value,
     jiraJql: ids.jiraJql.value.trim(),
     confluenceCql: ids.confluenceCql.value.trim(),
-    githubOauthBaseUrl: ids.githubOauthBaseUrl.value.trim() || "https://github.com",
+    githubOauthBaseUrl: ids.githubOauthBaseUrl.value.trim(),
     githubClientId: ids.githubClientId.value.trim(),
     githubScope: ids.githubScope.value.trim() || "read:user read:org",
   };
@@ -70,12 +70,22 @@ function sleep(ms) {
 }
 
 async function startGitHubLogin() {
-  const oauthBase = (ids.githubOauthBaseUrl.value.trim() || "https://github.com").replace(/\/$/, "");
+  const oauthBase = ids.githubOauthBaseUrl.value.trim().replace(/\/$/, "");
   const clientId = ids.githubClientId.value.trim();
   const scope = ids.githubScope.value.trim() || "read:user read:org";
 
+  if (!oauthBase) {
+    setGitHubLoginStatus("Set GitHub OAuth Base URL to your NG-hosted GitHub URL.", "err");
+    return;
+  }
+
   if (!/^https:\/\//i.test(oauthBase)) {
     setGitHubLoginStatus("GitHub OAuth Base URL must start with https://", "err");
+    return;
+  }
+
+  if (/^https:\/\/github\.com$/i.test(oauthBase)) {
+    setGitHubLoginStatus("Use your NG-hosted GitHub URL (github.com is not allowed in this environment).", "err");
     return;
   }
 
