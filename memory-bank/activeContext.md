@@ -17,6 +17,7 @@
 - Implement phase-2 chatbot observability foundation (custom metrics, alarms, dashboard).
 - Implement phase-3 chatbot memory hygiene (actor-scoped memory, quotas, compaction, clear-memory APIs).
 - Implement phase-4 image safety and per-actor/per-conversation rate controls.
+- Implement phase-5 true websocket streaming transport for chatbot responses.
 
 ## Current Blockers
 

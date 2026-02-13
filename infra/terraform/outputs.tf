@@ -28,6 +28,11 @@ output "chatbot_url" {
   value       = var.chatbot_enabled ? "${aws_apigatewayv2_api.webhook.api_endpoint}/chatbot/query" : ""
 }
 
+output "chatbot_websocket_url" {
+  description = "Chatbot websocket endpoint for true streaming transport"
+  value       = var.chatbot_enabled && var.chatbot_websocket_enabled ? replace(aws_apigatewayv2_stage.chatbot_ws[0].invoke_url, "https://", "wss://") : ""
+}
+
 output "teams_chatbot_url" {
   description = "Microsoft Teams adapter endpoint"
   value       = var.chatbot_enabled && var.teams_adapter_enabled ? "${aws_apigatewayv2_api.webhook.api_endpoint}/chatbot/teams" : ""

@@ -3,6 +3,7 @@ locals {
   chatbot_auth_jwt_enabled          = var.chatbot_enabled && var.chatbot_auth_mode == "jwt"
   chatbot_auth_github_oauth_enabled = var.chatbot_enabled && var.chatbot_auth_mode == "github_oauth"
   chatbot_memory_enabled            = var.chatbot_enabled && var.chatbot_memory_enabled
+  chatbot_websocket_enabled         = var.chatbot_enabled && var.chatbot_websocket_enabled
   chatbot_metrics_namespace         = trimspace(var.chatbot_metrics_namespace) != "" ? trimspace(var.chatbot_metrics_namespace) : "${var.project_name}/${var.environment}"
   chatbot_route_auth_type           = local.chatbot_auth_jwt_enabled ? "JWT" : local.chatbot_auth_github_oauth_enabled ? "CUSTOM" : "NONE"
   kb_sync_any_enabled               = var.kb_sync_enabled || var.github_kb_sync_enabled
@@ -509,7 +510,15 @@ resource "aws_iam_policy" "chatbot_policy" {
         Action   = ["kms:Decrypt"]
         Resource = aws_kms_key.app.arn
       }
-      ], local.chatbot_memory_enabled ? [
+      ], local.chatbot_websocket_enabled ? [
+      {
+        Effect = "Allow"
+        Action = [
+          "execute-api:ManageConnections"
+        ]
+        Resource = "arn:${data.aws_partition.current.partition}:execute-api:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:${aws_apigatewayv2_api.chatbot_ws[0].id}/${var.chatbot_websocket_stage}/POST/@connections/*"
+      }
+      ] : [], local.chatbot_memory_enabled ? [
       {
         Effect = "Allow"
         Action = [
@@ -731,6 +740,7 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
       CHATBOT_MEMORY_COMPACTION_CHARS                = tostring(var.chatbot_memory_compaction_chars)
       CHATBOT_USER_REQUESTS_PER_MINUTE               = tostring(var.chatbot_user_requests_per_minute)
       CHATBOT_CONVERSATION_REQUESTS_PER_MINUTE       = tostring(var.chatbot_conversation_requests_per_minute)
+      CHATBOT_WEBSOCKET_DEFAULT_CHUNK_CHARS          = tostring(var.chatbot_websocket_default_chunk_chars)
       CHATBOT_METRICS_ENABLED                        = tostring(var.chatbot_observability_enabled)
       METRICS_NAMESPACE                              = local.chatbot_metrics_namespace
       BEDROCK_KNOWLEDGE_BASE_ID                      = var.bedrock_knowledge_base_id
@@ -1043,6 +1053,48 @@ resource "aws_apigatewayv2_stage" "default" {
   }
 }
 
+resource "aws_apigatewayv2_api" "chatbot_ws" {
+  count                      = local.chatbot_websocket_enabled ? 1 : 0
+  name                       = "${local.name_prefix}-chatbot-ws-api"
+  protocol_type              = "WEBSOCKET"
+  route_selection_expression = "$request.body.action"
+}
+
+resource "aws_apigatewayv2_integration" "chatbot_ws_lambda" {
+  count            = local.chatbot_websocket_enabled ? 1 : 0
+  api_id           = aws_apigatewayv2_api.chatbot_ws[0].id
+  integration_type = "AWS_PROXY"
+  integration_uri  = aws_lambda_function.jira_confluence_chatbot[0].invoke_arn
+}
+
+resource "aws_apigatewayv2_route" "chatbot_ws_connect" {
+  count     = local.chatbot_websocket_enabled ? 1 : 0
+  api_id    = aws_apigatewayv2_api.chatbot_ws[0].id
+  route_key = "$connect"
+  target    = "integrations/${aws_apigatewayv2_integration.chatbot_ws_lambda[0].id}"
+}
+
+resource "aws_apigatewayv2_route" "chatbot_ws_disconnect" {
+  count     = local.chatbot_websocket_enabled ? 1 : 0
+  api_id    = aws_apigatewayv2_api.chatbot_ws[0].id
+  route_key = "$disconnect"
+  target    = "integrations/${aws_apigatewayv2_integration.chatbot_ws_lambda[0].id}"
+}
+
+resource "aws_apigatewayv2_route" "chatbot_ws_query" {
+  count     = local.chatbot_websocket_enabled ? 1 : 0
+  api_id    = aws_apigatewayv2_api.chatbot_ws[0].id
+  route_key = "query"
+  target    = "integrations/${aws_apigatewayv2_integration.chatbot_ws_lambda[0].id}"
+}
+
+resource "aws_apigatewayv2_stage" "chatbot_ws" {
+  count       = local.chatbot_websocket_enabled ? 1 : 0
+  api_id      = aws_apigatewayv2_api.chatbot_ws[0].id
+  name        = var.chatbot_websocket_stage
+  auto_deploy = true
+}
+
 resource "aws_lambda_permission" "allow_apigw" {
   statement_id  = "AllowExecutionFromAPIGateway"
   action        = "lambda:InvokeFunction"
@@ -1058,6 +1110,15 @@ resource "aws_lambda_permission" "allow_apigw_chatbot" {
   function_name = aws_lambda_function.jira_confluence_chatbot[0].function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.webhook.execution_arn}/*/*"
+}
+
+resource "aws_lambda_permission" "allow_apigw_chatbot_ws" {
+  count         = local.chatbot_websocket_enabled ? 1 : 0
+  statement_id  = "AllowExecutionFromAPIGatewayChatbotWebsocket"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.jira_confluence_chatbot[0].function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.chatbot_ws[0].execution_arn}/*"
 }
 
 resource "aws_lambda_permission" "allow_apigw_teams_chatbot" {

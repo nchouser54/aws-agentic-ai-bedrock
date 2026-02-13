@@ -57,6 +57,9 @@ chatbot_image_user_requests_per_minute = 30
 chatbot_image_conversation_requests_per_minute = 10
 chatbot_observability_enabled = true
 chatbot_metrics_namespace = ""
+chatbot_websocket_enabled = true
+chatbot_websocket_stage = "prod"
+chatbot_websocket_default_chunk_chars = 120
 bedrock_knowledge_base_id = ""
 bedrock_kb_top_k = 5
 

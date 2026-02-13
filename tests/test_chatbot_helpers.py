@@ -447,6 +447,20 @@ def _api_event(body: dict | None = None, method: str = "POST", headers: dict | N
     }
 
 
+def _ws_event(body: dict | None = None, route_key: str = "query") -> dict:
+    return {
+        "requestContext": {
+            "routeKey": route_key,
+            "connectionId": "abc123",
+            "domainName": "ws.example.com",
+            "stage": "prod",
+            "requestId": "req-ws",
+        },
+        "body": json.dumps(body) if body is not None else None,
+        "headers": {},
+    }
+
+
 def test_lambda_handler_method_not_allowed() -> None:
     import chatbot.app as chatbot_mod
     chatbot_mod._cached_api_token = None
@@ -639,6 +653,28 @@ def test_lambda_handler_emits_metrics_for_successful_query() -> None:
     metric_names = [call.args[0] for call in emit_metric.call_args_list]
     assert "ChatbotRequestCount" in metric_names
     assert "ChatbotLatencyMs" in metric_names
+
+
+def test_lambda_handler_websocket_streaming_query() -> None:
+    response = {
+        "answer": "hello world",
+        "conversation_id": "thread-1",
+        "stream": {"enabled": True, "chunk_count": 2, "chunks": ["hello ", "world"]},
+        "sources": {"provider": "bedrock"},
+    }
+
+    with patch("chatbot.app.handle_query", return_value=response):
+        with patch("chatbot.app._ws_send") as ws_send:
+            out = lambda_handler(_ws_event(body={"action": "query", "query": "test"}), None)
+
+    assert out["statusCode"] == 200
+    sent_types = [call.args[2].get("type") for call in ws_send.call_args_list]
+    assert sent_types == ["chunk", "chunk", "done"]
+
+
+def test_lambda_handler_websocket_unsupported_route() -> None:
+    out = lambda_handler(_ws_event(body={"action": "noop"}, route_key="noop"), None)
+    assert out["statusCode"] == 400
 
 
 @patch("chatbot.app.handle_query", side_effect=ValueError("rate_limit_exceeded"))

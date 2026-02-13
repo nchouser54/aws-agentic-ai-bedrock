@@ -306,6 +306,29 @@ variable "chatbot_metrics_namespace" {
   default     = ""
 }
 
+variable "chatbot_websocket_enabled" {
+  description = "Enable websocket transport for true chatbot streaming responses"
+  type        = bool
+  default     = true
+}
+
+variable "chatbot_websocket_stage" {
+  description = "API Gateway websocket stage name for chatbot streaming transport"
+  type        = string
+  default     = "prod"
+}
+
+variable "chatbot_websocket_default_chunk_chars" {
+  description = "Default websocket response chunk size in characters"
+  type        = number
+  default     = 120
+
+  validation {
+    condition     = var.chatbot_websocket_default_chunk_chars >= 20
+    error_message = "Must be at least 20."
+  }
+}
+
 variable "bedrock_knowledge_base_id" {
   description = "Optional Bedrock Knowledge Base ID used by chatbot and sync jobs"
   type        = string
