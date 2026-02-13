@@ -39,3 +39,12 @@ confluence_sync_limit      = 25
 # Teams adapter endpoint (enable only when testing Teams integration)
 teams_adapter_enabled = false
 teams_adapter_token   = ""
+
+# Chatbot route login/auth mode:
+# - token       => existing X-Api-Token / X-Teams-Adapter-Token checks inside Lambda
+# - jwt         => API Gateway JWT authorizer (company SSO/OIDC)
+# - github_oauth => API Gateway Lambda authorizer validates GitHub OAuth bearer token
+chatbot_auth_mode         = "token"
+chatbot_jwt_issuer        = ""
+chatbot_jwt_audience      = []
+github_oauth_allowed_orgs = []

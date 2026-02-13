@@ -47,6 +47,15 @@ teams_adapter_token   = ""
 # API authentication (leave empty to disable auth)
 chatbot_api_token = ""
 
+# Chatbot route login/auth mode:
+# - token       => existing X-Api-Token / X-Teams-Adapter-Token checks inside Lambda
+# - jwt         => API Gateway JWT authorizer (company SSO/OIDC)
+# - github_oauth => API Gateway Lambda authorizer validates GitHub OAuth bearer token
+chatbot_auth_mode     = "token"
+chatbot_jwt_issuer    = ""
+chatbot_jwt_audience  = []
+github_oauth_allowed_orgs = []
+
 # CloudWatch alarms (leave empty to disable alarms)
 alarm_sns_topic_arn = ""
 

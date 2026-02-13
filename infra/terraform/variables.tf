@@ -187,6 +187,35 @@ variable "chatbot_api_token" {
   sensitive   = true
 }
 
+variable "chatbot_auth_mode" {
+  description = "Authentication mode for chatbot routes: token, jwt, or github_oauth"
+  type        = string
+  default     = "token"
+
+  validation {
+    condition     = contains(["token", "jwt", "github_oauth"], var.chatbot_auth_mode)
+    error_message = "Must be one of: token, jwt, github_oauth."
+  }
+}
+
+variable "chatbot_jwt_issuer" {
+  description = "OIDC issuer URL for JWT authorizer when chatbot_auth_mode=jwt"
+  type        = string
+  default     = ""
+}
+
+variable "chatbot_jwt_audience" {
+  description = "JWT audience values for chatbot JWT authorizer when chatbot_auth_mode=jwt"
+  type        = list(string)
+  default     = []
+}
+
+variable "github_oauth_allowed_orgs" {
+  description = "Optional GitHub org allow-list for github_oauth auth mode. Empty means any authenticated GitHub user token."
+  type        = list(string)
+  default     = []
+}
+
 variable "alarm_sns_topic_arn" {
   description = "Optional SNS topic ARN for CloudWatch alarm notifications. Alarms are created only when set."
   type        = string

@@ -1,10 +1,26 @@
 locals {
-  name_prefix = "${var.project_name}-${var.environment}"
+  name_prefix                       = "${var.project_name}-${var.environment}"
+  chatbot_auth_jwt_enabled          = var.chatbot_enabled && var.chatbot_auth_mode == "jwt"
+  chatbot_auth_github_oauth_enabled = var.chatbot_enabled && var.chatbot_auth_mode == "github_oauth"
+  chatbot_route_auth_type           = local.chatbot_auth_jwt_enabled ? "JWT" : local.chatbot_auth_github_oauth_enabled ? "CUSTOM" : "NONE"
 }
 
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 data "aws_partition" "current" {}
+
+check "chatbot_jwt_settings" {
+  assert {
+    condition = (
+      var.chatbot_auth_mode != "jwt" ||
+      (
+        length(trimspace(var.chatbot_jwt_issuer)) > 0 &&
+        length(var.chatbot_jwt_audience) > 0
+      )
+    )
+    error_message = "When chatbot_auth_mode is jwt, set both chatbot_jwt_issuer and chatbot_jwt_audience."
+  }
+}
 
 resource "aws_kms_key" "app" {
   description             = "KMS key for ${local.name_prefix} secrets and data"
@@ -265,6 +281,22 @@ resource "aws_iam_role" "chatbot_lambda" {
   })
 }
 
+resource "aws_iam_role" "chatbot_github_oauth_authorizer_lambda" {
+  count = local.chatbot_auth_github_oauth_enabled ? 1 : 0
+  name  = "${local.name_prefix}-chatbot-github-oauth-authorizer-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "lambda.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
 resource "aws_iam_role" "kb_sync_lambda" {
   count = var.kb_sync_enabled ? 1 : 0
   name  = "${local.name_prefix}-kb-sync-lambda-role"
@@ -429,6 +461,26 @@ resource "aws_iam_policy" "chatbot_policy" {
   })
 }
 
+resource "aws_iam_policy" "chatbot_github_oauth_authorizer_policy" {
+  count = local.chatbot_auth_github_oauth_enabled ? 1 : 0
+  name  = "${local.name_prefix}-chatbot-github-oauth-authorizer-policy"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+      }
+    ]
+  })
+}
+
 resource "aws_iam_policy" "kb_sync_policy" {
   count = var.kb_sync_enabled ? 1 : 0
   name  = "${local.name_prefix}-kb-sync-policy"
@@ -500,6 +552,12 @@ resource "aws_iam_role_policy_attachment" "chatbot_policy" {
   count      = var.chatbot_enabled ? 1 : 0
   role       = aws_iam_role.chatbot_lambda[0].name
   policy_arn = aws_iam_policy.chatbot_policy[0].arn
+}
+
+resource "aws_iam_role_policy_attachment" "chatbot_github_oauth_authorizer_policy" {
+  count      = local.chatbot_auth_github_oauth_enabled ? 1 : 0
+  role       = aws_iam_role.chatbot_github_oauth_authorizer_lambda[0].name
+  policy_arn = aws_iam_policy.chatbot_github_oauth_authorizer_policy[0].arn
 }
 
 resource "aws_iam_role_policy_attachment" "kb_sync_policy" {
@@ -591,6 +649,26 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
       BEDROCK_KB_TOP_K                 = tostring(var.bedrock_kb_top_k)
       ATLASSIAN_CREDENTIALS_SECRET_ARN = aws_secretsmanager_secret.atlassian_credentials.arn
       CHATBOT_API_TOKEN_SECRET_ARN     = var.chatbot_enabled ? aws_secretsmanager_secret.chatbot_api_token[0].arn : ""
+    }
+  }
+}
+
+resource "aws_lambda_function" "chatbot_github_oauth_authorizer" {
+  count            = local.chatbot_auth_github_oauth_enabled ? 1 : 0
+  function_name    = "${local.name_prefix}-chatbot-github-oauth-authorizer"
+  role             = aws_iam_role.chatbot_github_oauth_authorizer_lambda[0].arn
+  runtime          = "python3.12"
+  handler          = "chatbot.github_oauth_authorizer.lambda_handler"
+  filename         = data.archive_file.lambda_bundle.output_path
+  source_code_hash = data.archive_file.lambda_bundle.output_base64sha256
+  timeout          = 10
+  memory_size      = 256
+
+  environment {
+    variables = {
+      AWS_REGION                = "us-gov-west-1"
+      GITHUB_API_BASE           = var.github_api_base
+      GITHUB_OAUTH_ALLOWED_ORGS = join(",", var.github_oauth_allowed_orgs)
     }
   }
 }
@@ -704,6 +782,30 @@ resource "aws_apigatewayv2_route" "webhook" {
   target    = "integrations/${aws_apigatewayv2_integration.webhook_lambda.id}"
 }
 
+resource "aws_apigatewayv2_authorizer" "chatbot_jwt" {
+  count            = local.chatbot_auth_jwt_enabled ? 1 : 0
+  api_id           = aws_apigatewayv2_api.webhook.id
+  name             = "${local.name_prefix}-chatbot-jwt"
+  authorizer_type  = "JWT"
+  identity_sources = ["$request.header.Authorization"]
+
+  jwt_configuration {
+    issuer   = var.chatbot_jwt_issuer
+    audience = var.chatbot_jwt_audience
+  }
+}
+
+resource "aws_apigatewayv2_authorizer" "chatbot_github_oauth" {
+  count                             = local.chatbot_auth_github_oauth_enabled ? 1 : 0
+  api_id                            = aws_apigatewayv2_api.webhook.id
+  name                              = "${local.name_prefix}-chatbot-github-oauth"
+  authorizer_type                   = "REQUEST"
+  authorizer_uri                    = "arn:${data.aws_partition.current.partition}:apigateway:${data.aws_region.current.name}:lambda:path/2015-03-31/functions/${aws_lambda_function.chatbot_github_oauth_authorizer[0].arn}/invocations"
+  authorizer_payload_format_version = "2.0"
+  enable_simple_responses           = true
+  identity_sources                  = ["$request.header.Authorization"]
+}
+
 resource "aws_apigatewayv2_integration" "chatbot_lambda" {
   count                  = var.chatbot_enabled ? 1 : 0
   api_id                 = aws_apigatewayv2_api.webhook.id
@@ -714,10 +816,14 @@ resource "aws_apigatewayv2_integration" "chatbot_lambda" {
 }
 
 resource "aws_apigatewayv2_route" "chatbot" {
-  count     = var.chatbot_enabled ? 1 : 0
-  api_id    = aws_apigatewayv2_api.webhook.id
-  route_key = "POST /chatbot/query"
-  target    = "integrations/${aws_apigatewayv2_integration.chatbot_lambda[0].id}"
+  count              = var.chatbot_enabled ? 1 : 0
+  api_id             = aws_apigatewayv2_api.webhook.id
+  route_key          = "POST /chatbot/query"
+  target             = "integrations/${aws_apigatewayv2_integration.chatbot_lambda[0].id}"
+  authorization_type = local.chatbot_route_auth_type
+  authorizer_id = local.chatbot_auth_jwt_enabled ? aws_apigatewayv2_authorizer.chatbot_jwt[0].id : (
+    local.chatbot_auth_github_oauth_enabled ? aws_apigatewayv2_authorizer.chatbot_github_oauth[0].id : null
+  )
 }
 
 resource "aws_apigatewayv2_integration" "teams_chatbot_lambda" {
@@ -730,10 +836,14 @@ resource "aws_apigatewayv2_integration" "teams_chatbot_lambda" {
 }
 
 resource "aws_apigatewayv2_route" "teams_chatbot" {
-  count     = var.chatbot_enabled && var.teams_adapter_enabled ? 1 : 0
-  api_id    = aws_apigatewayv2_api.webhook.id
-  route_key = "POST /chatbot/teams"
-  target    = "integrations/${aws_apigatewayv2_integration.teams_chatbot_lambda[0].id}"
+  count              = var.chatbot_enabled && var.teams_adapter_enabled ? 1 : 0
+  api_id             = aws_apigatewayv2_api.webhook.id
+  route_key          = "POST /chatbot/teams"
+  target             = "integrations/${aws_apigatewayv2_integration.teams_chatbot_lambda[0].id}"
+  authorization_type = local.chatbot_route_auth_type
+  authorizer_id = local.chatbot_auth_jwt_enabled ? aws_apigatewayv2_authorizer.chatbot_jwt[0].id : (
+    local.chatbot_auth_github_oauth_enabled ? aws_apigatewayv2_authorizer.chatbot_github_oauth[0].id : null
+  )
 }
 
 resource "aws_apigatewayv2_stage" "default" {
@@ -771,6 +881,15 @@ resource "aws_lambda_permission" "allow_apigw_teams_chatbot" {
   function_name = aws_lambda_function.teams_chatbot_adapter[0].function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.webhook.execution_arn}/*/*"
+}
+
+resource "aws_lambda_permission" "allow_apigw_chatbot_github_oauth_authorizer" {
+  count         = local.chatbot_auth_github_oauth_enabled ? 1 : 0
+  statement_id  = "AllowExecutionFromAPIGatewayChatbotGithubOAuthAuthorizer"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.chatbot_github_oauth_authorizer[0].function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.webhook.execution_arn}/authorizers/${aws_apigatewayv2_authorizer.chatbot_github_oauth[0].id}"
 }
 
 resource "aws_lambda_permission" "allow_eventbridge_kb_sync" {
