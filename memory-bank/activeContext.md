@@ -13,6 +13,7 @@
 - Add optional conversation memory for chatbot threads.
 - Add stream-style chunked response payloads for improved UI rendering.
 - Add image generation endpoint (`POST /chatbot/image`) and webapp integration.
+- Execute phase-1 implementation for cross-environment toolchain consistency checks and docs.
 
 ## Current Blockers
 

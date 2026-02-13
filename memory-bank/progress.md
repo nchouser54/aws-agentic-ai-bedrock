@@ -24,6 +24,9 @@
 - [x] Add chatbot image generation endpoint and webapp image preview
 - [x] Add Terraform wiring for chatbot memory table, IAM, and image route/env
 - [x] Add tests covering stream/memory helpers and image endpoint routing
+- [x] Add local toolchain pin files (`.tool-versions`, `.python-version`) for consistency
+- [x] Update Makefile with venv-aware Python and Terraform validation targets
+- [x] Make predeploy Terraform version checks derive minimum version from `versions.tf`
 
 ## Doing
 
