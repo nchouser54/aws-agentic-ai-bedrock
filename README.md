@@ -75,6 +75,8 @@ Worker Lambda env vars:
 - `REVIEW_COMMENT_MODE=summary_only|inline_best_effort|strict_inline`
 - `CHATBOT_MODEL_ID` (Jira/Confluence chatbot model)
 - `ATLASSIAN_CREDENTIALS_SECRET_ARN`
+- `CHATBOT_API_TOKEN` or `CHATBOT_API_TOKEN_SECRET_ARN` (used when `chatbot_auth_mode=token`)
+- `TEAMS_ADAPTER_TOKEN` or `TEAMS_ADAPTER_TOKEN_SECRET_ARN` (used for `/chatbot/teams` when `chatbot_auth_mode=token`)
 
 Webhook Lambda env vars:
 
@@ -90,6 +92,13 @@ Chatbot endpoint:
   - `jira_jql` (optional)
   - `confluence_cql` (optional)
   - `retrieval_mode` (optional: `live|kb|hybrid`; defaults to `hybrid`)
+
+Chatbot login/auth options (Terraform `chatbot_auth_mode`):
+
+- `token` (default): shared header tokens
+- `jwt`: API Gateway JWT authorizer using company SSO/OIDC (`chatbot_jwt_issuer`, `chatbot_jwt_audience`)
+- `github_oauth`: API Gateway Lambda authorizer validates GitHub OAuth bearer tokens (`Authorization: Bearer <token>`)
+  - Optional org restriction: `github_oauth_allowed_orgs`
 
 Teams adapter endpoint:
 
@@ -185,6 +194,7 @@ This repository includes CI checks for pull requests and pushes to `main`:
 
 - Ruff linting (`python -m ruff check src tests scripts`)
 - Pytest unit tests (`python -m pytest -q`)
+- Optional PR title convention advisory (non-blocking on pull requests)
 
 Run the same checks locally:
 

@@ -6,6 +6,20 @@ on:
     branches: ["main"]
 
 jobs:
+  pr-title-convention:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate PR title convention (optional)
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          python scripts/validate_pr_title.py "$PR_TITLE"
+
   lint-and-test:
     runs-on: ubuntu-latest
     steps:
