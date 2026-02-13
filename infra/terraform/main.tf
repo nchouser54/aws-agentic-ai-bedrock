@@ -3,6 +3,7 @@ locals {
   chatbot_auth_jwt_enabled          = var.chatbot_enabled && var.chatbot_auth_mode == "jwt"
   chatbot_auth_github_oauth_enabled = var.chatbot_enabled && var.chatbot_auth_mode == "github_oauth"
   chatbot_memory_enabled            = var.chatbot_enabled && var.chatbot_memory_enabled
+  chatbot_metrics_namespace         = trimspace(var.chatbot_metrics_namespace) != "" ? trimspace(var.chatbot_metrics_namespace) : "${var.project_name}/${var.environment}"
   chatbot_route_auth_type           = local.chatbot_auth_jwt_enabled ? "JWT" : local.chatbot_auth_github_oauth_enabled ? "CUSTOM" : "NONE"
   kb_sync_any_enabled               = var.kb_sync_enabled || var.github_kb_sync_enabled
 }
@@ -495,6 +496,7 @@ resource "aws_iam_policy" "chatbot_policy" {
       {
         Effect = "Allow"
         Action = [
+          "cloudwatch:PutMetricData",
           "bedrock:InvokeModel",
           "bedrock:ListFoundationModels",
           "bedrock:Retrieve",
@@ -721,6 +723,8 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
       CHATBOT_MEMORY_TABLE                 = local.chatbot_memory_enabled ? aws_dynamodb_table.chatbot_memory[0].name : ""
       CHATBOT_MEMORY_MAX_TURNS             = tostring(var.chatbot_memory_max_turns)
       CHATBOT_MEMORY_TTL_DAYS              = tostring(var.chatbot_memory_ttl_days)
+      CHATBOT_METRICS_ENABLED              = tostring(var.chatbot_observability_enabled)
+      METRICS_NAMESPACE                    = local.chatbot_metrics_namespace
       BEDROCK_KNOWLEDGE_BASE_ID            = var.bedrock_knowledge_base_id
       BEDROCK_KB_TOP_K                     = tostring(var.bedrock_kb_top_k)
       ATLASSIAN_CREDENTIALS_SECRET_ARN     = aws_secretsmanager_secret.atlassian_credentials.arn
@@ -1727,4 +1731,129 @@ resource "aws_cloudwatch_metric_alarm" "chatbot_duration" {
 
   alarm_actions = [var.alarm_sns_topic_arn]
   ok_actions    = [var.alarm_sns_topic_arn]
+}
+
+resource "aws_cloudwatch_metric_alarm" "chatbot_query_server_errors" {
+  count               = var.chatbot_enabled && var.chatbot_observability_enabled && var.alarm_sns_topic_arn != "" ? 1 : 0
+  alarm_name          = "${local.name_prefix}-chatbot-query-server-errors"
+  alarm_description   = "Chatbot query endpoint has server errors"
+  namespace           = local.chatbot_metrics_namespace
+  metric_name         = "ChatbotServerErrorCount"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 2
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    Route  = "query"
+    Method = "POST"
+  }
+
+  alarm_actions = [var.alarm_sns_topic_arn]
+  ok_actions    = [var.alarm_sns_topic_arn]
+}
+
+resource "aws_cloudwatch_metric_alarm" "chatbot_image_server_errors" {
+  count               = var.chatbot_enabled && var.chatbot_observability_enabled && var.alarm_sns_topic_arn != "" ? 1 : 0
+  alarm_name          = "${local.name_prefix}-chatbot-image-server-errors"
+  alarm_description   = "Chatbot image endpoint has server errors"
+  namespace           = local.chatbot_metrics_namespace
+  metric_name         = "ChatbotServerErrorCount"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 2
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    Route  = "image"
+    Method = "POST"
+  }
+
+  alarm_actions = [var.alarm_sns_topic_arn]
+  ok_actions    = [var.alarm_sns_topic_arn]
+}
+
+resource "aws_cloudwatch_dashboard" "chatbot_observability" {
+  count          = var.chatbot_enabled && var.chatbot_observability_enabled ? 1 : 0
+  dashboard_name = "${local.name_prefix}-chatbot-observability"
+
+  dashboard_body = jsonencode({
+    widgets = [
+      {
+        type   = "metric"
+        x      = 0
+        y      = 0
+        width  = 12
+        height = 6
+        properties = {
+          title   = "Chatbot Lambda Duration/Errors"
+          view    = "timeSeries"
+          stacked = false
+          region  = data.aws_region.current.name
+          metrics = [
+            ["AWS/Lambda", "Duration", "FunctionName", aws_lambda_function.jira_confluence_chatbot[0].function_name, { stat = "p95", label = "Duration p95" }],
+            ["AWS/Lambda", "Errors", "FunctionName", aws_lambda_function.jira_confluence_chatbot[0].function_name, { stat = "Sum", label = "Lambda Errors" }],
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 0
+        width  = 12
+        height = 6
+        properties = {
+          title   = "Chatbot Request Count by Route"
+          view    = "timeSeries"
+          stacked = false
+          region  = data.aws_region.current.name
+          metrics = [
+            [local.chatbot_metrics_namespace, "ChatbotRequestCount", "Route", "query", "Method", "POST", { stat = "Sum", label = "Query Requests" }],
+            [local.chatbot_metrics_namespace, "ChatbotRequestCount", "Route", "image", "Method", "POST", { stat = "Sum", label = "Image Requests" }],
+            [local.chatbot_metrics_namespace, "ChatbotRequestCount", "Route", "models", "Method", "GET", { stat = "Sum", label = "Model List Requests" }],
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 6
+        width  = 12
+        height = 6
+        properties = {
+          title   = "Chatbot Latency (ms)"
+          view    = "timeSeries"
+          stacked = false
+          region  = data.aws_region.current.name
+          metrics = [
+            [local.chatbot_metrics_namespace, "ChatbotLatencyMs", "Route", "query", "Method", "POST", { stat = "p95", label = "Query p95" }],
+            [local.chatbot_metrics_namespace, "ChatbotLatencyMs", "Route", "image", "Method", "POST", { stat = "p95", label = "Image p95" }],
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 6
+        width  = 12
+        height = 6
+        properties = {
+          title   = "Chatbot Server Error Counts"
+          view    = "timeSeries"
+          stacked = false
+          region  = data.aws_region.current.name
+          metrics = [
+            [local.chatbot_metrics_namespace, "ChatbotServerErrorCount", "Route", "query", "Method", "POST", { stat = "Sum", label = "Query 5xx" }],
+            [local.chatbot_metrics_namespace, "ChatbotServerErrorCount", "Route", "image", "Method", "POST", { stat = "Sum", label = "Image 5xx" }],
+            [local.chatbot_metrics_namespace, "ChatbotErrorCount", "Route", "query", "Method", "POST", { stat = "Sum", label = "Query 4xx/5xx" }],
+            [local.chatbot_metrics_namespace, "ChatbotErrorCount", "Route", "image", "Method", "POST", { stat = "Sum", label = "Image 4xx/5xx" }],
+          ]
+        }
+      }
+    ]
+  })
 }

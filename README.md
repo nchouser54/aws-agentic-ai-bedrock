@@ -142,6 +142,20 @@ Conversation memory options (optional):
 - `CHATBOT_MEMORY_MAX_TURNS` (default `6`)
 - `CHATBOT_MEMORY_TTL_DAYS` (default `30`)
 
+Chatbot observability options:
+
+- `chatbot_observability_enabled` (Terraform; default `true`)
+- `chatbot_metrics_namespace` (Terraform; optional override, defaults to `${project_name}/${environment}`)
+- Lambda emits custom metrics:
+  - `ChatbotRequestCount`
+  - `ChatbotLatencyMs`
+  - `ChatbotErrorCount`
+  - `ChatbotServerErrorCount`
+  - `ChatbotImageGeneratedCount`
+- Runtime toggle: `CHATBOT_METRICS_ENABLED=true|false`
+
+When enabled, Terraform provisions a CloudWatch dashboard for chatbot route-level telemetry and server-error alarms for query/image endpoints.
+
 Optional live GitHub lookup (disabled by default):
 
 - `chatbot_github_live_enabled=true`
