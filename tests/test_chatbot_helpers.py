@@ -91,6 +91,59 @@ def test_handle_query_live_mode(mock_atlassian_cls, mock_chat_cls) -> None:
     assert out["sources"]["context_source"] == "live"
     assert out["sources"]["jira_count"] == 1
     assert out["sources"]["confluence_count"] == 1
+    assert out["sources"]["github_count"] == 0
+
+
+@patch("chatbot.app.BedrockChatClient")
+@patch("chatbot.app.GitHubClient")
+@patch("chatbot.app.GitHubAppAuth")
+@patch("chatbot.app.AtlassianClient")
+def test_handle_query_live_mode_optional_github(
+    mock_atlassian_cls,
+    mock_auth_cls,
+    mock_gh_cls,
+    mock_chat_cls,
+) -> None:
+    mock_chat = MagicMock()
+    mock_chat.answer.return_value = "Live mode answer"
+    mock_chat_cls.return_value = mock_chat
+
+    mock_atlassian = MagicMock()
+    mock_atlassian.search_jira.return_value = []
+    mock_atlassian.search_confluence.return_value = []
+    mock_atlassian_cls.return_value = mock_atlassian
+
+    mock_auth = MagicMock()
+    mock_auth.get_installation_token.return_value = "tok"
+    mock_auth_cls.return_value = mock_auth
+
+    mock_gh = MagicMock()
+    mock_gh.search_code.return_value = [
+        {
+            "path": "README.md",
+            "html_url": "https://github.com/org/repo/blob/main/README.md",
+            "repository": {"full_name": "org/repo", "default_branch": "main"},
+        }
+    ]
+    mock_gh.get_file_contents.return_value = ("repo docs", "sha")
+    mock_gh_cls.return_value = mock_gh
+
+    env = {
+        "ATLASSIAN_CREDENTIALS_SECRET_ARN": "arn:fake",
+        "CHATBOT_MODEL_ID": "anthropic.model",
+        "GITHUB_CHAT_LIVE_ENABLED": "true",
+        "GITHUB_CHAT_REPOS": "org/repo",
+        "GITHUB_CHAT_MAX_RESULTS": "3",
+        "GITHUB_APP_IDS_SECRET_ARN": "arn:ids",
+        "GITHUB_APP_PRIVATE_KEY_SECRET_ARN": "arn:key",
+        "GITHUB_API_BASE": "https://api.github.com",
+    }
+    with patch.dict("os.environ", env, clear=False):
+        out = handle_query("where docs", "project=ENG", "type=page", "corr-live-gh", retrieval_mode="live")
+
+    assert out["sources"]["context_source"] == "live"
+    assert out["sources"]["github_count"] == 1
+    mock_gh.search_code.assert_called_once()
 
 
 @patch("chatbot.app.BedrockChatClient")

@@ -47,6 +47,14 @@ class GitHubClient:
         response = self._request("GET", f"/repos/{owner}/{repo}/pulls/{pull_number}")
         return response.json()
 
+    def search_code(self, query: str, per_page: int = 10) -> list[dict]:
+        response = self._request(
+            "GET",
+            "/search/code",
+            params={"q": query, "per_page": per_page},
+        )
+        return response.json().get("items", [])
+
     def get_repository(self, owner: str, repo: str) -> dict:
         response = self._request("GET", f"/repos/{owner}/{repo}")
         return response.json()
