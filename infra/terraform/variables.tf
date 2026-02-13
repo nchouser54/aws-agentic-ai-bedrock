@@ -167,6 +167,58 @@ variable "confluence_sync_limit" {
   }
 }
 
+variable "github_kb_sync_enabled" {
+  description = "Enable scheduled GitHub docs to Bedrock Knowledge Base sync"
+  type        = bool
+  default     = false
+}
+
+variable "github_kb_data_source_id" {
+  description = "Optional Bedrock Knowledge Base data source ID for GitHub docs ingestion (falls back to bedrock_kb_data_source_id)"
+  type        = string
+  default     = ""
+}
+
+variable "github_kb_sync_schedule_expression" {
+  description = "EventBridge schedule expression for GitHub docs sync job"
+  type        = string
+  default     = "rate(6 hours)"
+
+  validation {
+    condition     = can(regex("^(rate|cron)\\(", var.github_kb_sync_schedule_expression))
+    error_message = "Must start with rate( or cron(."
+  }
+}
+
+variable "github_kb_sync_s3_prefix" {
+  description = "S3 prefix where normalized GitHub docs are written"
+  type        = string
+  default     = "github"
+}
+
+variable "github_kb_repos" {
+  description = "List of GitHub repositories (owner/repo) to sync into the Knowledge Base"
+  type        = list(string)
+  default     = []
+}
+
+variable "github_kb_include_patterns" {
+  description = "Glob-like file patterns to include for GitHub KB sync"
+  type        = list(string)
+  default     = ["README.md", "docs/**", "**/*.md"]
+}
+
+variable "github_kb_max_files_per_repo" {
+  description = "Maximum number of files synced per repository run"
+  type        = number
+  default     = 200
+
+  validation {
+    condition     = var.github_kb_max_files_per_repo >= 1
+    error_message = "Must be at least 1."
+  }
+}
+
 variable "teams_adapter_enabled" {
   description = "Enable Microsoft Teams adapter endpoint"
   type        = bool

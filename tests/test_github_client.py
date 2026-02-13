@@ -34,6 +34,19 @@ class FakeSession:
             return FakeResponse(200, [])
         if url.endswith("/pulls/1"):
             return FakeResponse(200, {"number": 1, "title": "test"})
+        if url.endswith("/repos/o/r") and method == "GET":
+            return FakeResponse(200, {"name": "r", "default_branch": "main"})
+        if "/git/trees/" in url and method == "GET":
+            return FakeResponse(
+                200,
+                {
+                    "tree": [
+                        {"type": "blob", "path": "README.md"},
+                        {"type": "tree", "path": "docs"},
+                        {"type": "blob", "path": "docs/guide.md"},
+                    ]
+                },
+            )
         if url.endswith("/reviews"):
             return FakeResponse(200, {"id": 777})
         if "/releases/tags/" in url:
@@ -71,6 +84,20 @@ def test_get_pull_request_and_files() -> None:
 
     assert pr["number"] == 1
     assert files == [{"filename": "a.py"}]
+
+
+def test_get_repository() -> None:
+    session = FakeSession()
+    client = GitHubClient(token_provider=lambda: "tok", session=session)
+    repo = client.get_repository("o", "r")
+    assert repo["default_branch"] == "main"
+
+
+def test_list_repository_files() -> None:
+    session = FakeSession()
+    client = GitHubClient(token_provider=lambda: "tok", session=session)
+    files = client.list_repository_files("o", "r", "main")
+    assert files == ["README.md", "docs/guide.md"]
 
 
 def test_list_tags() -> None:

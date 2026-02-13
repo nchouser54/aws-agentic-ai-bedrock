@@ -47,6 +47,10 @@ class GitHubClient:
         response = self._request("GET", f"/repos/{owner}/{repo}/pulls/{pull_number}")
         return response.json()
 
+    def get_repository(self, owner: str, repo: str) -> dict:
+        response = self._request("GET", f"/repos/{owner}/{repo}")
+        return response.json()
+
     def get_pull_request_files(self, owner: str, repo: str, pull_number: int) -> list[dict]:
         page = 1
         files: list[dict] = []
@@ -108,6 +112,17 @@ class GitHubClient:
         encoded = data.get("content", "").replace("\n", "")
         decoded = base64.b64decode(encoded).decode("utf-8")
         return decoded, data["sha"]
+
+    def list_repository_files(self, owner: str, repo: str, ref: str) -> list[str]:
+        """List all file paths in a repository tree for a given ref/branch."""
+        response = self._request(
+            "GET",
+            f"/repos/{owner}/{repo}/git/trees/{ref}",
+            params={"recursive": "1"},
+        )
+        data = response.json()
+        tree = data.get("tree") or []
+        return [str(item.get("path") or "") for item in tree if item.get("type") == "blob" and item.get("path")]
 
     def put_file_contents(
         self,

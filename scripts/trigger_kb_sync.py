@@ -8,8 +8,14 @@ import boto3
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Invoke Confluence->KB sync Lambda and print response")
-    parser.add_argument("--function-name", required=True, help="KB sync Lambda function name")
+    parser = argparse.ArgumentParser(
+        description="Invoke a KB sync Lambda (Confluence or GitHub docs) and print response"
+    )
+    parser.add_argument(
+        "--function-name",
+        required=True,
+        help="KB sync Lambda name (kb_sync_function_name or github_kb_sync_function_name)",
+    )
     parser.add_argument("--region", default="us-gov-west-1", help="AWS region")
     parser.add_argument("--qualifier", default="", help="Optional Lambda version or alias")
     args = parser.parse_args()

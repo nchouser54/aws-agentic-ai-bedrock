@@ -40,6 +40,15 @@ kb_sync_s3_prefix = "confluence"
 confluence_sync_cql = "type=page order by lastmodified desc"
 confluence_sync_limit = 25
 
+# Scheduled GitHub docs -> Bedrock Knowledge Base sync
+github_kb_sync_enabled = false
+github_kb_data_source_id = ""
+github_kb_sync_schedule_expression = "rate(6 hours)"
+github_kb_sync_s3_prefix = "github"
+github_kb_repos = []
+github_kb_include_patterns = ["README.md", "docs/**", "**/*.md"]
+github_kb_max_files_per_repo = 200
+
 # Teams adapter endpoint
 teams_adapter_enabled = false
 teams_adapter_token   = ""

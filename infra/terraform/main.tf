@@ -3,6 +3,7 @@ locals {
   chatbot_auth_jwt_enabled          = var.chatbot_enabled && var.chatbot_auth_mode == "jwt"
   chatbot_auth_github_oauth_enabled = var.chatbot_enabled && var.chatbot_auth_mode == "github_oauth"
   chatbot_route_auth_type           = local.chatbot_auth_jwt_enabled ? "JWT" : local.chatbot_auth_github_oauth_enabled ? "CUSTOM" : "NONE"
+  kb_sync_any_enabled               = var.kb_sync_enabled || var.github_kb_sync_enabled
 }
 
 data "aws_caller_identity" "current" {}
@@ -19,6 +20,22 @@ check "chatbot_jwt_settings" {
       )
     )
     error_message = "When chatbot_auth_mode is jwt, set both chatbot_jwt_issuer and chatbot_jwt_audience."
+  }
+}
+
+check "github_kb_sync_settings" {
+  assert {
+    condition = (
+      !var.github_kb_sync_enabled ||
+      (
+        length(var.github_kb_repos) > 0 &&
+        (
+          length(trimspace(var.github_kb_data_source_id)) > 0 ||
+          length(trimspace(var.bedrock_kb_data_source_id)) > 0
+        )
+      )
+    )
+    error_message = "When github_kb_sync_enabled is true, set github_kb_repos and at least one data source id (github_kb_data_source_id or bedrock_kb_data_source_id)."
   }
 }
 
@@ -154,12 +171,12 @@ resource "aws_dynamodb_table" "idempotency" {
 }
 
 resource "aws_s3_bucket" "kb_sync_documents" {
-  count  = var.kb_sync_enabled ? 1 : 0
+  count  = local.kb_sync_any_enabled ? 1 : 0
   bucket = "${local.name_prefix}-kb-sync-docs"
 }
 
 resource "aws_dynamodb_table" "kb_sync_state" {
-  count        = var.kb_sync_enabled ? 1 : 0
+  count        = local.kb_sync_any_enabled ? 1 : 0
   name         = "${local.name_prefix}-kb-sync-state"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "sync_key"
@@ -176,7 +193,7 @@ resource "aws_dynamodb_table" "kb_sync_state" {
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "kb_sync_documents" {
-  count  = var.kb_sync_enabled ? 1 : 0
+  count  = local.kb_sync_any_enabled ? 1 : 0
   bucket = aws_s3_bucket.kb_sync_documents[0].id
 
   rule {
@@ -188,7 +205,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "kb_sync_documents
 }
 
 resource "aws_s3_bucket_public_access_block" "kb_sync_documents" {
-  count                   = var.kb_sync_enabled ? 1 : 0
+  count                   = local.kb_sync_any_enabled ? 1 : 0
   bucket                  = aws_s3_bucket.kb_sync_documents[0].id
   block_public_acls       = true
   block_public_policy     = true
@@ -197,7 +214,7 @@ resource "aws_s3_bucket_public_access_block" "kb_sync_documents" {
 }
 
 resource "aws_s3_bucket_versioning" "kb_sync_documents" {
-  count  = var.kb_sync_enabled ? 1 : 0
+  count  = local.kb_sync_any_enabled ? 1 : 0
   bucket = aws_s3_bucket.kb_sync_documents[0].id
 
   versioning_configuration {
@@ -206,7 +223,7 @@ resource "aws_s3_bucket_versioning" "kb_sync_documents" {
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "kb_sync_documents" {
-  count  = var.kb_sync_enabled ? 1 : 0
+  count  = local.kb_sync_any_enabled ? 1 : 0
   bucket = aws_s3_bucket.kb_sync_documents[0].id
 
   rule {
@@ -298,7 +315,7 @@ resource "aws_iam_role" "chatbot_github_oauth_authorizer_lambda" {
 }
 
 resource "aws_iam_role" "kb_sync_lambda" {
-  count = var.kb_sync_enabled ? 1 : 0
+  count = local.kb_sync_any_enabled ? 1 : 0
   name  = "${local.name_prefix}-kb-sync-lambda-role"
 
   assume_role_policy = jsonencode({
@@ -482,7 +499,7 @@ resource "aws_iam_policy" "chatbot_github_oauth_authorizer_policy" {
 }
 
 resource "aws_iam_policy" "kb_sync_policy" {
-  count = var.kb_sync_enabled ? 1 : 0
+  count = local.kb_sync_any_enabled ? 1 : 0
   name  = "${local.name_prefix}-kb-sync-policy"
 
   policy = jsonencode({
@@ -498,9 +515,13 @@ resource "aws_iam_policy" "kb_sync_policy" {
         Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
       },
       {
-        Effect   = "Allow"
-        Action   = ["secretsmanager:GetSecretValue"]
-        Resource = aws_secretsmanager_secret.atlassian_credentials.arn
+        Effect = "Allow"
+        Action = ["secretsmanager:GetSecretValue"]
+        Resource = compact([
+          var.kb_sync_enabled ? aws_secretsmanager_secret.atlassian_credentials.arn : "",
+          var.github_kb_sync_enabled ? aws_secretsmanager_secret.github_app_private_key_pem.arn : "",
+          var.github_kb_sync_enabled ? aws_secretsmanager_secret.github_app_ids.arn : "",
+        ])
       },
       {
         Effect = "Allow"
@@ -561,7 +582,7 @@ resource "aws_iam_role_policy_attachment" "chatbot_github_oauth_authorizer_polic
 }
 
 resource "aws_iam_role_policy_attachment" "kb_sync_policy" {
-  count      = var.kb_sync_enabled ? 1 : 0
+  count      = local.kb_sync_any_enabled ? 1 : 0
   role       = aws_iam_role.kb_sync_lambda[0].name
   policy_arn = aws_iam_policy.kb_sync_policy[0].arn
 }
@@ -724,6 +745,35 @@ resource "aws_lambda_function" "confluence_kb_sync" {
   }
 }
 
+resource "aws_lambda_function" "github_kb_sync" {
+  count            = var.github_kb_sync_enabled ? 1 : 0
+  function_name    = "${local.name_prefix}-github-kb-sync"
+  role             = aws_iam_role.kb_sync_lambda[0].arn
+  runtime          = "python3.12"
+  handler          = "github_kb_sync.app.lambda_handler"
+  filename         = data.archive_file.lambda_bundle.output_path
+  source_code_hash = data.archive_file.lambda_bundle.output_base64sha256
+  timeout          = 180
+  memory_size      = 1024
+
+  environment {
+    variables = {
+      AWS_REGION                        = "us-gov-west-1"
+      GITHUB_API_BASE                   = var.github_api_base
+      GITHUB_APP_PRIVATE_KEY_SECRET_ARN = aws_secretsmanager_secret.github_app_private_key_pem.arn
+      GITHUB_APP_IDS_SECRET_ARN         = aws_secretsmanager_secret.github_app_ids.arn
+      BEDROCK_KNOWLEDGE_BASE_ID         = var.bedrock_knowledge_base_id
+      BEDROCK_KB_DATA_SOURCE_ID         = var.bedrock_kb_data_source_id
+      GITHUB_KB_DATA_SOURCE_ID          = var.github_kb_data_source_id
+      KB_SYNC_BUCKET                    = aws_s3_bucket.kb_sync_documents[0].bucket
+      GITHUB_KB_SYNC_PREFIX             = var.github_kb_sync_s3_prefix
+      GITHUB_KB_REPOS                   = join(",", var.github_kb_repos)
+      GITHUB_KB_INCLUDE_PATTERNS        = join(",", var.github_kb_include_patterns)
+      GITHUB_KB_MAX_FILES_PER_REPO      = tostring(var.github_kb_max_files_per_repo)
+    }
+  }
+}
+
 resource "aws_cloudwatch_log_group" "chatbot" {
   count             = var.chatbot_enabled ? 1 : 0
   name              = "/aws/lambda/${aws_lambda_function.jira_confluence_chatbot[0].function_name}"
@@ -742,6 +792,12 @@ resource "aws_cloudwatch_log_group" "kb_sync" {
   retention_in_days = var.log_retention_days
 }
 
+resource "aws_cloudwatch_log_group" "github_kb_sync" {
+  count             = var.github_kb_sync_enabled ? 1 : 0
+  name              = "/aws/lambda/${aws_lambda_function.github_kb_sync[0].function_name}"
+  retention_in_days = var.log_retention_days
+}
+
 resource "aws_cloudwatch_event_rule" "kb_sync" {
   count               = var.kb_sync_enabled ? 1 : 0
   name                = "${local.name_prefix}-kb-sync"
@@ -753,6 +809,19 @@ resource "aws_cloudwatch_event_target" "kb_sync" {
   rule      = aws_cloudwatch_event_rule.kb_sync[0].name
   target_id = "confluence-kb-sync-lambda"
   arn       = aws_lambda_function.confluence_kb_sync[0].arn
+}
+
+resource "aws_cloudwatch_event_rule" "github_kb_sync" {
+  count               = var.github_kb_sync_enabled ? 1 : 0
+  name                = "${local.name_prefix}-github-kb-sync"
+  schedule_expression = var.github_kb_sync_schedule_expression
+}
+
+resource "aws_cloudwatch_event_target" "github_kb_sync" {
+  count     = var.github_kb_sync_enabled ? 1 : 0
+  rule      = aws_cloudwatch_event_rule.github_kb_sync[0].name
+  target_id = "github-kb-sync-lambda"
+  arn       = aws_lambda_function.github_kb_sync[0].arn
 }
 
 resource "aws_lambda_event_source_mapping" "worker_sqs" {
@@ -899,6 +968,15 @@ resource "aws_lambda_permission" "allow_eventbridge_kb_sync" {
   function_name = aws_lambda_function.confluence_kb_sync[0].function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.kb_sync[0].arn
+}
+
+resource "aws_lambda_permission" "allow_eventbridge_github_kb_sync" {
+  count         = var.github_kb_sync_enabled ? 1 : 0
+  statement_id  = "AllowExecutionFromEventBridgeGithubKbSync"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.github_kb_sync[0].function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.github_kb_sync[0].arn
 }
 
 # ---------------------------------------------------------------------------
@@ -1499,6 +1577,27 @@ resource "aws_cloudwatch_metric_alarm" "kb_sync_errors" {
 
   dimensions = {
     FunctionName = aws_lambda_function.confluence_kb_sync[0].function_name
+  }
+
+  alarm_actions = [var.alarm_sns_topic_arn]
+  ok_actions    = [var.alarm_sns_topic_arn]
+}
+
+resource "aws_cloudwatch_metric_alarm" "github_kb_sync_errors" {
+  count               = var.github_kb_sync_enabled && var.alarm_sns_topic_arn != "" ? 1 : 0
+  alarm_name          = "${local.name_prefix}-github-kb-sync-errors"
+  alarm_description   = "GitHub KB sync Lambda errors detected"
+  namespace           = "AWS/Lambda"
+  metric_name         = "Errors"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 2
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.github_kb_sync[0].function_name
   }
 
   alarm_actions = [var.alarm_sns_topic_arn]
