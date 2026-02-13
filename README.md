@@ -118,6 +118,11 @@ Bedrock model selection controls:
 - `CHATBOT_ALLOWED_MODEL_IDS` (CSV; optional allow-list for request `model_id`)
 - If unset, any model ID available to the account/region can be requested.
 
+Model discovery endpoint:
+
+- `GET /chatbot/models`
+- Returns active text-capable Bedrock foundation models visible in the configured region (GovCloud), optionally filtered by `CHATBOT_ALLOWED_MODEL_IDS`.
+
 Optional live GitHub lookup (disabled by default):
 
 - `chatbot_github_live_enabled=true`
@@ -253,6 +258,10 @@ In the UI, provide:
 - Assistant Mode (`contextual` or `general`)
 - LLM Provider (`bedrock` or `anthropic_direct`)
 - Optional Model ID override (for example Amazon-hosted Bedrock model IDs)
+
+To load currently active GovCloud model options into the model picker:
+
+- Click **Refresh GovCloud Models** in the web app.
 
 Optional GitHub login in web app:
 

@@ -467,6 +467,7 @@ resource "aws_iam_policy" "chatbot_policy" {
         Effect = "Allow"
         Action = [
           "bedrock:InvokeModel",
+          "bedrock:ListFoundationModels",
           "bedrock:Retrieve",
           "bedrock:RetrieveAndGenerate"
         ]
@@ -904,6 +905,17 @@ resource "aws_apigatewayv2_route" "chatbot" {
   count              = var.chatbot_enabled ? 1 : 0
   api_id             = aws_apigatewayv2_api.webhook.id
   route_key          = "POST /chatbot/query"
+  target             = "integrations/${aws_apigatewayv2_integration.chatbot_lambda[0].id}"
+  authorization_type = local.chatbot_route_auth_type
+  authorizer_id = local.chatbot_auth_jwt_enabled ? aws_apigatewayv2_authorizer.chatbot_jwt[0].id : (
+    local.chatbot_auth_github_oauth_enabled ? aws_apigatewayv2_authorizer.chatbot_github_oauth[0].id : null
+  )
+}
+
+resource "aws_apigatewayv2_route" "chatbot_models" {
+  count              = var.chatbot_enabled ? 1 : 0
+  api_id             = aws_apigatewayv2_api.webhook.id
+  route_key          = "GET /chatbot/models"
   target             = "integrations/${aws_apigatewayv2_integration.chatbot_lambda[0].id}"
   authorization_type = local.chatbot_route_auth_type
   authorizer_id = local.chatbot_auth_jwt_enabled ? aws_apigatewayv2_authorizer.chatbot_jwt[0].id : (

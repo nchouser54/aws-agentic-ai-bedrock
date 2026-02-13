@@ -5,6 +5,7 @@ from chatbot.app import (
     _format_confluence,
     _format_jira,
     _format_kb,
+    _list_bedrock_models,
     _normalize_assistant_mode,
     _normalize_llm_provider,
     _normalize_retrieval_mode,
@@ -340,11 +341,43 @@ def test_handle_query_model_not_allowed_raises_value_error() -> None:
             raise AssertionError("Expected ValueError for disallowed model")
 
 
+def test_list_bedrock_models_filters_active_and_allowlist() -> None:
+    fake_bedrock = MagicMock()
+    fake_bedrock.list_foundation_models.return_value = {
+        "modelSummaries": [
+            {
+                "modelId": "amazon.nova-pro-v1:0",
+                "modelName": "Nova Pro",
+                "providerName": "Amazon",
+                "inferenceTypesSupported": ["ON_DEMAND"],
+                "outputModalities": ["TEXT"],
+                "modelLifecycle": {"status": "ACTIVE"},
+            },
+            {
+                "modelId": "anthropic.old",
+                "modelName": "Old",
+                "providerName": "Anthropic",
+                "inferenceTypesSupported": ["ON_DEMAND"],
+                "outputModalities": ["TEXT"],
+                "modelLifecycle": {"status": "LEGACY"},
+            },
+        ]
+    }
+
+    with patch("chatbot.app.boto3.client", return_value=fake_bedrock):
+        with patch.dict("os.environ", {"CHATBOT_ALLOWED_MODEL_IDS": "amazon.nova-pro-v1:0"}, clear=False):
+            models = _list_bedrock_models("us-gov-west-1")
+
+    assert len(models) == 1
+    assert models[0]["model_id"] == "amazon.nova-pro-v1:0"
+
+
 # --- lambda_handler HTTP layer tests ---
 
 def _api_event(body: dict | None = None, method: str = "POST", headers: dict | None = None) -> dict:
     return {
-        "requestContext": {"http": {"method": method}, "requestId": "req-test"},
+        "rawPath": "/chatbot/query",
+        "requestContext": {"http": {"method": method, "path": "/chatbot/query"}, "requestId": "req-test"},
         "headers": headers or {},
         "body": json.dumps(body) if body is not None else None,
     }
@@ -354,8 +387,28 @@ def test_lambda_handler_method_not_allowed() -> None:
     import chatbot.app as chatbot_mod
     chatbot_mod._cached_api_token = None
     with patch.dict("os.environ", {"CHATBOT_API_TOKEN_SECRET_ARN": "", "CHATBOT_API_TOKEN": ""}, clear=False):
-        out = lambda_handler(_api_event(method="GET"), None)
+        event = _api_event(method="GET")
+        event["rawPath"] = "/chatbot/unknown"
+        event["requestContext"]["http"]["path"] = "/chatbot/unknown"
+        out = lambda_handler(event, None)
     assert out["statusCode"] == 405
+
+
+@patch("chatbot.app._list_bedrock_models", return_value=[{"model_id": "amazon.nova-pro-v1:0"}])
+def test_lambda_handler_models_route(mock_models) -> None:
+    import chatbot.app as chatbot_mod
+    chatbot_mod._cached_api_token = None
+    with patch.dict("os.environ", {"CHATBOT_API_TOKEN_SECRET_ARN": "", "CHATBOT_API_TOKEN": ""}, clear=False):
+        event = _api_event(method="GET")
+        event["rawPath"] = "/chatbot/models"
+        event["requestContext"]["http"]["path"] = "/chatbot/models"
+        out = lambda_handler(event, None)
+
+    assert out["statusCode"] == 200
+    body = json.loads(out["body"])
+    assert body["count"] == 1
+    assert body["models"][0]["model_id"] == "amazon.nova-pro-v1:0"
+    mock_models.assert_called_once()
 
 
 def test_lambda_handler_query_too_long() -> None:
