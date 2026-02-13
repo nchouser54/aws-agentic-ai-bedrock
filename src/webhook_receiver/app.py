@@ -120,6 +120,15 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
 
     _sqs.send_message(QueueUrl=os.environ["QUEUE_URL"], MessageBody=json.dumps(message))
 
+    # Fan-out: enqueue PR description generation if enabled
+    pr_desc_queue = os.getenv("PR_DESCRIPTION_QUEUE_URL")
+    if pr_desc_queue:
+        try:
+            _sqs.send_message(QueueUrl=pr_desc_queue, MessageBody=json.dumps(message))
+            logger.info("pr_description_enqueued", extra={"delivery_id": delivery_id, "pr_number": pr_number})
+        except Exception:  # noqa: BLE001
+            logger.warning("pr_description_enqueue_failed", extra={"delivery_id": delivery_id})
+
     logger.info(
         "webhook_enqueued",
         extra={"delivery_id": delivery_id, "repo": repo_full_name, "pr_number": pr_number, "sha": head_sha},
