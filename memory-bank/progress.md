@@ -31,6 +31,10 @@
 - [x] Add chatbot route-level observability alarms and CloudWatch dashboard in Terraform
 - [x] Add chatbot observability docs and output (`chatbot_observability_dashboard_name`)
 - [x] Add chatbot metric emission unit tests and keep suite green (`183 passed`)
+- [x] Add actor-scoped chatbot memory keys and clear-memory APIs (`/chatbot/memory/clear`, `/chatbot/memory/clear-all`)
+- [x] Add chatbot memory hygiene controls (summary compaction and per-user/per-conversation request quotas)
+- [x] Add Terraform wiring for memory hygiene env vars, IAM delete permission, and API routes
+- [x] Add chatbot tests for memory clear routes and rate-limit HTTP handling
 
 ## Doing
 
