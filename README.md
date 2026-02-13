@@ -100,6 +100,20 @@ Chatbot login/auth options (Terraform `chatbot_auth_mode`):
 - `github_oauth`: API Gateway Lambda authorizer validates GitHub OAuth bearer tokens (`Authorization: Bearer <token>`)
   - Optional org restriction: `github_oauth_allowed_orgs`
 
+Recommended auth mode selection:
+
+| Mode | Best for | Pros | Trade-offs |
+|---|---|---|---|
+| `token` | Fast local/dev smoke testing | Easiest setup, no IdP dependency | Shared secret model (not per-user identity) |
+| `jwt` | Company-wide production SSO | Centralized identity/MFA and standard enterprise controls | Requires OIDC issuer + audience configuration |
+| `github_oauth` | Engineering-focused bot access | Reuses GitHub/GHES identity, optional org gating | OAuth token validation path and GitHub API dependency |
+
+Recommended defaults by environment:
+
+- `dev`: `chatbot_auth_mode = "token"`
+- `nonprod`: `chatbot_auth_mode = "jwt"` (preferred) or `"github_oauth"` for engineering pilot
+- `prod`: `chatbot_auth_mode = "jwt"` for broad enterprise access; use `"github_oauth"` only for engineering-scoped deployments
+
 Teams adapter endpoint:
 
 - `POST /chatbot/teams`
