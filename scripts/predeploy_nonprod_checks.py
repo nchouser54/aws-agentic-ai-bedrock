@@ -37,6 +37,20 @@ def _terraform_version_ok(min_major: int, min_minor: int) -> tuple[bool, str]:
     return True, f"found {major}.{minor}.{patch}"
 
 
+def _read_required_terraform_version(versions_path: Path) -> tuple[int, int] | None:
+    try:
+        content = versions_path.read_text()
+    except Exception:  # noqa: BLE001
+        return None
+
+    # Matches patterns like: required_version = ">= 1.6.0"
+    match = re.search(r'required_version\s*=\s*"\s*>=\s*(\d+)\.(\d+)\.(\d+)\s*"', content)
+    if not match:
+        return None
+    major, minor, _patch = map(int, match.groups())
+    return major, minor
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Pre-deploy checks for non-prod Terraform rollout")
     parser.add_argument(
@@ -57,9 +71,14 @@ def main() -> int:
     if not versions_path.exists():
         failures.append("missing infra/terraform/versions.tf")
 
-    ok, tf_msg = _terraform_version_ok(1, 6)
+    required_tf = _read_required_terraform_version(versions_path)
+    min_major, min_minor = required_tf if required_tf is not None else (1, 6)
+
+    ok, tf_msg = _terraform_version_ok(min_major, min_minor)
     if not ok:
-        failures.append(f"terraform version check failed: {tf_msg}")
+        failures.append(
+            f"terraform version check failed: {tf_msg} (required by versions.tf: >= {min_major}.{min_minor}.0)"
+        )
     else:
         print(f"[OK] terraform version: {tf_msg}")
 

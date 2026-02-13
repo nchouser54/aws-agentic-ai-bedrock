@@ -206,6 +206,21 @@ PR description generator endpoint:
 - AWS GovCloud credentials targeting `us-gov-west-1`
 - Terraform >= 1.6
 
+### Toolchain consistency (recommended)
+
+To reduce local/CI drift, this repo includes:
+
+- `.tool-versions` (python + terraform)
+- `.python-version`
+
+If you use `mise`/`asdf`, install pinned tools from repo root before running checks.
+
+Quick local consistency checks:
+
+- `make verify-toolchain`
+- `make terraform-fmt-check`
+- `make check`
+
 ### Deploy
 
 1. `cd infra/terraform`
@@ -240,6 +255,10 @@ PR description generator endpoint:
 ### Run unit tests
 
 - `pytest -q`
+
+### Verify local toolchain against repo constraints
+
+- `make verify-toolchain`
 
 ### Generate webhook signature
 

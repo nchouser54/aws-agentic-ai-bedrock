@@ -94,6 +94,20 @@ These resources are required by all features and are always created by Terraform
 - Required: AWS credentials with permissions to create IAM roles, Lambda, SQS, DynamoDB, Secrets Manager, API Gateway, KMS, CloudWatch, S3
 - Terraform >= 1.6.0
 
+### 1.1 Local Toolchain (recommended to avoid drift)
+
+This repo pins recommended local versions in:
+
+- `.tool-versions`
+- `.python-version`
+
+If you use `mise` or `asdf`, install tools from repo root, then run:
+
+```bash
+make verify-toolchain
+make terraform-fmt-check
+```
+
 ### 2. GitHub Enterprise Server — GitHub App
 
 Create a **GitHub App** on your GitHub Enterprise Server instance:
