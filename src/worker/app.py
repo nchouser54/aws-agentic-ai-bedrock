@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from collections import defaultdict
 from typing import Any
@@ -9,7 +10,9 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
+from shared.atlassian_client import AtlassianClient
 from shared.bedrock_client import BedrockReviewClient
+from shared.constants import DEFAULT_REGION
 from shared.github_app_auth import GitHubAppAuth
 from shared.github_client import GitHubClient
 from shared.logging import get_logger
@@ -27,6 +30,53 @@ IDEMPOTENCY_TTL_SECONDS = int(os.getenv("IDEMPOTENCY_TTL_SECONDS", str(7 * 24 * 
 AUTO_PR_MAX_FILES = int(os.getenv("AUTO_PR_MAX_FILES", "5"))
 AUTO_PR_BRANCH_PREFIX = os.getenv("AUTO_PR_BRANCH_PREFIX", "ai-autofix")
 REVIEW_COMMENT_MODE = os.getenv("REVIEW_COMMENT_MODE", "inline_best_effort")
+
+
+_JIRA_KEY_RE = re.compile(r"\b([A-Z][A-Z0-9_]+-\d+)\b")
+
+
+def _extract_jira_keys(pr: dict[str, Any]) -> list[str]:
+    """Extract unique Jira issue keys from PR title, body, and branch name."""
+    sources = [
+        pr.get("title") or "",
+        pr.get("body") or "",
+        (pr.get("head") or {}).get("ref") or "",
+    ]
+    keys: list[str] = []
+    seen: set[str] = set()
+    for source in sources:
+        for match in _JIRA_KEY_RE.findall(source):
+            if match not in seen:
+                seen.add(match)
+                keys.append(match)
+    return keys
+
+
+def _fetch_jira_context(
+    jira_keys: list[str],
+    credentials_secret_arn: str,
+    max_issues: int = 5,
+) -> list[dict[str, Any]]:
+    """Fetch Jira issue details for the given keys. Failures are silently skipped."""
+    if not jira_keys or not credentials_secret_arn:
+        return []
+
+    atlassian = AtlassianClient(credentials_secret_arn=credentials_secret_arn)
+    issues: list[dict[str, Any]] = []
+    for key in jira_keys[:max_issues]:
+        try:
+            issue = atlassian.get_jira_issue(key)
+            fields = issue.get("fields") or {}
+            issues.append({
+                "key": issue.get("key") or key,
+                "summary": str(fields.get("summary") or ""),
+                "status": str((fields.get("status") or {}).get("name") or ""),
+                "type": str((fields.get("issuetype") or {}).get("name") or ""),
+                "description": str(fields.get("description") or "")[:500],
+            })
+        except Exception:  # noqa: BLE001
+            logger.warning("jira_fetch_failed", extra={"extra": {"key": key}})
+    return issues
 
 
 SENSITIVE_FILE_PATTERNS = (
@@ -81,7 +131,11 @@ def _claim_idempotency(repo_full_name: str, pr_number: int, head_sha: str) -> bo
         raise
 
 
-def _build_prompt(pr: dict[str, Any], files: list[dict[str, Any]]) -> str:
+def _build_prompt(
+    pr: dict[str, Any],
+    files: list[dict[str, Any]],
+    jira_issues: list[dict[str, Any]] | None = None,
+) -> str:
     patch_budget = SAFE_PATCH_CHAR_BUDGET
     selected_files = []
 
@@ -105,14 +159,21 @@ def _build_prompt(pr: dict[str, Any], files: list[dict[str, Any]]) -> str:
         selected_files.append(entry)
         patch_budget -= len(candidate)
 
-    instruction = {
+    hard_rules = [
+        "Do not output markdown.",
+        "Never include secrets in output.",
+        "Do not suggest patches for sensitive files (.env, secrets, keys, pem, credentials).",
+        "For security findings, provide remediation guidance without copying secret material.",
+    ]
+    if jira_issues:
+        hard_rules.append(
+            "Verify code changes align with the linked Jira ticket requirements. "
+            "Flag any discrepancies between the ticket scope and the actual changes."
+        )
+
+    instruction: dict[str, Any] = {
         "task": "Review this pull request and return only strict JSON that matches the requested schema.",
-        "hard_rules": [
-            "Do not output markdown.",
-            "Never include secrets in output.",
-            "Do not suggest patches for sensitive files (.env, secrets, keys, pem, credentials).",
-            "For security findings, provide remediation guidance without copying secret material.",
-        ],
+        "hard_rules": hard_rules,
         "output_schema": {
             "summary": "string",
             "overall_risk": "low|medium|high",
@@ -136,6 +197,9 @@ def _build_prompt(pr: dict[str, Any], files: list[dict[str, Any]]) -> str:
             "changed_files": selected_files,
         },
     }
+
+    if jira_issues:
+        instruction["linked_jira_issues"] = jira_issues
 
     return json.dumps(instruction)
 
@@ -372,6 +436,32 @@ def _create_autofix_pr(
     )
 
 
+def _enqueue_test_gen(
+    repo_full_name: str,
+    pr_number: int,
+    head_sha: str,
+    pr: dict[str, Any],
+    local_logger: Any,
+) -> None:
+    """Optionally enqueue a test-generation job after a successful review."""
+    queue_url = os.getenv("TEST_GEN_QUEUE_URL")
+    if not queue_url:
+        return
+    base_ref = (pr.get("base") or {}).get("ref") or "main"
+    message = {
+        "repo_full_name": repo_full_name,
+        "pr_number": pr_number,
+        "head_sha": head_sha,
+        "base_ref": base_ref,
+    }
+    try:
+        _sqs = boto3.client("sqs")
+        _sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps(message))
+        local_logger.info("test_gen_enqueued", extra={"extra": {"pr_number": pr_number}})
+    except Exception:  # noqa: BLE001
+        local_logger.warning("test_gen_enqueue_failed", extra={"extra": {"pr_number": pr_number}})
+
+
 def _process_record(record: dict[str, Any]) -> None:
     started = time.time()
     message = json.loads(record["body"])
@@ -412,10 +502,19 @@ def _process_record(record: dict[str, Any]) -> None:
     pr = gh.get_pull_request(owner, repo, pr_number)
     files = gh.get_pull_request_files(owner, repo, pr_number)
 
-    prompt = _build_prompt(pr, files)
+    # Enrich prompt with linked Jira issue context
+    jira_issues: list[dict[str, Any]] = []
+    atlassian_secret_arn = os.getenv("ATLASSIAN_CREDENTIALS_SECRET_ARN", "")
+    if atlassian_secret_arn:
+        jira_keys = _extract_jira_keys(pr)
+        if jira_keys:
+            local_logger.info("jira_keys_detected", extra={"extra": {"keys": jira_keys}})
+            jira_issues = _fetch_jira_context(jira_keys, atlassian_secret_arn)
+
+    prompt = _build_prompt(pr, files, jira_issues=jira_issues or None)
 
     bedrock = BedrockReviewClient(
-        region=os.getenv("AWS_REGION", "us-gov-west-1"),
+        region=os.getenv("AWS_REGION", DEFAULT_REGION),
         model_id=os.environ["BEDROCK_MODEL_ID"],
         agent_id=os.getenv("BEDROCK_AGENT_ID") or None,
         agent_alias_id=os.getenv("BEDROCK_AGENT_ALIAS_ID") or None,
@@ -457,6 +556,9 @@ def _process_record(record: dict[str, Any]) -> None:
         local_logger=local_logger,
         dry_run=dry_run,
     )
+
+    # Chain: enqueue test generation if enabled
+    _enqueue_test_gen(repo_full_name, pr_number, head_sha, pr, local_logger)
 
     duration_ms = (time.time() - started) * 1000
     _emit_metric("reviews_success", 1)

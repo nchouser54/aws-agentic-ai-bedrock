@@ -2,6 +2,11 @@ project_name       = "ai-pr-reviewer"
 environment        = "prod"
 log_retention_days = 30
 
+# GitHub Enterprise Server API base URL
+# For github.com: https://api.github.com
+# For GitHub Enterprise Server: https://<your-ghes-hostname>/api/v3
+github_api_base = "https://github.example.com/api/v3"
+
 # Optional explicit allow-list. Empty list means allow all repos where app is installed.
 github_allowed_repos = [
   # "my-org/my-repo"
@@ -23,7 +28,49 @@ review_comment_mode   = "inline_best_effort"
 # Jira/Confluence chatbot service
 chatbot_enabled = true
 chatbot_model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
+chatbot_retrieval_mode = "hybrid"
+bedrock_knowledge_base_id = ""
+bedrock_kb_top_k = 5
+
+# Scheduled Confluence -> Bedrock Knowledge Base sync
+kb_sync_enabled = false
+bedrock_kb_data_source_id = ""
+kb_sync_schedule_expression = "rate(6 hours)"
+kb_sync_s3_prefix = "confluence"
+confluence_sync_cql = "type=page order by lastmodified desc"
+confluence_sync_limit = 25
 
 # Teams adapter endpoint
 teams_adapter_enabled = false
 teams_adapter_token   = ""
+
+# API authentication (leave empty to disable auth)
+chatbot_api_token = ""
+
+# CloudWatch alarms (leave empty to disable alarms)
+alarm_sns_topic_arn = ""
+
+# Release notes generator
+release_notes_enabled  = false
+release_notes_model_id = ""
+
+# Sprint/standup report agent
+sprint_report_enabled             = false
+sprint_report_model_id            = ""
+sprint_report_schedule_enabled    = false
+sprint_report_schedule_expression = "cron(0 9 ? * MON-FRI *)"
+sprint_report_repo                = ""
+sprint_report_jira_project        = ""
+sprint_report_jql                 = ""
+sprint_report_type                = "standup"
+sprint_report_days_back           = 1
+
+# Test generation agent
+test_gen_enabled       = false
+test_gen_model_id      = ""
+test_gen_delivery_mode = "comment"
+test_gen_max_files     = 10
+
+# PR description generator
+pr_description_enabled  = false
+pr_description_model_id = ""

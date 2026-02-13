@@ -1,0 +1,41 @@
+project_name       = "ai-pr-reviewer"
+environment        = "nonprod"
+log_retention_days = 14
+
+# Optional explicit allow-list. Empty list means allow all repos where app is installed.
+github_allowed_repos = [
+  # "my-org/my-repo"
+]
+
+# Bedrock config
+bedrock_agent_id       = ""
+bedrock_agent_alias_id = ""
+bedrock_model_id       = "anthropic.claude-3-sonnet-20240229-v1:0"
+
+# Keep safe during first non-prod rollout.
+dry_run = true
+
+# Autonomous remediation PR mode (start disabled until review confidence is high)
+auto_pr_enabled       = false
+auto_pr_max_files     = 5
+auto_pr_branch_prefix = "ai-autofix"
+review_comment_mode   = "inline_best_effort"
+
+# Jira/Confluence chatbot service
+chatbot_enabled         = true
+chatbot_model_id        = "anthropic.claude-3-sonnet-20240229-v1:0"
+chatbot_retrieval_mode  = "hybrid"
+bedrock_knowledge_base_id = "<SET_KB_ID>"
+bedrock_kb_top_k        = 5
+
+# Scheduled Confluence -> Bedrock Knowledge Base sync
+kb_sync_enabled            = true
+bedrock_kb_data_source_id  = "<SET_KB_DATA_SOURCE_ID>"
+kb_sync_schedule_expression = "rate(6 hours)"
+kb_sync_s3_prefix          = "confluence"
+confluence_sync_cql        = "type=page order by lastmodified desc"
+confluence_sync_limit      = 25
+
+# Teams adapter endpoint (enable only when testing Teams integration)
+teams_adapter_enabled = false
+teams_adapter_token   = ""

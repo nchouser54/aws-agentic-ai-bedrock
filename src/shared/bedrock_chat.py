@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Optional
 
 import boto3
@@ -12,15 +13,17 @@ class BedrockChatClient:
         self,
         region: str,
         model_id: str,
+        max_tokens: int | None = None,
         bedrock_runtime: Optional[BaseClient] = None,
     ) -> None:
         self._model_id = model_id
+        self._max_tokens = max_tokens or int(os.getenv("CHATBOT_MAX_TOKENS", "1200"))
         self._runtime = bedrock_runtime or boto3.client("bedrock-runtime", region_name=region)
 
     def answer(self, system_prompt: str, user_prompt: str) -> str:
         body = {
             "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 1200,
+            "max_tokens": self._max_tokens,
             "temperature": 0.2,
             "system": system_prompt,
             "messages": [

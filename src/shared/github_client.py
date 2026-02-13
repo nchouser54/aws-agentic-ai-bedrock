@@ -154,3 +154,181 @@ class GitHubClient:
             },
         )
         return response.json()
+
+    # -- releases & tags -------------------------------------------------------
+
+    def list_tags(self, owner: str, repo: str, per_page: int = 30) -> list[dict]:
+        """Return repository tags, newest first."""
+        response = self._request(
+            "GET",
+            f"/repos/{owner}/{repo}/tags",
+            params={"per_page": per_page},
+        )
+        return response.json()
+
+    def compare_commits(
+        self, owner: str, repo: str, base: str, head: str,
+    ) -> dict:
+        """Compare two commits/tags/branches. Returns commits & files between them."""
+        response = self._request(
+            "GET", f"/repos/{owner}/{repo}/compare/{base}...{head}",
+        )
+        return response.json()
+
+    def list_merged_pulls_between(
+        self,
+        owner: str,
+        repo: str,
+        base_sha: str,
+        head_sha: str,
+    ) -> list[dict]:
+        """Return merged PRs whose merge_commit_sha appears between base and head."""
+        comparison = self.compare_commits(owner, repo, base_sha, head_sha)
+        commit_shas = {c.get("sha") for c in comparison.get("commits", [])}
+
+        merged_prs: list[dict] = []
+        page = 1
+        while True:
+            response = self._request(
+                "GET",
+                f"/repos/{owner}/{repo}/pulls",
+                params={"state": "closed", "sort": "updated", "direction": "desc", "per_page": 100, "page": page},
+            )
+            pulls = response.json()
+            if not pulls:
+                break
+            for pr in pulls:
+                merge_sha = pr.get("merge_commit_sha")
+                if pr.get("merged_at") and merge_sha in commit_shas:
+                    merged_prs.append(pr)
+                    commit_shas.discard(merge_sha)
+            if not commit_shas or len(pulls) < 100:
+                break
+            page += 1
+        return merged_prs
+
+    def get_release_by_tag(self, owner: str, repo: str, tag: str) -> dict:
+        response = self._request(
+            "GET", f"/repos/{owner}/{repo}/releases/tags/{tag}",
+        )
+        return response.json()
+
+    def get_latest_release(self, owner: str, repo: str) -> dict:
+        response = self._request(
+            "GET", f"/repos/{owner}/{repo}/releases/latest",
+        )
+        return response.json()
+
+    def create_release(
+        self,
+        owner: str,
+        repo: str,
+        tag_name: str,
+        name: str,
+        body: str,
+        draft: bool = False,
+        prerelease: bool = False,
+    ) -> dict:
+        response = self._request(
+            "POST",
+            f"/repos/{owner}/{repo}/releases",
+            json={
+                "tag_name": tag_name,
+                "name": name,
+                "body": body,
+                "draft": draft,
+                "prerelease": prerelease,
+            },
+        )
+        return response.json()
+
+    def update_release(
+        self, owner: str, repo: str, release_id: int, body: str,
+    ) -> dict:
+        response = self._request(
+            "PATCH",
+            f"/repos/{owner}/{repo}/releases/{release_id}",
+            json={"body": body},
+        )
+        return response.json()
+
+    # -- pulls & issues --------------------------------------------------------
+
+    def list_pulls(
+        self,
+        owner: str,
+        repo: str,
+        state: str = "closed",
+        sort: str = "updated",
+        direction: str = "desc",
+        per_page: int = 30,
+    ) -> list[dict]:
+        """List pull requests with basic filtering."""
+        response = self._request(
+            "GET",
+            f"/repos/{owner}/{repo}/pulls",
+            params={
+                "state": state,
+                "sort": sort,
+                "direction": direction,
+                "per_page": per_page,
+            },
+        )
+        return response.json()
+
+    def list_commits(
+        self,
+        owner: str,
+        repo: str,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        sha: Optional[str] = None,
+        per_page: int = 30,
+    ) -> list[dict]:
+        """List commits with optional date filtering (ISO 8601 timestamps)."""
+        params: dict = {"per_page": per_page}
+        if since:
+            params["since"] = since
+        if until:
+            params["until"] = until
+        if sha:
+            params["sha"] = sha
+        response = self._request(
+            "GET",
+            f"/repos/{owner}/{repo}/commits",
+            params=params,
+        )
+        return response.json()
+
+    def create_issue_comment(
+        self, owner: str, repo: str, issue_number: int, body: str,
+    ) -> dict:
+        """Post a comment on an issue or pull request."""
+        response = self._request(
+            "POST",
+            f"/repos/{owner}/{repo}/issues/{issue_number}/comments",
+            json={"body": body},
+        )
+        return response.json()
+
+    def update_pull_request(
+        self, owner: str, repo: str, pull_number: int, **kwargs,
+    ) -> dict:
+        """Update a pull request (body, title, state, etc.)."""
+        response = self._request(
+            "PATCH",
+            f"/repos/{owner}/{repo}/pulls/{pull_number}",
+            json=kwargs,
+        )
+        return response.json()
+
+    def list_pull_commits(
+        self, owner: str, repo: str, pull_number: int,
+    ) -> list[dict]:
+        """List commits on a pull request."""
+        response = self._request(
+            "GET",
+            f"/repos/{owner}/{repo}/pulls/{pull_number}/commits",
+            params={"per_page": 100},
+        )
+        return response.json()
