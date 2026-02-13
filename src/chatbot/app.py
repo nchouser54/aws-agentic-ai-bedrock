@@ -243,6 +243,10 @@ def _image_banned_terms() -> list[str]:
     return [term.strip().lower() for term in raw.split(",") if term.strip()]
 
 
+def _websocket_default_chunk_chars() -> int:
+    return max(20, int(os.getenv("CHATBOT_WEBSOCKET_DEFAULT_CHUNK_CHARS", "120")))
+
+
 def _normalize_conversation_id(value: str | None) -> str | None:
     candidate = (value or "").strip()
     if not candidate:
@@ -399,6 +403,29 @@ def _track_conversation_index(actor_id: str, conversation_id: str) -> None:
         )
     except Exception:
         logger.warning("chat_memory_index_write_failed", extra={"extra": {"actor_id": actor_id}})
+
+
+def _ws_client(event: dict[str, Any]) -> Any:
+    request_context = event.get("requestContext") or {}
+    domain_name = str(request_context.get("domainName") or "").strip()
+    stage = str(request_context.get("stage") or "").strip()
+    if not domain_name or not stage:
+        raise ValueError("websocket_context_missing")
+
+    endpoint = f"https://{domain_name}/{stage}"
+    return boto3.client(
+        "apigatewaymanagementapi",
+        endpoint_url=endpoint,
+        region_name=os.getenv("AWS_REGION", DEFAULT_REGION),
+    )
+
+
+def _ws_send(event: dict[str, Any], connection_id: str, payload: dict[str, Any]) -> None:
+    try:
+        client = _ws_client(event)
+        client.post_to_connection(ConnectionId=connection_id, Data=json.dumps(payload).encode("utf-8"))
+    except Exception:
+        logger.warning("chatbot_websocket_send_failed", extra={"extra": {"connection_id": connection_id}})
 
 
 def _load_conversation_history(actor_id: str, conversation_id: str | None) -> list[dict[str, str]]:
@@ -1013,6 +1040,88 @@ def handle_query(
 
 
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
+    request_context = event.get("requestContext") or {}
+    if request_context.get("routeKey") is not None:
+        route_key = str(request_context.get("routeKey") or "")
+        connection_id = str(request_context.get("connectionId") or "")
+
+        if route_key in {"$connect", "$disconnect"}:
+            return {"statusCode": 200}
+
+        if route_key != "query":
+            return {"statusCode": 400, "body": json.dumps({"error": "unsupported_route"})}
+
+        try:
+            body = json.loads(event.get("body") or "{}")
+        except json.JSONDecodeError:
+            return {"statusCode": 400, "body": json.dumps({"error": "invalid_json"})}
+
+        query = str(body.get("query") or "").strip()
+        if not query:
+            _ws_send(event, connection_id, {"type": "error", "error": "query_required"})
+            return {"statusCode": 200}
+
+        actor_id = _actor_id(event)
+        jira_jql = str(body.get("jira_jql") or "").strip() or "order by updated DESC"
+        confluence_cql = str(body.get("confluence_cql") or "").strip() or "type=page order by lastmodified desc"
+        assistant_mode = _normalize_assistant_mode(body.get("assistant_mode"))
+        llm_provider = _normalize_llm_provider(body.get("llm_provider"))
+        model_id = str(body.get("model_id") or "").strip() or None
+        conversation_id = str(body.get("conversation_id") or "").strip() or None
+        retrieval_mode = _normalize_retrieval_mode(body.get("retrieval_mode"))
+        chunk_chars = int(body.get("stream_chunk_chars") or _websocket_default_chunk_chars())
+
+        if assistant_mode == "contextual":
+            if not _validate_query_filter(jira_jql) or not _validate_query_filter(confluence_cql):
+                _ws_send(event, connection_id, {"type": "error", "error": "invalid_query_filter"})
+                return {"statusCode": 200}
+
+        try:
+            response_body = handle_query(
+                query,
+                jira_jql,
+                confluence_cql,
+                str(request_context.get("requestId") or "unknown"),
+                retrieval_mode=retrieval_mode,
+                assistant_mode=assistant_mode,
+                llm_provider=llm_provider,
+                model_id=model_id,
+                conversation_id=conversation_id,
+                actor_id=actor_id,
+                stream=True,
+                stream_chunk_chars=chunk_chars,
+            )
+        except ValueError as exc:
+            _ws_send(event, connection_id, {"type": "error", "error": str(exc)})
+            return {"statusCode": 200}
+        except Exception:
+            logger.exception("chatbot_websocket_internal_error")
+            _ws_send(event, connection_id, {"type": "error", "error": "internal_error"})
+            return {"statusCode": 200}
+
+        for idx, chunk in enumerate((response_body.get("stream") or {}).get("chunks") or []):
+            _ws_send(
+                event,
+                connection_id,
+                {
+                    "type": "chunk",
+                    "index": idx,
+                    "content": chunk,
+                    "conversation_id": response_body.get("conversation_id"),
+                },
+            )
+
+        _ws_send(
+            event,
+            connection_id,
+            {
+                "type": "done",
+                "conversation_id": response_body.get("conversation_id"),
+                "sources": response_body.get("sources") or {},
+            },
+        )
+        return {"statusCode": 200}
+
     method = str(event.get("requestContext", {}).get("http", {}).get("method") or "").upper()
     path = _request_path(event)
     started_at = time.time()

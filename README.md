@@ -99,6 +99,13 @@ Chatbot endpoint:
   - `confluence_cql` (optional)
   - `retrieval_mode` (optional: `live|kb|hybrid`; defaults to `hybrid`)
 
+True streaming transport (WebSocket):
+
+- Connect to `chatbot_websocket_url` output (wss endpoint)
+- Send message payloads like:
+  - `{ "action": "query", "query": "...", "conversation_id": "thread-1" }`
+- Server pushes frames with `type=chunk`, then a final `type=done`
+
 Assistant mode behavior:
 
 - `contextual`: existing Jira/Confluence/KB/GitHub context-aware flow.
@@ -168,6 +175,12 @@ Chatbot observability options:
   - `ChatbotServerErrorCount`
   - `ChatbotImageGeneratedCount`
 - Runtime toggle: `CHATBOT_METRICS_ENABLED=true|false`
+
+WebSocket streaming options:
+
+- `chatbot_websocket_enabled` (Terraform; default `true`)
+- `chatbot_websocket_stage` (Terraform; default `prod`)
+- `chatbot_websocket_default_chunk_chars` (Terraform; default `120`)
 
 When enabled, Terraform provisions a CloudWatch dashboard for chatbot route-level telemetry and server-error alarms for query/image endpoints.
 

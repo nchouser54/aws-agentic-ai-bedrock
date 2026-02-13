@@ -39,6 +39,9 @@
 - [x] Add image route per-user and per-conversation per-minute quotas
 - [x] Add Terraform variables/env wiring for image safety and quotas
 - [x] Add image route tests for safety blocking and 429 quota responses
+- [x] Add websocket streaming transport handler for chatbot query chunks (`action=query`)
+- [x] Add Terraform websocket API resources, invoke permission, and output URL
+- [x] Add websocket unit tests for chunk/done frame flow and unsupported route handling
 
 ## Doing
 
