@@ -104,6 +104,29 @@ variable "chatbot_retrieval_mode" {
   }
 }
 
+variable "chatbot_github_live_enabled" {
+  description = "Enable optional live GitHub code/doc lookup during chatbot live/hybrid fallback mode"
+  type        = bool
+  default     = false
+}
+
+variable "chatbot_github_live_repos" {
+  description = "Repositories (owner/repo) allowed for optional live GitHub chatbot lookup"
+  type        = list(string)
+  default     = []
+}
+
+variable "chatbot_github_live_max_results" {
+  description = "Maximum live GitHub search results used per chatbot query"
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.chatbot_github_live_max_results >= 1
+    error_message = "Must be at least 1."
+  }
+}
+
 variable "bedrock_knowledge_base_id" {
   description = "Optional Bedrock Knowledge Base ID used by chatbot and sync jobs"
   type        = string

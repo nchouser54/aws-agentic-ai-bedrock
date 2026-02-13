@@ -93,6 +93,14 @@ Chatbot endpoint:
   - `confluence_cql` (optional)
   - `retrieval_mode` (optional: `live|kb|hybrid`; defaults to `hybrid`)
 
+Optional live GitHub lookup (disabled by default):
+
+- `chatbot_github_live_enabled=true`
+- `chatbot_github_live_repos=["owner/repo", ...]`
+- `chatbot_github_live_max_results=3`
+
+When enabled, `live`/`hybrid` mode can include real-time GitHub code/doc snippets in chatbot context.
+
 Chatbot login/auth options (Terraform `chatbot_auth_mode`):
 
 - `token` (default): shared header tokens

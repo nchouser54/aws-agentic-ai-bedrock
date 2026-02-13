@@ -458,6 +458,8 @@ resource "aws_iam_policy" "chatbot_policy" {
           aws_secretsmanager_secret.atlassian_credentials.arn,
           var.chatbot_enabled ? aws_secretsmanager_secret.chatbot_api_token[0].arn : "",
           var.chatbot_enabled && var.teams_adapter_enabled ? aws_secretsmanager_secret.teams_adapter_token[0].arn : "",
+          var.chatbot_enabled && var.chatbot_github_live_enabled ? aws_secretsmanager_secret.github_app_private_key_pem.arn : "",
+          var.chatbot_enabled && var.chatbot_github_live_enabled ? aws_secretsmanager_secret.github_app_ids.arn : "",
         ])
       },
       {
@@ -662,14 +664,20 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
 
   environment {
     variables = {
-      AWS_REGION                       = "us-gov-west-1"
-      CHATBOT_MODEL_ID                 = var.chatbot_model_id
-      BEDROCK_MODEL_ID                 = var.bedrock_model_id
-      CHATBOT_RETRIEVAL_MODE           = var.chatbot_retrieval_mode
-      BEDROCK_KNOWLEDGE_BASE_ID        = var.bedrock_knowledge_base_id
-      BEDROCK_KB_TOP_K                 = tostring(var.bedrock_kb_top_k)
-      ATLASSIAN_CREDENTIALS_SECRET_ARN = aws_secretsmanager_secret.atlassian_credentials.arn
-      CHATBOT_API_TOKEN_SECRET_ARN     = var.chatbot_enabled ? aws_secretsmanager_secret.chatbot_api_token[0].arn : ""
+      AWS_REGION                        = "us-gov-west-1"
+      CHATBOT_MODEL_ID                  = var.chatbot_model_id
+      BEDROCK_MODEL_ID                  = var.bedrock_model_id
+      CHATBOT_RETRIEVAL_MODE            = var.chatbot_retrieval_mode
+      BEDROCK_KNOWLEDGE_BASE_ID         = var.bedrock_knowledge_base_id
+      BEDROCK_KB_TOP_K                  = tostring(var.bedrock_kb_top_k)
+      ATLASSIAN_CREDENTIALS_SECRET_ARN  = aws_secretsmanager_secret.atlassian_credentials.arn
+      CHATBOT_API_TOKEN_SECRET_ARN      = var.chatbot_enabled ? aws_secretsmanager_secret.chatbot_api_token[0].arn : ""
+      GITHUB_CHAT_LIVE_ENABLED          = tostring(var.chatbot_github_live_enabled)
+      GITHUB_CHAT_REPOS                 = join(",", var.chatbot_github_live_repos)
+      GITHUB_CHAT_MAX_RESULTS           = tostring(var.chatbot_github_live_max_results)
+      GITHUB_API_BASE                   = var.github_api_base
+      GITHUB_APP_PRIVATE_KEY_SECRET_ARN = var.chatbot_github_live_enabled ? aws_secretsmanager_secret.github_app_private_key_pem.arn : ""
+      GITHUB_APP_IDS_SECRET_ARN         = var.chatbot_github_live_enabled ? aws_secretsmanager_secret.github_app_ids.arn : ""
     }
   }
 }

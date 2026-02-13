@@ -3,6 +3,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 import boto3
@@ -11,6 +12,8 @@ from shared.atlassian_client import AtlassianClient
 from shared.bedrock_chat import BedrockChatClient
 from shared.bedrock_kb import BedrockKnowledgeBaseClient
 from shared.constants import DEFAULT_REGION, MAX_QUERY_FILTER_LENGTH, MAX_QUERY_LENGTH
+from shared.github_app_auth import GitHubAppAuth
+from shared.github_client import GitHubClient
 from shared.logging import get_logger
 
 logger = get_logger("jira_confluence_chatbot")
@@ -84,6 +87,88 @@ def _normalize_retrieval_mode(value: str | None) -> str:
     return mode
 
 
+def _parse_repo_slug(value: str) -> tuple[str, str] | None:
+    owner_repo = [part.strip() for part in value.split("/", 1)]
+    if len(owner_repo) != 2 or not owner_repo[0] or not owner_repo[1]:
+        return None
+    return owner_repo[0], owner_repo[1]
+
+
+def _format_github(results: list[dict[str, Any]]) -> str:
+    rows: list[str] = []
+    for item in results:
+        repo = str(item.get("repo") or "")
+        path = str(item.get("path") or "")
+        url = str(item.get("url") or "")
+        text = str(item.get("text") or "").strip()
+        snippet = text[:400] + ("..." if len(text) > 400 else "")
+        title = Path(path).name if path else "file"
+        rows.append(f"- {repo}:{path} ({title}) {url}\n  {snippet}".strip())
+    return "\n".join(rows) if rows else "No GitHub code/doc snippets found."
+
+
+def _github_live_enabled() -> bool:
+    return os.getenv("GITHUB_CHAT_LIVE_ENABLED", "false").strip().lower() == "true"
+
+
+def _load_github_context(query: str, local_logger: Any) -> list[dict[str, Any]]:
+    if not _github_live_enabled():
+        return []
+
+    repos_raw = os.getenv("GITHUB_CHAT_REPOS", "")
+    repos = [slug.strip() for slug in repos_raw.split(",") if slug.strip()]
+    if not repos:
+        return []
+
+    app_ids_secret = os.getenv("GITHUB_APP_IDS_SECRET_ARN", "").strip()
+    key_secret = os.getenv("GITHUB_APP_PRIVATE_KEY_SECRET_ARN", "").strip()
+    if not app_ids_secret or not key_secret:
+        local_logger.warning("github_live_missing_secrets")
+        return []
+
+    max_results = max(1, int(os.getenv("GITHUB_CHAT_MAX_RESULTS", "3")))
+    api_base = os.getenv("GITHUB_API_BASE", "https://api.github.com")
+
+    auth = GitHubAppAuth(
+        app_ids_secret_arn=app_ids_secret,
+        private_key_secret_arn=key_secret,
+        api_base=api_base,
+    )
+    gh = GitHubClient(token_provider=auth.get_installation_token, api_base=api_base)
+
+    collected: list[dict[str, Any]] = []
+    for slug in repos:
+        parsed = _parse_repo_slug(slug)
+        if not parsed:
+            continue
+        owner, repo = parsed
+        try:
+            items = gh.search_code(f"{query} repo:{owner}/{repo}", per_page=max_results)
+            for item in items:
+                path = str(item.get("path") or "").strip()
+                if not path:
+                    continue
+                repo_obj = item.get("repository") or {}
+                default_ref = str(repo_obj.get("default_branch") or "main")
+                full_name = str(repo_obj.get("full_name") or f"{owner}/{repo}")
+
+                text, _sha = gh.get_file_contents(owner, repo, path, default_ref)
+                collected.append(
+                    {
+                        "repo": full_name,
+                        "path": path,
+                        "url": str(item.get("html_url") or ""),
+                        "text": text,
+                    }
+                )
+                if len(collected) >= max_results:
+                    return collected
+        except Exception:
+            local_logger.warning("github_live_lookup_failed", extra={"extra": {"repo": slug}})
+
+    return collected
+
+
 def handle_query(
     query: str,
     jira_jql: str,
@@ -98,6 +183,7 @@ def handle_query(
     jira_items: list[dict[str, Any]] = []
     conf_items: list[dict[str, Any]] = []
     kb_items: list[dict[str, Any]] = []
+    github_items: list[dict[str, Any]] = []
     context_source = "live"
 
     if mode in {"kb", "hybrid"} and os.getenv("BEDROCK_KNOWLEDGE_BASE_ID", "").strip():
@@ -120,17 +206,19 @@ def handle_query(
         atlassian = AtlassianClient(credentials_secret_arn=os.environ["ATLASSIAN_CREDENTIALS_SECRET_ARN"])
         jira_items = atlassian.search_jira(jira_jql, max_results=5)
         conf_items = atlassian.search_confluence(confluence_cql, limit=5)
+        github_items = _load_github_context(query, local_logger)
         context_source = "live" if mode == "live" else "hybrid_fallback"
 
     context_blob = {
         "jira": _format_jira(jira_items),
         "confluence": _format_confluence(conf_items),
         "knowledge_base": _format_kb(kb_items),
+        "github": _format_github(github_items),
     }
 
     system_prompt = (
         "You are an enterprise engineering assistant. Use only the provided Knowledge Base, Jira, and "
-        "Confluence context. "
+        "Confluence and GitHub context. "
         "If information is missing, state assumptions explicitly."
     )
     user_prompt = (
@@ -138,6 +226,7 @@ def handle_query(
         f"Knowledge Base context:\n{context_blob['knowledge_base']}\n\n"
         f"Jira context:\n{context_blob['jira']}\n\n"
         f"Confluence context:\n{context_blob['confluence']}\n"
+        f"GitHub context:\n{context_blob['github']}\n"
     )
 
     chatbot = BedrockChatClient(
@@ -155,6 +244,7 @@ def handle_query(
                 "jira_items": len(jira_items),
                 "confluence_items": len(conf_items),
                 "kb_items": len(kb_items),
+                "github_items": len(github_items),
             }
         },
     )
@@ -167,6 +257,7 @@ def handle_query(
             "kb_count": len(kb_items),
             "jira_count": len(jira_items),
             "confluence_count": len(conf_items),
+            "github_count": len(github_items),
         },
     }
 

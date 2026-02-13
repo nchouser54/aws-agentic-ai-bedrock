@@ -58,6 +58,8 @@ class FakeSession:
                 "commits": [{"sha": "aaa"}, {"sha": "bbb"}],
                 "files": [{"filename": "f.py"}],
             })
+        if url.endswith("/search/code"):
+            return FakeResponse(200, {"items": [{"path": "docs/guide.md", "repository": {"full_name": "o/r"}}]})
         if "/tags" in url:
             return FakeResponse(200, [{"name": "v2.0"}, {"name": "v1.5"}, {"name": "v1.0"}])
         if url.endswith("/releases") and method == "POST":
@@ -113,6 +115,14 @@ def test_compare_commits() -> None:
     client = GitHubClient(token_provider=lambda: "tok", session=session)
     result = client.compare_commits("o", "r", "v1.0", "v2.0")
     assert len(result["commits"]) == 2
+
+
+def test_search_code() -> None:
+    session = FakeSession()
+    client = GitHubClient(token_provider=lambda: "tok", session=session)
+    items = client.search_code("repo:o/r docs", per_page=5)
+    assert len(items) == 1
+    assert items[0]["path"] == "docs/guide.md"
 
 
 def test_create_release() -> None:

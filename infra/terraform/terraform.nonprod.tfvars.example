@@ -25,6 +25,9 @@ review_comment_mode   = "inline_best_effort"
 chatbot_enabled         = true
 chatbot_model_id        = "anthropic.claude-3-sonnet-20240229-v1:0"
 chatbot_retrieval_mode  = "hybrid"
+chatbot_github_live_enabled = false
+chatbot_github_live_repos = ["my-org/my-repo"]
+chatbot_github_live_max_results = 3
 bedrock_knowledge_base_id = "<SET_KB_ID>"
 bedrock_kb_top_k        = 5
 
