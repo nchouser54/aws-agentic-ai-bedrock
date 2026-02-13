@@ -219,6 +219,18 @@ variable "chatbot_image_default_size" {
   default     = "1024x1024"
 }
 
+variable "chatbot_observability_enabled" {
+  description = "Enable chatbot custom metrics dashboard and related CloudWatch alarms"
+  type        = bool
+  default     = true
+}
+
+variable "chatbot_metrics_namespace" {
+  description = "Optional CloudWatch metrics namespace override for chatbot custom metrics"
+  type        = string
+  default     = ""
+}
+
 variable "bedrock_knowledge_base_id" {
   description = "Optional Bedrock Knowledge Base ID used by chatbot and sync jobs"
   type        = string

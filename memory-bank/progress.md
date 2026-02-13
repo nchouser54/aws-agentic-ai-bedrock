@@ -27,6 +27,10 @@
 - [x] Add local toolchain pin files (`.tool-versions`, `.python-version`) for consistency
 - [x] Update Makefile with venv-aware Python and Terraform validation targets
 - [x] Make predeploy Terraform version checks derive minimum version from `versions.tf`
+- [x] Add chatbot custom CloudWatch metrics (request, latency, error, server error, image count)
+- [x] Add chatbot route-level observability alarms and CloudWatch dashboard in Terraform
+- [x] Add chatbot observability docs and output (`chatbot_observability_dashboard_name`)
+- [x] Add chatbot metric emission unit tests and keep suite green (`183 passed`)
 
 ## Doing
 

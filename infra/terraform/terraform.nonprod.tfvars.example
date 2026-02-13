@@ -44,6 +44,8 @@ chatbot_memory_max_turns = 6
 chatbot_memory_ttl_days = 30
 chatbot_image_model_id = "amazon.nova-canvas-v1:0"
 chatbot_image_default_size = "1024x1024"
+chatbot_observability_enabled = true
+chatbot_metrics_namespace = ""
 bedrock_knowledge_base_id = "<SET_KB_ID>"
 bedrock_kb_top_k        = 5
 

@@ -24,9 +24,105 @@ ALLOWED_RETRIEVAL_MODES = {"live", "kb", "hybrid"}
 ALLOWED_ASSISTANT_MODES = {"contextual", "general"}
 ALLOWED_LLM_PROVIDERS = {"bedrock", "anthropic_direct"}
 _VALID_CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+_cloudwatch: Any | None = None
 
 _cached_api_token: str | None = None
 _cached_anthropic_api_key: str | None = None
+
+
+def _metrics_namespace() -> str:
+    return os.getenv("METRICS_NAMESPACE", "AIPrReviewer")
+
+
+def _cloudwatch_client() -> Any:
+    global _cloudwatch  # noqa: PLW0603
+    if _cloudwatch is None:
+        _cloudwatch = boto3.client("cloudwatch")
+    return _cloudwatch
+
+
+def _emit_metric(
+    metric_name: str,
+    value: float,
+    unit: str = "Count",
+    dimensions: dict[str, str] | None = None,
+) -> None:
+    if os.getenv("CHATBOT_METRICS_ENABLED", "true").strip().lower() != "true":
+        return
+
+    # Avoid external AWS calls during local unit tests.
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return
+
+    metric_dims = [
+        {"Name": str(name), "Value": str(dim_value)}
+        for name, dim_value in (dimensions or {}).items()
+    ]
+    try:
+        _cloudwatch_client().put_metric_data(
+            Namespace=_metrics_namespace(),
+            MetricData=[
+                {
+                    "MetricName": metric_name,
+                    "Unit": unit,
+                    "Value": value,
+                    "Dimensions": metric_dims,
+                }
+            ],
+        )
+    except Exception:
+        logger.warning(
+            "chatbot_metric_emit_failed",
+            extra={"extra": {"metric_name": metric_name}},
+        )
+
+
+def _route_name(path: str) -> str:
+    if path.endswith("/chatbot/query"):
+        return "query"
+    if path.endswith("/chatbot/image"):
+        return "image"
+    if path.endswith("/chatbot/models"):
+        return "models"
+    return "other"
+
+
+def _respond(
+    *,
+    method: str,
+    path: str,
+    started_at: float,
+    status_code: int,
+    payload: dict[str, Any],
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    route = _route_name(path)
+    base_dimensions = {
+        "Route": route,
+        "Method": method,
+    }
+
+    _emit_metric(
+        "ChatbotRequestCount",
+        1,
+        dimensions={**base_dimensions, "StatusCode": str(status_code)},
+    )
+
+    duration_ms = max(0.0, (time.time() - started_at) * 1000.0)
+    _emit_metric("ChatbotLatencyMs", duration_ms, unit="Milliseconds", dimensions=base_dimensions)
+
+    if status_code >= 400:
+        _emit_metric("ChatbotErrorCount", 1, dimensions={**base_dimensions, "StatusCode": str(status_code)})
+    if status_code >= 500:
+        _emit_metric("ChatbotServerErrorCount", 1, dimensions=base_dimensions)
+
+    response: dict[str, Any] = {
+        "statusCode": status_code,
+        "body": json.dumps(payload),
+    }
+    if headers is not None:
+        response["headers"] = headers
+    return response
 
 
 def _load_api_token() -> str:
@@ -639,8 +735,15 @@ def handle_query(
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     method = str(event.get("requestContext", {}).get("http", {}).get("method") or "").upper()
     path = _request_path(event)
+    started_at = time.time()
     if method not in {"POST", "GET"}:
-        return {"statusCode": 405, "body": json.dumps({"error": "method_not_allowed"})}
+        return _respond(
+            method=method,
+            path=path,
+            started_at=started_at,
+            status_code=405,
+            payload={"error": "method_not_allowed"},
+        )
 
     # H4: API token auth
     expected_token = _load_api_token()
@@ -652,7 +755,13 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 provided = v
                 break
         if not hmac.compare_digest(provided, expected_token):
-            return {"statusCode": 401, "body": json.dumps({"error": "unauthorized"})}
+            return _respond(
+                method=method,
+                path=path,
+                started_at=started_at,
+                status_code=401,
+                payload={"error": "unauthorized"},
+            )
 
     if method == "GET":
         if path.endswith("/chatbot/models"):
@@ -660,56 +769,113 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 models = _list_bedrock_models(region=os.getenv("AWS_REGION", DEFAULT_REGION))
             except Exception:
                 logger.exception("chatbot_model_list_error")
-                return {"statusCode": 500, "body": json.dumps({"error": "model_list_failed"})}
+                return _respond(
+                    method=method,
+                    path=path,
+                    started_at=started_at,
+                    status_code=500,
+                    payload={"error": "model_list_failed"},
+                )
 
-            return {
-                "statusCode": 200,
-                "headers": {"Content-Type": "application/json"},
-                "body": json.dumps(
-                    {
-                        "models": models,
-                        "count": len(models),
-                        "region": os.getenv("AWS_REGION", DEFAULT_REGION),
-                    }
-                ),
-            }
+            return _respond(
+                method=method,
+                path=path,
+                started_at=started_at,
+                status_code=200,
+                headers={"Content-Type": "application/json"},
+                payload={
+                    "models": models,
+                    "count": len(models),
+                    "region": os.getenv("AWS_REGION", DEFAULT_REGION),
+                },
+            )
 
-        return {"statusCode": 405, "body": json.dumps({"error": "method_not_allowed"})}
+        return _respond(
+            method=method,
+            path=path,
+            started_at=started_at,
+            status_code=405,
+            payload={"error": "method_not_allowed"},
+        )
 
     try:
         body = json.loads(event.get("body") or "{}")
     except json.JSONDecodeError:
-        return {"statusCode": 400, "body": json.dumps({"error": "invalid_json"})}
+        return _respond(
+            method=method,
+            path=path,
+            started_at=started_at,
+            status_code=400,
+            payload={"error": "invalid_json"},
+        )
 
     query = str(body.get("query") or "").strip()
     is_image_route = path.endswith("/chatbot/image")
     if is_image_route:
         if not query:
-            return {"statusCode": 400, "body": json.dumps({"error": "query_required"})}
+            return _respond(
+                method=method,
+                path=path,
+                started_at=started_at,
+                status_code=400,
+                payload={"error": "query_required"},
+            )
         try:
             image_payload = _generate_image(
                 prompt=query,
                 model_id=str(body.get("model_id") or "").strip() or None,
                 size=str(body.get("size") or "").strip() or None,
             )
+            _emit_metric(
+                "ChatbotImageGeneratedCount",
+                float(image_payload.get("count") or 0),
+                dimensions={"Route": "image", "Method": method},
+            )
         except ValueError as exc:
-            return {"statusCode": 400, "body": json.dumps({"error": str(exc)})}
+            return _respond(
+                method=method,
+                path=path,
+                started_at=started_at,
+                status_code=400,
+                payload={"error": str(exc)},
+            )
         except Exception:
             logger.exception("chatbot_image_generation_error")
-            return {"statusCode": 500, "body": json.dumps({"error": "image_generation_failed"})}
+            return _respond(
+                method=method,
+                path=path,
+                started_at=started_at,
+                status_code=500,
+                payload={"error": "image_generation_failed"},
+            )
 
-        return {
-            "statusCode": 200,
-            "headers": {"Content-Type": "application/json"},
-            "body": json.dumps(image_payload),
-        }
+        return _respond(
+            method=method,
+            path=path,
+            started_at=started_at,
+            status_code=200,
+            headers={"Content-Type": "application/json"},
+            payload=image_payload,
+        )
 
     if not query:
-        return {"statusCode": 400, "body": json.dumps({"error": "query_required"})}
+        return _respond(
+            method=method,
+            path=path,
+            started_at=started_at,
+            status_code=400,
+            payload={"error": "query_required"},
+        )
 
     # H5: Query length limit
     if len(query) > MAX_QUERY_LENGTH:
-        return {"statusCode": 400, "body": json.dumps({"error": "query_too_long"})}
+        return _respond(
+            method=method,
+            path=path,
+            started_at=started_at,
+            status_code=400,
+            payload={"error": "query_too_long"},
+        )
 
     jira_jql = str(body.get("jira_jql") or "").strip() or "order by updated DESC"
     confluence_cql = str(body.get("confluence_cql") or "").strip() or "type=page order by lastmodified desc"
@@ -725,7 +891,13 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     # CQL/JQL validation is only required for contextual mode
     if assistant_mode == "contextual":
         if not _validate_query_filter(jira_jql) or not _validate_query_filter(confluence_cql):
-            return {"statusCode": 400, "body": json.dumps({"error": "invalid_query_filter"})}
+            return _respond(
+                method=method,
+                path=path,
+                started_at=started_at,
+                status_code=400,
+                payload={"error": "invalid_query_filter"},
+            )
 
     correlation_id = event.get("requestContext", {}).get("requestId", "unknown")
 
@@ -745,19 +917,28 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             stream_chunk_chars=stream_chunk_chars,
         )
     except ValueError as exc:
-        return {
-            "statusCode": 400,
-            "body": json.dumps({"error": str(exc)}),
-        }
+        return _respond(
+            method=method,
+            path=path,
+            started_at=started_at,
+            status_code=400,
+            payload={"error": str(exc)},
+        )
     except Exception:
         logger.exception("chatbot_internal_error", extra={"extra": {"correlation_id": correlation_id}})
-        return {
-            "statusCode": 500,
-            "body": json.dumps({"error": "internal_error", "correlation_id": correlation_id}),
-        }
+        return _respond(
+            method=method,
+            path=path,
+            started_at=started_at,
+            status_code=500,
+            payload={"error": "internal_error", "correlation_id": correlation_id},
+        )
 
-    return {
-        "statusCode": 200,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(response_body),
-    }
+    return _respond(
+        method=method,
+        path=path,
+        started_at=started_at,
+        status_code=200,
+        headers={"Content-Type": "application/json"},
+        payload=response_body,
+    )

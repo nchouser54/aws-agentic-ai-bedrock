@@ -545,6 +545,27 @@ def test_lambda_handler_auth_passed() -> None:
     assert out["statusCode"] == 200
 
 
+def test_lambda_handler_emits_metrics_for_successful_query() -> None:
+    import chatbot.app as chatbot_mod
+
+    chatbot_mod._cached_api_token = None
+    env = {
+        "CHATBOT_API_TOKEN_SECRET_ARN": "",
+        "CHATBOT_API_TOKEN": "",
+        "ATLASSIAN_CREDENTIALS_SECRET_ARN": "arn:fake",
+        "CHATBOT_MODEL_ID": "model",
+    }
+    with patch.dict("os.environ", env, clear=False):
+        with patch("chatbot.app._emit_metric") as emit_metric:
+            with patch("chatbot.app.handle_query", return_value={"answer": "ok", "sources": {}}):
+                out = lambda_handler(_api_event(body={"query": "test"}), None)
+
+    assert out["statusCode"] == 200
+    metric_names = [call.args[0] for call in emit_metric.call_args_list]
+    assert "ChatbotRequestCount" in metric_names
+    assert "ChatbotLatencyMs" in metric_names
+
+
 @patch("chatbot.app.handle_query", side_effect=RuntimeError("boom"))
 def test_lambda_handler_returns_500_on_internal_error(mock_hq) -> None:
     import chatbot.app as chatbot_mod
@@ -555,3 +576,18 @@ def test_lambda_handler_returns_500_on_internal_error(mock_hq) -> None:
     body = json.loads(out["body"])
     assert body["error"] == "internal_error"
     assert body["correlation_id"] == "req-test"
+
+
+@patch("chatbot.app.handle_query", side_effect=RuntimeError("boom"))
+def test_lambda_handler_emits_server_error_metric(_mock_hq) -> None:
+    import chatbot.app as chatbot_mod
+
+    chatbot_mod._cached_api_token = None
+    with patch("chatbot.app._emit_metric") as emit_metric:
+        with patch.dict("os.environ", {"CHATBOT_API_TOKEN_SECRET_ARN": "", "CHATBOT_API_TOKEN": ""}, clear=False):
+            out = lambda_handler(_api_event(body={"query": "test"}), None)
+
+    assert out["statusCode"] == 500
+    metric_names = [call.args[0] for call in emit_metric.call_args_list]
+    assert "ChatbotErrorCount" in metric_names
+    assert "ChatbotServerErrorCount" in metric_names

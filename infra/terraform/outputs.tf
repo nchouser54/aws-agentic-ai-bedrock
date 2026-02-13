@@ -67,3 +67,8 @@ output "pr_description_url" {
   description = "PR description generator endpoint"
   value       = var.pr_description_enabled ? "${aws_apigatewayv2_api.webhook.api_endpoint}/pr-description/generate" : ""
 }
+
+output "chatbot_observability_dashboard_name" {
+  description = "CloudWatch dashboard name for chatbot observability"
+  value       = var.chatbot_enabled && var.chatbot_observability_enabled ? aws_cloudwatch_dashboard.chatbot_observability[0].dashboard_name : ""
+}
