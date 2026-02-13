@@ -1045,6 +1045,21 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         route_key = str(request_context.get("routeKey") or "")
         connection_id = str(request_context.get("connectionId") or "")
 
+        expected_token = _load_api_token()
+        if expected_token and route_key != "$disconnect":
+            headers = event.get("headers") or {}
+            provided = ""
+            for k, v in headers.items():
+                if str(k).lower() == "x-api-token":
+                    provided = str(v or "")
+                    break
+            if not hmac.compare_digest(provided, expected_token):
+                if route_key == "$connect":
+                    return {"statusCode": 401, "body": "unauthorized"}
+                if connection_id:
+                    _ws_send(event, connection_id, {"type": "error", "error": "unauthorized"})
+                return {"statusCode": 200}
+
         if route_key in {"$connect", "$disconnect"}:
             return {"statusCode": 200}
 

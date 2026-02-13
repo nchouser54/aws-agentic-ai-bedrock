@@ -202,7 +202,7 @@ Chatbot login/auth options (Terraform `chatbot_auth_mode`):
 Recommended auth mode selection:
 
 | Mode | Best for | Pros | Trade-offs |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `token` | Fast local/dev smoke testing | Easiest setup, no IdP dependency | Shared secret model (not per-user identity) |
 | `jwt` | Company-wide production SSO | Centralized identity/MFA and standard enterprise controls | Requires OIDC issuer + audience configuration |
 | `github_oauth` | Engineering-focused bot access | Reuses GitHub/GHES identity, optional org gating | OAuth token validation path and GitHub API dependency |
@@ -489,13 +489,10 @@ Recommended rollout:
 
 ### Jira/Confluence chatbot setup
 
-1. Populate Secrets Manager secret `atlassian_credentials` with JSON:
-  - `jira_base_url` — e.g., `https://jira.example.com` (Data Center) or `https://yourcompany.atlassian.net` (Cloud)
-  - `confluence_base_url` — e.g., `https://confluence.example.com` (Data Center) or `https://yourcompany.atlassian.net` (Cloud)
-  - `email` — service account username (Data Center) or email (Cloud)
-  - `api_token` — personal access token (Data Center) or API token (Cloud)
-  - `platform` — `datacenter` or `cloud` (defaults to `cloud` if omitted)
+1. Populate Secrets Manager secret `atlassian_credentials` with JSON keys: `jira_base_url`, `confluence_base_url`, `email`, `api_token`, and `platform` (`datacenter` or `cloud`, defaults to `cloud` if omitted).
+
 2. Deploy Terraform and capture `chatbot_url` output.
+
 3. Send requests to `POST /chatbot/query`.
 
 Example request body:
