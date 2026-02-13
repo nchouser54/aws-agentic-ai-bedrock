@@ -9,6 +9,7 @@
 - Enforce enterprise hosted GitHub OAuth endpoint usage in the chatbot web login flow.
 - Support general AI chat mode and model/provider selection in chatbot requests.
 - Allow optional direct Anthropic provider while keeping Bedrock as default.
+- Expose dynamic GovCloud Bedrock model discovery for chat model selection (`GET /chatbot/models`).
 
 ## Current Blockers
 

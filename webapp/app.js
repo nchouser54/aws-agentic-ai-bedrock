@@ -6,6 +6,8 @@ const ids = {
   assistantMode: document.getElementById("assistantMode"),
   llmProvider: document.getElementById("llmProvider"),
   modelId: document.getElementById("modelId"),
+  refreshModelsBtn: document.getElementById("refreshModelsBtn"),
+  modelSuggestions: document.getElementById("modelSuggestions"),
   query: document.getElementById("query"),
   jiraJql: document.getElementById("jiraJql"),
   confluenceCql: document.getElementById("confluenceCql"),
@@ -221,6 +223,66 @@ function renderSources(sources = {}) {
   ids.sources.innerHTML = entries || "";
 }
 
+function deriveModelsEndpoint(queryEndpoint) {
+  const endpoint = queryEndpoint.trim();
+  if (!endpoint) return "";
+
+  try {
+    const u = new URL(endpoint);
+    if (u.pathname.endsWith("/chatbot/query")) {
+      u.pathname = u.pathname.replace(/\/chatbot\/query$/, "/chatbot/models");
+      return u.toString();
+    }
+
+    const basePath = u.pathname.endsWith("/") ? u.pathname.slice(0, -1) : u.pathname;
+    u.pathname = `${basePath}/chatbot/models`;
+    return u.toString();
+  } catch {
+    return "";
+  }
+}
+
+function setModelSuggestions(models = []) {
+  ids.modelSuggestions.innerHTML = "";
+  for (const modelId of models) {
+    const option = document.createElement("option");
+    option.value = String(modelId);
+    ids.modelSuggestions.appendChild(option);
+  }
+}
+
+async function refreshModels() {
+  const endpoint = deriveModelsEndpoint(ids.chatbotUrl.value);
+  if (!endpoint) {
+    setStatus("Set Chatbot URL first (must be a valid URL).", "err");
+    return;
+  }
+
+  ids.refreshModelsBtn.disabled = true;
+  setStatus("Fetching active GovCloud Bedrock models...", "muted");
+
+  try {
+    const res = await fetch(endpoint, {
+      method: "GET",
+      headers: buildHeaders(),
+    });
+    const body = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      setStatus(`Model refresh failed (${res.status}).`, "err");
+      return;
+    }
+
+    const models = (body.models || []).map((m) => m.model_id).filter(Boolean);
+    setModelSuggestions(models);
+    setStatus(`Loaded ${models.length} model option(s) from ${body.region || "GovCloud"}.`, "ok");
+  } catch (err) {
+    setStatus(`Model refresh failed: ${String(err)}`, "err");
+  } finally {
+    ids.refreshModelsBtn.disabled = false;
+  }
+}
+
 async function askChatbot() {
   const endpoint = ids.chatbotUrl.value.trim();
   const query = ids.query.value.trim();
@@ -283,6 +345,7 @@ async function askChatbot() {
 ids.saveBtn.addEventListener("click", saveSettings);
 ids.sendBtn.addEventListener("click", askChatbot);
 ids.githubLoginBtn.addEventListener("click", startGitHubLogin);
+ids.refreshModelsBtn.addEventListener("click", refreshModels);
 
 loadSettings();
 setStatus("Ready.");

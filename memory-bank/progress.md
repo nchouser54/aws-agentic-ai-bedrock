@@ -16,6 +16,7 @@
 - [x] Add LLM provider routing (`bedrock` and optional `anthropic_direct`)
 - [x] Add optional request `model_id` override with Bedrock allow-list support
 - [x] Add webapp controls for assistant mode/provider/model override
+- [x] Add GovCloud model discovery endpoint and webapp refresh for active Bedrock models
 - [x] Add Terraform knobs for provider defaults and Anthropic direct configuration
 - [x] Verify test suite after chat/provider/model updates (`174 passed`)
 

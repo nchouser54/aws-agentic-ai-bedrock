@@ -134,6 +134,46 @@ def _answer_with_provider(
     return client.answer(system_prompt=system_prompt, user_prompt=user_prompt)
 
 
+def _request_path(event: dict[str, Any]) -> str:
+    return (
+        str(event.get("rawPath") or "").strip()
+        or str(event.get("requestContext", {}).get("http", {}).get("path") or "").strip()
+    )
+
+
+def _list_bedrock_models(region: str) -> list[dict[str, Any]]:
+    control = boto3.client("bedrock", region_name=region)
+    resp = control.list_foundation_models(byOutputModality="TEXT")
+    summaries = resp.get("modelSummaries") or []
+
+    allowlist = _allowed_bedrock_model_ids()
+    models: list[dict[str, Any]] = []
+    for item in summaries:
+        model_id = str(item.get("modelId") or "").strip()
+        if not model_id:
+            continue
+
+        if allowlist and model_id not in allowlist:
+            continue
+
+        lifecycle = item.get("modelLifecycle") or {}
+        if str(lifecycle.get("status") or "").upper() != "ACTIVE":
+            continue
+
+        models.append(
+            {
+                "model_id": model_id,
+                "name": str(item.get("modelName") or model_id),
+                "provider": str(item.get("providerName") or "unknown"),
+                "inference_types": [str(x) for x in (item.get("inferenceTypesSupported") or [])],
+                "output_modalities": [str(x) for x in (item.get("outputModalities") or [])],
+            }
+        )
+
+    models.sort(key=lambda m: (m["provider"].lower(), m["name"].lower(), m["model_id"].lower()))
+    return models
+
+
 def _format_jira(issues: list[dict[str, Any]]) -> str:
     rows: list[str] = []
     for issue in issues:
@@ -389,7 +429,9 @@ def handle_query(
 
 
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
-    if event.get("requestContext", {}).get("http", {}).get("method") != "POST":
+    method = str(event.get("requestContext", {}).get("http", {}).get("method") or "").upper()
+    path = _request_path(event)
+    if method not in {"POST", "GET"}:
         return {"statusCode": 405, "body": json.dumps({"error": "method_not_allowed"})}
 
     # H4: API token auth
@@ -403,6 +445,28 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 break
         if not hmac.compare_digest(provided, expected_token):
             return {"statusCode": 401, "body": json.dumps({"error": "unauthorized"})}
+
+    if method == "GET":
+        if path.endswith("/chatbot/models"):
+            try:
+                models = _list_bedrock_models(region=os.getenv("AWS_REGION", DEFAULT_REGION))
+            except Exception:
+                logger.exception("chatbot_model_list_error")
+                return {"statusCode": 500, "body": json.dumps({"error": "model_list_failed"})}
+
+            return {
+                "statusCode": 200,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps(
+                    {
+                        "models": models,
+                        "count": len(models),
+                        "region": os.getenv("AWS_REGION", DEFAULT_REGION),
+                    }
+                ),
+            }
+
+        return {"statusCode": 405, "body": json.dumps({"error": "method_not_allowed"})}
 
     try:
         body = json.loads(event.get("body") or "{}")
