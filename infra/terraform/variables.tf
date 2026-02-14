@@ -19,7 +19,7 @@ variable "environment" {
 variable "log_retention_days" {
   description = "CloudWatch Logs retention in days"
   type        = number
-  default     = 30
+  default     = 14
 }
 
 variable "github_api_base" {
@@ -242,7 +242,7 @@ variable "chatbot_github_live_repos" {
 variable "chatbot_github_live_max_results" {
   description = "Maximum live GitHub search results used per chatbot query"
   type        = number
-  default     = 3
+  default     = 2
 
   validation {
     condition     = var.chatbot_github_live_max_results >= 1
@@ -282,7 +282,7 @@ variable "chatbot_atlassian_session_ttl_seconds" {
 variable "chatbot_memory_max_turns" {
   description = "Maximum number of recent memory turns included in each chatbot prompt"
   type        = number
-  default     = 6
+  default     = 4
 
   validation {
     condition     = var.chatbot_memory_max_turns >= 1
@@ -343,7 +343,7 @@ variable "chatbot_quota_fail_open" {
 variable "chatbot_response_cache_enabled" {
   description = "Enable semantic response cache for repeated chatbot queries"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "chatbot_response_cache_table" {
@@ -355,7 +355,7 @@ variable "chatbot_response_cache_table" {
 variable "chatbot_response_cache_ttl_seconds" {
   description = "TTL in seconds for chatbot response cache entries"
   type        = number
-  default     = 300
+  default     = 1200
 
   validation {
     condition     = var.chatbot_response_cache_ttl_seconds >= 30
@@ -461,7 +461,7 @@ variable "chatbot_safety_scan_char_limit" {
 variable "chatbot_context_max_chars_per_source" {
   description = "Maximum context characters per source block (Jira/Confluence/KB/GitHub) included in chatbot prompts"
   type        = number
-  default     = 3500
+  default     = 2500
 
   validation {
     condition     = var.chatbot_context_max_chars_per_source >= 256
@@ -472,7 +472,7 @@ variable "chatbot_context_max_chars_per_source" {
 variable "chatbot_context_max_total_chars" {
   description = "Maximum total context characters included in chatbot prompts across all sources"
   type        = number
-  default     = 12000
+  default     = 8000
 
   validation {
     condition     = var.chatbot_context_max_total_chars >= 1024
@@ -483,7 +483,7 @@ variable "chatbot_context_max_total_chars" {
 variable "chatbot_budgets_enabled" {
   description = "Enable conversation-level budget tracking and model routing"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "chatbot_budget_table" {
@@ -495,7 +495,7 @@ variable "chatbot_budget_table" {
 variable "chatbot_budget_soft_limit_usd" {
   description = "Conversation-level soft budget limit in USD for routing toward low-cost models"
   type        = number
-  default     = 0.5
+  default     = 0.25
 
   validation {
     condition     = var.chatbot_budget_soft_limit_usd >= 0
@@ -506,7 +506,7 @@ variable "chatbot_budget_soft_limit_usd" {
 variable "chatbot_budget_hard_limit_usd" {
   description = "Conversation-level hard budget limit in USD; requests are rejected when exceeded"
   type        = number
-  default     = 1.0
+  default     = 0.75
 
   validation {
     condition     = var.chatbot_budget_hard_limit_usd >= var.chatbot_budget_soft_limit_usd
@@ -521,6 +521,28 @@ variable "chatbot_budget_ttl_days" {
 
   validation {
     condition     = var.chatbot_budget_ttl_days >= 1
+    error_message = "Must be at least 1."
+  }
+}
+
+variable "chatbot_jira_max_results" {
+  description = "Maximum Jira issues fetched per contextual chatbot request"
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.chatbot_jira_max_results >= 1
+    error_message = "Must be at least 1."
+  }
+}
+
+variable "chatbot_confluence_max_results" {
+  description = "Maximum Confluence pages fetched per contextual chatbot request"
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.chatbot_confluence_max_results >= 1
     error_message = "Must be at least 1."
   }
 }
@@ -561,6 +583,12 @@ variable "chatbot_image_model_id" {
   default     = "amazon.nova-canvas-v1:0"
 }
 
+variable "chatbot_image_enabled" {
+  description = "Enable /chatbot/image endpoint (disable to avoid image-model spend)"
+  type        = bool
+  default     = false
+}
+
 variable "chatbot_image_default_size" {
   description = "Default image size for /chatbot/image in WIDTHxHEIGHT format"
   type        = string
@@ -590,7 +618,7 @@ variable "chatbot_image_banned_terms" {
 variable "chatbot_image_user_requests_per_minute" {
   description = "Per-user image generation request quota per minute"
   type        = number
-  default     = 30
+  default     = 6
 
   validation {
     condition     = var.chatbot_image_user_requests_per_minute >= 1
@@ -601,7 +629,7 @@ variable "chatbot_image_user_requests_per_minute" {
 variable "chatbot_image_conversation_requests_per_minute" {
   description = "Per-conversation image generation request quota per minute"
   type        = number
-  default     = 10
+  default     = 3
 
   validation {
     condition     = var.chatbot_image_conversation_requests_per_minute >= 1
@@ -653,7 +681,7 @@ variable "bedrock_knowledge_base_id" {
 variable "bedrock_kb_top_k" {
   description = "Number of Knowledge Base retrieval results for chatbot queries"
   type        = number
-  default     = 5
+  default     = 3
 
   validation {
     condition     = var.bedrock_kb_top_k >= 1
@@ -1079,4 +1107,48 @@ variable "lambda_reserved_concurrency_chatbot" {
   description = "Reserved concurrent executions for chatbot Lambda. Set to -1 for unreserved."
   type        = number
   default     = 20
+}
+
+variable "worker_lambda_architecture" {
+  description = "Lambda architecture for PR review worker (arm64 is typically lower cost)"
+  type        = string
+  default     = "arm64"
+
+  validation {
+    condition     = contains(["arm64", "x86_64"], var.worker_lambda_architecture)
+    error_message = "Must be one of: arm64, x86_64."
+  }
+}
+
+variable "worker_lambda_memory_size" {
+  description = "Memory size (MB) for PR review worker Lambda"
+  type        = number
+  default     = 768
+
+  validation {
+    condition     = var.worker_lambda_memory_size >= 128
+    error_message = "Must be at least 128."
+  }
+}
+
+variable "chatbot_lambda_architecture" {
+  description = "Lambda architecture for chatbot Lambda (arm64 is typically lower cost)"
+  type        = string
+  default     = "arm64"
+
+  validation {
+    condition     = contains(["arm64", "x86_64"], var.chatbot_lambda_architecture)
+    error_message = "Must be one of: arm64, x86_64."
+  }
+}
+
+variable "chatbot_lambda_memory_size" {
+  description = "Memory size (MB) for chatbot Lambda"
+  type        = number
+  default     = 384
+
+  validation {
+    condition     = var.chatbot_lambda_memory_size >= 128
+    error_message = "Must be at least 128."
+  }
 }

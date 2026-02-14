@@ -158,10 +158,10 @@ Prompt/context safety controls:
 
 Dynamic routing + budget controls:
 
-- `CHATBOT_BUDGETS_ENABLED=true|false` (default `false`)
+- `CHATBOT_BUDGETS_ENABLED=true|false` (default `true`)
 - `CHATBOT_BUDGET_TABLE` (optional DynamoDB table; defaults to chatbot memory table when configured)
-- `CHATBOT_BUDGET_SOFT_LIMIT_USD` (default `0.50`)
-- `CHATBOT_BUDGET_HARD_LIMIT_USD` (default `1.00`)
+- `CHATBOT_BUDGET_SOFT_LIMIT_USD` (default `0.25`)
+- `CHATBOT_BUDGET_HARD_LIMIT_USD` (default `0.75`)
 - `CHATBOT_BUDGET_TTL_DAYS` (default `90`)
 - `CHATBOT_ROUTER_LOW_COST_BEDROCK_MODEL_ID` / `CHATBOT_ROUTER_HIGH_QUALITY_BEDROCK_MODEL_ID`
 - `CHATBOT_ROUTER_LOW_COST_ANTHROPIC_MODEL_ID` / `CHATBOT_ROUTER_HIGH_QUALITY_ANTHROPIC_MODEL_ID`
@@ -183,6 +183,7 @@ Model discovery endpoint:
 Image generation endpoint:
 
 - `POST /chatbot/image`
+- Requires `CHATBOT_IMAGE_ENABLED=true` (Terraform default is `false` to avoid image-model spend)
 - JSON body:
   - `query` (required image prompt)
   - `model_id` (optional Bedrock image model override)
@@ -191,16 +192,17 @@ Image generation endpoint:
 
 Image safety and rate controls:
 
+- `CHATBOT_IMAGE_ENABLED=true|false` (default `false` in Terraform)
 - `CHATBOT_IMAGE_SAFETY_ENABLED=true|false`
 - `CHATBOT_IMAGE_BANNED_TERMS` (CSV blocked phrases)
-- `CHATBOT_IMAGE_USER_REQUESTS_PER_MINUTE` (default `30`)
-- `CHATBOT_IMAGE_CONVERSATION_REQUESTS_PER_MINUTE` (default `10`)
+- `CHATBOT_IMAGE_USER_REQUESTS_PER_MINUTE` (default `6`)
+- `CHATBOT_IMAGE_CONVERSATION_REQUESTS_PER_MINUTE` (default `3`)
 
 Conversation memory options (optional):
 
 - `CHATBOT_MEMORY_ENABLED=true|false`
 - `CHATBOT_MEMORY_TABLE=<dynamodb table name>`
-- `CHATBOT_MEMORY_MAX_TURNS` (default `6`)
+- `CHATBOT_MEMORY_MAX_TURNS` (default `4`)
 - `CHATBOT_MEMORY_TTL_DAYS` (default `30`)
 - `CHATBOT_MEMORY_COMPACTION_CHARS` (default `12000`; writes rolling summary entries when exceeded)
 - `CHATBOT_USER_REQUESTS_PER_MINUTE` (default `120`)
@@ -225,9 +227,9 @@ Atlassian auth mode:
 
 Response cache options (optional):
 
-- `CHATBOT_RESPONSE_CACHE_ENABLED=true|false` (default `false`)
+- `CHATBOT_RESPONSE_CACHE_ENABLED=true|false` (default `true`)
 - `CHATBOT_RESPONSE_CACHE_TABLE=<dynamodb table name>` (optional; defaults to memory table when configured)
-- `CHATBOT_RESPONSE_CACHE_TTL_SECONDS` (default `300`)
+- `CHATBOT_RESPONSE_CACHE_TTL_SECONDS` (default `1200`)
 - `CHATBOT_RESPONSE_CACHE_MIN_QUERY_LENGTH` (default `12`; short queries skip cache lookup)
 - `CHATBOT_RESPONSE_CACHE_MAX_ANSWER_CHARS` (default `16000`; large answers are not cached)
 - `CHATBOT_RESPONSE_CACHE_LOCK_TTL_SECONDS` (default `15`)
@@ -238,9 +240,16 @@ Response cache options (optional):
 
 Context budget controls:
 
-- `CHATBOT_CONTEXT_MAX_CHARS_PER_SOURCE` (default `3500`)
-- `CHATBOT_CONTEXT_MAX_TOTAL_CHARS` (default `12000`)
+- `CHATBOT_CONTEXT_MAX_CHARS_PER_SOURCE` (default `2500`)
+- `CHATBOT_CONTEXT_MAX_TOTAL_CHARS` (default `8000`)
 - Context blocks are truncated before model invocation to reduce latency/cost while preserving source diversity.
+
+Live retrieval fanout controls:
+
+- `CHATBOT_JIRA_MAX_RESULTS` (default `3`)
+- `CHATBOT_CONFLUENCE_MAX_RESULTS` (default `3`)
+- `GITHUB_CHAT_MAX_RESULTS` (default `2`)
+- `BEDROCK_KB_TOP_K` (default `3`)
 
 Memory hygiene endpoints:
 
@@ -286,6 +295,12 @@ Chatbot observability options:
 - `ChatbotSensitiveStoreSkippedCount`
 - Runtime toggle: `CHATBOT_METRICS_ENABLED=true|false`
 
+Infrastructure cost controls (Terraform defaults):
+
+- `log_retention_days=14`
+- `worker_lambda_architecture="arm64"` and `worker_lambda_memory_size=768`
+- `chatbot_lambda_architecture="arm64"` and `chatbot_lambda_memory_size=384`
+
 WebSocket streaming options:
 
 - `chatbot_websocket_enabled` (Terraform; default `true`)
@@ -298,7 +313,7 @@ Optional live GitHub lookup (disabled by default):
 
 - `chatbot_github_live_enabled=true`
 - `chatbot_github_live_repos=["owner/repo", ...]`
-- `chatbot_github_live_max_results=3`
+- `chatbot_github_live_max_results=2`
 
 When enabled, `live`/`hybrid` mode can include real-time GitHub code/doc snippets in chatbot context.
 

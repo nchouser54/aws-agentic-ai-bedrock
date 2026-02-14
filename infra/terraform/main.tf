@@ -1027,7 +1027,8 @@ resource "aws_lambda_function" "pr_review_worker" {
   filename         = data.archive_file.lambda_bundle.output_path
   source_code_hash = data.archive_file.lambda_bundle.output_base64sha256
   timeout          = 180
-  memory_size      = 1024
+  memory_size      = var.worker_lambda_memory_size
+  architectures    = [var.worker_lambda_architecture]
 
   environment {
     variables = {
@@ -1079,7 +1080,8 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
   filename         = data.archive_file.lambda_bundle.output_path
   source_code_hash = data.archive_file.lambda_bundle.output_base64sha256
   timeout          = 30
-  memory_size      = 512
+  memory_size      = var.chatbot_lambda_memory_size
+  architectures    = [var.chatbot_lambda_architecture]
 
   environment {
     variables = {
@@ -1103,11 +1105,14 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
       CHATBOT_ANTHROPIC_API_BASE                     = var.chatbot_anthropic_api_base
       CHATBOT_ANTHROPIC_MODEL_ID                     = var.chatbot_anthropic_model_id
       CHATBOT_IMAGE_MODEL_ID                         = var.chatbot_image_model_id
+      CHATBOT_IMAGE_ENABLED                          = tostring(var.chatbot_image_enabled)
       CHATBOT_IMAGE_SIZE                             = var.chatbot_image_default_size
       CHATBOT_IMAGE_SAFETY_ENABLED                   = tostring(var.chatbot_image_safety_enabled)
       CHATBOT_IMAGE_BANNED_TERMS                     = join(",", var.chatbot_image_banned_terms)
       CHATBOT_IMAGE_USER_REQUESTS_PER_MINUTE         = tostring(var.chatbot_image_user_requests_per_minute)
       CHATBOT_IMAGE_CONVERSATION_REQUESTS_PER_MINUTE = tostring(var.chatbot_image_conversation_requests_per_minute)
+      CHATBOT_JIRA_MAX_RESULTS                       = tostring(var.chatbot_jira_max_results)
+      CHATBOT_CONFLUENCE_MAX_RESULTS                 = tostring(var.chatbot_confluence_max_results)
       CHATBOT_MEMORY_ENABLED                         = tostring(var.chatbot_memory_enabled)
       CHATBOT_MEMORY_TABLE                           = local.chatbot_memory_enabled ? aws_dynamodb_table.chatbot_memory[0].name : ""
       CHATBOT_MEMORY_MAX_TURNS                       = tostring(var.chatbot_memory_max_turns)
@@ -1422,7 +1427,7 @@ resource "aws_apigatewayv2_route" "chatbot_models" {
 }
 
 resource "aws_apigatewayv2_route" "chatbot_image" {
-  count              = var.chatbot_enabled ? 1 : 0
+  count              = var.chatbot_enabled && var.chatbot_image_enabled ? 1 : 0
   api_id             = aws_apigatewayv2_api.webhook.id
   route_key          = "POST /chatbot/image"
   target             = "integrations/${aws_apigatewayv2_integration.chatbot_lambda[0].id}"

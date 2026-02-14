@@ -189,6 +189,7 @@ def _error_status_code(error_code: str) -> int:
         "data_exfiltration_attempt",
         "atlassian_user_auth_disabled",
         "atlassian_session_broker_disabled",
+        "image_generation_disabled",
     }:
         return 403
     if normalized in {
@@ -273,16 +274,30 @@ def _default_bedrock_model_ids() -> set[str]:
 def _allowed_bedrock_model_ids() -> set[str]:
     raw = os.getenv("CHATBOT_ALLOWED_MODEL_IDS", "").strip()
     if raw:
-        return {item.strip() for item in raw.split(",") if item.strip()}
-    return _default_bedrock_model_ids()
+        allowlist = {item.strip() for item in raw.split(",") if item.strip()}
+    else:
+        allowlist = _default_bedrock_model_ids()
+
+    for env_name in ("CHATBOT_ROUTER_LOW_COST_BEDROCK_MODEL_ID", "CHATBOT_ROUTER_HIGH_QUALITY_BEDROCK_MODEL_ID"):
+        candidate = os.getenv(env_name, "").strip()
+        if candidate:
+            allowlist.add(candidate)
+    return allowlist
 
 
 def _allowed_anthropic_model_ids() -> set[str]:
     raw = os.getenv("CHATBOT_ALLOWED_ANTHROPIC_MODEL_IDS", "").strip()
     if raw:
-        return {item.strip() for item in raw.split(",") if item.strip()}
-    default_model = os.getenv("CHATBOT_ANTHROPIC_MODEL_ID", "claude-sonnet-4-5").strip()
-    return {default_model} if default_model else set()
+        allowlist = {item.strip() for item in raw.split(",") if item.strip()}
+    else:
+        default_model = os.getenv("CHATBOT_ANTHROPIC_MODEL_ID", "claude-sonnet-4-5").strip()
+        allowlist = {default_model} if default_model else set()
+
+    for env_name in ("CHATBOT_ROUTER_LOW_COST_ANTHROPIC_MODEL_ID", "CHATBOT_ROUTER_HIGH_QUALITY_ANTHROPIC_MODEL_ID"):
+        candidate = os.getenv(env_name, "").strip()
+        if candidate:
+            allowlist.add(candidate)
+    return allowlist
 
 
 def _validate_bedrock_model_id(model_id: str) -> None:
@@ -364,6 +379,10 @@ def _image_conversation_requests_per_minute_limit() -> int:
     return max(1, int(os.getenv("CHATBOT_IMAGE_CONVERSATION_REQUESTS_PER_MINUTE", "10")))
 
 
+def _image_generation_enabled() -> bool:
+    return os.getenv("CHATBOT_IMAGE_ENABLED", "true").strip().lower() == "true"
+
+
 def _image_safety_enabled() -> bool:
     return os.getenv("CHATBOT_IMAGE_SAFETY_ENABLED", "true").strip().lower() == "true"
 
@@ -416,6 +435,14 @@ def _context_max_chars_per_source() -> int:
 
 def _context_max_total_chars() -> int:
     return max(1024, int(os.getenv("CHATBOT_CONTEXT_MAX_TOTAL_CHARS", "12000")))
+
+
+def _jira_live_max_results() -> int:
+    return max(1, min(10, int(os.getenv("CHATBOT_JIRA_MAX_RESULTS", "3"))))
+
+
+def _confluence_live_max_results() -> int:
+    return max(1, min(10, int(os.getenv("CHATBOT_CONFLUENCE_MAX_RESULTS", "3"))))
 
 
 def _atlassian_user_auth_enabled() -> bool:
@@ -2058,7 +2085,7 @@ def _load_github_context(query: str, local_logger: Any) -> list[dict[str, Any]]:
         local_logger.warning("github_live_missing_secrets")
         return []
 
-    max_results = max(1, int(os.getenv("GITHUB_CHAT_MAX_RESULTS", "3")))
+    max_results = max(1, int(os.getenv("GITHUB_CHAT_MAX_RESULTS", "2")))
     api_base = os.getenv("GITHUB_API_BASE", "https://api.github.com")
 
     auth = GitHubAppAuth(
@@ -2645,8 +2672,12 @@ def handle_query(
                 api_token_override=atlassian_api_token_override,
             )
             with ThreadPoolExecutor(max_workers=3) as pool:
-                jira_future = pool.submit(atlassian.search_jira, jira_jql, 5)
-                confluence_future = pool.submit(atlassian.search_confluence, confluence_cql, 5)
+                jira_future = pool.submit(atlassian.search_jira, jira_jql, _jira_live_max_results())
+                confluence_future = pool.submit(
+                    atlassian.search_confluence,
+                    confluence_cql,
+                    _confluence_live_max_results(),
+                )
                 github_future = pool.submit(_load_github_context, query, local_logger)
                 jira_items = jira_future.result()
                 conf_items = confluence_future.result()
@@ -3056,6 +3087,14 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     request_headers = event.get("headers") or {}
     is_image_route = path.endswith("/chatbot/image")
     if is_image_route:
+        if not _image_generation_enabled():
+            return _respond(
+                method=method,
+                path=path,
+                started_at=started_at,
+                status_code=403,
+                payload={"error": "image_generation_disabled"},
+            )
         if not query:
             return _respond(
                 method=method,

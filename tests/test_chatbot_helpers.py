@@ -300,6 +300,34 @@ def test_handle_query_live_mode(mock_atlassian_cls, mock_chat_cls) -> None:
 
 @patch("chatbot.app.BedrockChatClient")
 @patch("chatbot.app.AtlassianClient")
+def test_handle_query_live_mode_respects_live_result_limits(mock_atlassian_cls, mock_chat_cls) -> None:
+    mock_chat = MagicMock()
+    mock_chat.answer.return_value = "Live mode answer"
+    mock_chat_cls.return_value = mock_chat
+
+    mock_atlassian = MagicMock()
+    mock_atlassian.search_jira.return_value = [{"key": "ENG-1", "fields": {"summary": "Fix"}}]
+    mock_atlassian.search_confluence.return_value = [{"title": "Runbook", "url": "https://wiki/runbook"}]
+    mock_atlassian_cls.return_value = mock_atlassian
+
+    with patch.dict(
+        "os.environ",
+        {
+            "ATLASSIAN_CREDENTIALS_SECRET_ARN": "arn:fake",
+            "CHATBOT_MODEL_ID": "anthropic.model",
+            "CHATBOT_JIRA_MAX_RESULTS": "2",
+            "CHATBOT_CONFLUENCE_MAX_RESULTS": "4",
+        },
+        clear=False,
+    ):
+        _out = handle_query("what is broken", "project=ENG", "type=page", "corr-live-limits", retrieval_mode="live")
+
+    mock_atlassian.search_jira.assert_called_once_with("project=ENG", 2)
+    mock_atlassian.search_confluence.assert_called_once_with("type=page", 4)
+
+
+@patch("chatbot.app.BedrockChatClient")
+@patch("chatbot.app.AtlassianClient")
 def test_handle_query_live_mode_with_user_atlassian_override(mock_atlassian_cls, mock_chat_cls) -> None:
     mock_chat = MagicMock()
     mock_chat.answer.return_value = "Live mode answer"
@@ -777,6 +805,33 @@ def test_handle_query_dynamic_routing_uses_low_cost_model(mock_chat_cls) -> None
     assert mock_chat_cls.call_args.kwargs["model_id"] == "low-model"
 
 
+@patch("chatbot.app.BedrockChatClient")
+def test_handle_query_dynamic_routing_allows_router_models_not_in_allowlist(mock_chat_cls) -> None:
+    mock_chat = MagicMock()
+    mock_chat.answer.return_value = "General answer"
+    mock_chat_cls.return_value = mock_chat
+
+    env = {
+        "CHATBOT_MODEL_ID": "high-model",
+        "CHATBOT_ALLOWED_MODEL_IDS": "high-model",
+        "CHATBOT_ROUTER_LOW_COST_BEDROCK_MODEL_ID": "low-model",
+        "CHATBOT_ROUTER_HIGH_QUALITY_BEDROCK_MODEL_ID": "high-model",
+    }
+    with patch.dict("os.environ", env, clear=False):
+        out = handle_query(
+            "status?",
+            "order by updated DESC",
+            "type=page",
+            "corr-route-low-allow",
+            assistant_mode="general",
+            llm_provider="bedrock",
+        )
+
+    assert out["sources"]["model_id"] == "low-model"
+    assert out["sources"]["model_routing"]["reason"] == "low_complexity"
+    assert mock_chat_cls.call_args.kwargs["model_id"] == "low-model"
+
+
 @patch("chatbot.app._append_conversation_turn")
 @patch("chatbot.app._store_cached_response")
 @patch(
@@ -937,7 +992,7 @@ def test_handle_query_response_cache_hit_stream_callback(
 
 
 @patch("chatbot.app.BedrockChatClient")
-def test_handle_query_high_quality_router_model_not_allowed_falls_back(mock_chat_cls) -> None:
+def test_handle_query_high_quality_router_model_is_allowlisted(mock_chat_cls) -> None:
     mock_chat = MagicMock()
     mock_chat.answer.return_value = "General answer"
     mock_chat_cls.return_value = mock_chat
@@ -958,9 +1013,9 @@ def test_handle_query_high_quality_router_model_not_allowed_falls_back(mock_chat
             llm_provider="bedrock",
         )
 
-    assert out["sources"]["model_id"] == "high-model"
-    assert out["sources"]["model_routing"]["reason"] == "high_quality_model_not_allowed"
-    assert mock_chat_cls.call_args.kwargs["model_id"] == "high-model"
+    assert out["sources"]["model_id"] == "disallowed-model"
+    assert out["sources"]["model_routing"]["reason"] == "default"
+    assert mock_chat_cls.call_args.kwargs["model_id"] == "disallowed-model"
 
 
 @patch(
@@ -1134,6 +1189,26 @@ def test_lambda_handler_image_route(mock_image) -> None:
     assert body["count"] == 1
     assert body["model_id"] == "amazon.nova-canvas-v1:0"
     mock_image.assert_called_once()
+
+
+def test_lambda_handler_image_route_disabled() -> None:
+    import chatbot.app as chatbot_mod
+
+    chatbot_mod._cached_api_token = None
+    env = {
+        "CHATBOT_API_TOKEN_SECRET_ARN": "",
+        "CHATBOT_API_TOKEN": "",
+        "CHATBOT_IMAGE_ENABLED": "false",
+    }
+    with patch.dict("os.environ", env, clear=False):
+        event = _api_event(body={"query": "Draw a skyline"})
+        event["rawPath"] = "/chatbot/image"
+        event["requestContext"]["http"]["path"] = "/chatbot/image"
+        out = lambda_handler(event, None)
+
+    assert out["statusCode"] == 403
+    body = json.loads(out["body"])
+    assert body["error"] == "image_generation_disabled"
 
 
 def test_lambda_handler_image_prompt_blocked() -> None:
