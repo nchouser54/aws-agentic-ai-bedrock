@@ -1,3 +1,9 @@
+variable "aws_region" {
+  description = "AWS region for all resources. Defaults to GovCloud us-gov-west-1."
+  type        = string
+  default     = "us-gov-west-1"
+}
+
 variable "project_name" {
   description = "Project name prefix for resources"
   type        = string
@@ -493,6 +499,41 @@ variable "github_oauth_allowed_orgs" {
   default     = []
 }
 
+variable "webapp_default_chatbot_url" {
+  description = "Optional default chatbot URL pre-filled in EC2-hosted web UI. When empty, defaults to this stack's /chatbot/query endpoint."
+  type        = string
+  default     = ""
+}
+
+variable "webapp_default_auth_mode" {
+  description = "Default auth mode pre-filled in EC2-hosted web UI (token, bearer, or none)."
+  type        = string
+  default     = "bearer"
+
+  validation {
+    condition     = contains(["token", "bearer", "none"], var.webapp_default_auth_mode)
+    error_message = "webapp_default_auth_mode must be one of: token, bearer, none."
+  }
+}
+
+variable "webapp_default_github_oauth_base_url" {
+  description = "Optional default GitHub OAuth base URL pre-filled in web UI (for device flow), e.g. https://github.company.mil"
+  type        = string
+  default     = ""
+}
+
+variable "webapp_default_github_client_id" {
+  description = "Optional default GitHub OAuth app client ID pre-filled in web UI"
+  type        = string
+  default     = ""
+}
+
+variable "webapp_default_github_scope" {
+  description = "Default GitHub OAuth scope pre-filled in web UI"
+  type        = string
+  default     = "read:user read:org"
+}
+
 variable "alarm_sns_topic_arn" {
   description = "Optional SNS topic ARN for CloudWatch alarm notifications. Alarms are created only when set."
   type        = string
@@ -626,4 +667,107 @@ variable "pr_description_model_id" {
   description = "Bedrock model ID for PR description generation (falls back to bedrock_model_id)"
   type        = string
   default     = ""
+}
+
+# ---------------------------------------------------------------------------
+# Static Web App Hosting
+# ---------------------------------------------------------------------------
+
+variable "webapp_hosting_enabled" {
+  description = "Enable Terraform-managed static chatbot webapp deployment"
+  type        = bool
+  default     = false
+}
+
+variable "webapp_hosting_mode" {
+  description = "Hosting mode for static chatbot webapp: s3 or ec2_eip"
+  type        = string
+  default     = "s3"
+
+  validation {
+    condition     = contains(["s3", "ec2_eip"], var.webapp_hosting_mode)
+    error_message = "Must be one of: s3, ec2_eip."
+  }
+}
+
+variable "webapp_bucket_name" {
+  description = "Optional explicit S3 bucket name for static webapp hosting (must be globally unique)"
+  type        = string
+  default     = ""
+}
+
+variable "webapp_ec2_subnet_id" {
+  description = "Subnet ID for EC2 static webapp instance when webapp_hosting_mode=ec2_eip"
+  type        = string
+  default     = ""
+}
+
+variable "webapp_ec2_instance_type" {
+  description = "EC2 instance type for static webapp hosting when webapp_hosting_mode=ec2_eip"
+  type        = string
+  default     = "t3.micro"
+}
+
+variable "webapp_ec2_allowed_cidrs" {
+  description = "CIDR blocks allowed to reach EC2-hosted static webapp over HTTP"
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
+
+variable "webapp_ec2_key_name" {
+  description = "Optional EC2 key pair name for SSH access to webapp instance"
+  type        = string
+  default     = ""
+}
+
+variable "webapp_ec2_ami_id" {
+  description = "Optional AMI ID override for EC2 static webapp hosting (defaults to latest Amazon Linux 2 x86_64)"
+  type        = string
+  default     = ""
+}
+
+variable "webapp_private_only" {
+  description = "When true, deploy EC2-hosted webapp as private-only within VPC (no public IPs or Elastic IPs)"
+  type        = bool
+  default     = false
+}
+
+variable "webapp_tls_enabled" {
+  description = "Enable HTTPS termination for EC2-hosted static webapp using an internet-facing NLB and ACM certificate"
+  type        = bool
+  default     = false
+}
+
+variable "webapp_tls_acm_certificate_arn" {
+  description = "ACM certificate ARN for HTTPS listener when webapp_tls_enabled=true"
+  type        = string
+  default     = ""
+}
+
+variable "webapp_tls_subnet_ids" {
+  description = "Public subnet IDs for NLB static-IP subnet mappings when webapp_tls_enabled=true"
+  type        = list(string)
+  default     = []
+}
+
+# ---------------------------------------------------------------------------
+# Observability & Lambda guardrails
+# ---------------------------------------------------------------------------
+
+variable "lambda_tracing_enabled" {
+  description = "Enable AWS X-Ray active tracing on all Lambda functions"
+  type        = bool
+  default     = true
+}
+
+variable "lambda_reserved_concurrency_worker" {
+  description = "Reserved concurrent executions for SQS-triggered worker Lambdas (pr-review, test-gen, pr-description). Set to -1 for unreserved."
+  type        = number
+  default     = 10
+}
+
+variable "lambda_reserved_concurrency_chatbot" {
+  description = "Reserved concurrent executions for chatbot Lambda. Set to -1 for unreserved."
+  type        = number
+  default     = 20
 }

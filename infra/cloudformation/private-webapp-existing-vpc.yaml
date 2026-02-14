@@ -1,0 +1,208 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Private chatbot webapp EC2 deployment into an existing VPC/subnet.
+  No VPC resources are created. No public IPs are allocated.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: nonprod
+    Description: Environment tag value.
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing VPC ID.
+
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Existing private subnet ID for the webapp instance.
+
+  AllowedCidr1:
+    Type: String
+    Default: 10.0.0.0/8
+    Description: Required CIDR allowed to reach webapp HTTP port 80.
+
+  AllowedCidr2:
+    Type: String
+    Default: ''
+    Description: Optional additional CIDR allowed to reach webapp HTTP port 80.
+
+  AllowedCidr3:
+    Type: String
+    Default: ''
+    Description: Optional additional CIDR allowed to reach webapp HTTP port 80.
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t3.nano
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+      - t3.2xlarge
+    Description: EC2 instance size.
+
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+    Description: SSM parameter for AMI ID.
+
+  KeyName:
+    Type: String
+    Default: ''
+    Description: Optional EC2 key pair name.
+
+  ExistingTargetGroupArn:
+    Type: String
+    Default: ''
+    Description: Optional existing internal ALB/NLB target group ARN for automatic registration.
+
+Conditions:
+  HasKeyName:
+    Fn::Not:
+      - Fn::Equals:
+          - Ref: KeyName
+          - ''
+  HasExistingTargetGroup:
+    Fn::Not:
+      - Fn::Equals:
+          - Ref: ExistingTargetGroupArn
+          - ''
+  HasAllowedCidr2:
+    Fn::Not:
+      - Fn::Equals:
+          - Ref: AllowedCidr2
+          - ''
+  HasAllowedCidr3:
+    Fn::Not:
+      - Fn::Equals:
+          - Ref: AllowedCidr3
+          - ''
+
+Resources:
+  WebappSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Private chatbot webapp HTTP ingress
+      VpcId:
+        Ref: VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp:
+            Ref: AllowedCidr1
+        - Fn::If:
+            - HasAllowedCidr2
+            - IpProtocol: tcp
+              FromPort: 80
+              ToPort: 80
+              CidrIp:
+                Ref: AllowedCidr2
+            - Ref: AWS::NoValue
+        - Fn::If:
+            - HasAllowedCidr3
+            - IpProtocol: tcp
+              FromPort: 80
+              ToPort: 80
+              CidrIp:
+                Ref: AllowedCidr3
+            - Ref: AWS::NoValue
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Sub: ${AWS::StackName}-webapp-sg
+        - Key: Environment
+          Value:
+            Ref: EnvironmentName
+
+  WebappInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId:
+        Ref: AmiId
+      InstanceType:
+        Ref: InstanceType
+      KeyName:
+        Fn::If:
+          - HasKeyName
+          - Ref: KeyName
+          - Ref: AWS::NoValue
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          AssociatePublicIpAddress: false
+          SubnetId:
+            Ref: SubnetId
+          GroupSet:
+            - Ref: WebappSecurityGroup
+      UserData:
+        Fn::Base64:
+          Fn::Sub: |
+            #!/bin/bash
+            set -euxo pipefail
+            yum update -y
+            amazon-linux-extras install nginx1 -y || yum install -y nginx
+            mkdir -p /usr/share/nginx/html
+            cat > /usr/share/nginx/html/index.html <<'HTML'
+            <!doctype html>
+            <html>
+              <head><meta charset="utf-8"><title>Private Chatbot Webapp</title></head>
+              <body style="font-family: Arial, sans-serif; margin: 2rem;">
+                <h2>Private Chatbot Webapp Placeholder</h2>
+                <p>This EC2 host is running in a private subnet with no public IP.</p>
+                <p>Deploy your built webapp assets to this host as needed.</p>
+              </body>
+            </html>
+            HTML
+            chown -R nginx:nginx /usr/share/nginx/html
+            systemctl enable nginx
+            systemctl restart nginx
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Sub: ${AWS::StackName}-webapp
+        - Key: Environment
+          Value:
+            Ref: EnvironmentName
+
+  ExistingTargetGroupAttachment:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroupAttachment
+    Condition: HasExistingTargetGroup
+    Properties:
+      TargetGroupArn:
+        Ref: ExistingTargetGroupArn
+      TargetId:
+        Ref: WebappInstance
+      Port: 80
+
+Outputs:
+  WebappInstanceId:
+    Description: EC2 instance ID for private webapp.
+    Value:
+      Ref: WebappInstance
+
+  WebappPrivateIp:
+    Description: Private IP address for the webapp EC2 instance.
+    Value:
+      Fn::GetAtt:
+        - WebappInstance
+        - PrivateIp
+
+  WebappSecurityGroupId:
+    Description: Security group ID protecting the webapp instance.
+    Value:
+      Ref: WebappSecurityGroup
+
+  ExistingTargetGroupAttached:
+    Description: Whether the instance was attached to ExistingTargetGroupArn.
+    Value:
+      Fn::If:
+        - HasExistingTargetGroup
+        - 'true'
+        - 'false'

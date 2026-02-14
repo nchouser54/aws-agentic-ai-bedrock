@@ -2,6 +2,9 @@ project_name       = "ai-pr-reviewer"
 environment        = "nonprod"
 log_retention_days = 14
 
+# AWS region (default: us-gov-west-1 for GovCloud)
+# aws_region = "us-gov-west-1"
+
 # Optional explicit allow-list. Empty list means allow all repos where app is installed.
 github_allowed_repos = [
   # "my-org/my-repo"
@@ -88,3 +91,28 @@ chatbot_auth_mode         = "token"
 chatbot_jwt_issuer        = ""
 chatbot_jwt_audience      = []
 github_oauth_allowed_orgs = []
+# For GitHub OAuth defaults in EC2 web UI, set these when using chatbot_auth_mode="github_oauth"
+# chatbot_auth_mode                    = "github_oauth"
+# github_oauth_allowed_orgs            = ["my-org"]
+# webapp_default_auth_mode             = "bearer"
+# webapp_default_github_oauth_base_url = "https://github.my-company.mil"
+# webapp_default_github_client_id      = "Iv1.0123456789abcdef"
+# webapp_default_github_scope          = "read:user read:org"
+
+# Optional S3-hosted static chatbot web UI
+webapp_hosting_enabled = false
+webapp_hosting_mode    = "s3"
+webapp_bucket_name     = ""
+
+# Optional fixed-IP static chatbot web UI (ec2_eip mode)
+# webapp_hosting_mode         = "ec2_eip"
+# webapp_private_only         = true
+# webapp_ec2_subnet_id        = "subnet-xxxxxxxx"
+# webapp_ec2_instance_type    = "t3.micro"
+# webapp_ec2_allowed_cidrs    = ["203.0.113.10/32"]
+# webapp_ec2_key_name         = "my-keypair"
+# webapp_ec2_ami_id           = "" # optional override
+# webapp_tls_enabled          = true
+# webapp_tls_acm_certificate_arn = "arn:aws-us-gov:acm:us-gov-west-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+# webapp_tls_subnet_ids       = ["subnet-aaaaaaa", "subnet-bbbbbbb"]
+# webapp_default_chatbot_url  = "https://<api-id>.execute-api.us-gov-west-1.amazonaws.com/chatbot/query"

@@ -77,3 +77,47 @@ output "chatbot_observability_dashboard_name" {
   description = "CloudWatch dashboard name for chatbot observability"
   value       = var.chatbot_enabled && var.chatbot_observability_enabled ? aws_cloudwatch_dashboard.chatbot_observability[0].dashboard_name : ""
 }
+
+output "webapp_bucket_name" {
+  description = "S3 bucket name hosting the static chatbot web UI"
+  value       = var.webapp_hosting_enabled && var.webapp_hosting_mode == "s3" ? aws_s3_bucket.webapp[0].bucket : ""
+}
+
+output "webapp_url" {
+  description = "Public URL for the hosted static chatbot web UI (S3 website or EC2 Elastic IP)"
+  value = !var.webapp_hosting_enabled ? "" : (
+    var.webapp_hosting_mode == "s3" ? "http://${aws_s3_bucket.webapp[0].website_endpoint}" : (
+      var.webapp_private_only ? "http://${aws_instance.webapp[0].private_ip}" : "http://${aws_eip.webapp[0].public_ip}"
+    )
+  )
+}
+
+output "webapp_hosting_mode" {
+  description = "Active static webapp hosting mode"
+  value       = var.webapp_hosting_enabled ? var.webapp_hosting_mode : ""
+}
+
+output "webapp_static_ip" {
+  description = "Elastic IP address for EC2-hosted static chatbot web UI"
+  value       = var.webapp_hosting_enabled && var.webapp_hosting_mode == "ec2_eip" && !var.webapp_private_only ? aws_eip.webapp[0].public_ip : ""
+}
+
+output "webapp_https_url" {
+  description = "HTTPS URL for NLB-fronted static chatbot web UI when TLS is enabled"
+  value       = var.webapp_hosting_enabled && var.webapp_hosting_mode == "ec2_eip" && var.webapp_tls_enabled ? "https://${aws_lb.webapp[0].dns_name}" : ""
+}
+
+output "webapp_instance_id" {
+  description = "EC2 instance ID hosting the static chatbot web UI in ec2_eip mode"
+  value       = var.webapp_hosting_enabled && var.webapp_hosting_mode == "ec2_eip" ? aws_instance.webapp[0].id : ""
+}
+
+output "webapp_private_ip" {
+  description = "Private IP address of the EC2-hosted static chatbot web UI in ec2_eip mode"
+  value       = var.webapp_hosting_enabled && var.webapp_hosting_mode == "ec2_eip" ? aws_instance.webapp[0].private_ip : ""
+}
+
+output "webapp_tls_static_ips" {
+  description = "Static Elastic IPs attached to the HTTPS NLB (use for firewall allowlists)"
+  value       = var.webapp_hosting_enabled && var.webapp_hosting_mode == "ec2_eip" && var.webapp_tls_enabled && !var.webapp_private_only ? [for ip in aws_eip.webapp_tls : ip.public_ip] : []
+}

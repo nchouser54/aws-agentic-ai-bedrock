@@ -1,0 +1,76 @@
+# ===========================================================================
+# AI PR Reviewer — Private VPC Deployment (Pre-filled Template)
+# ===========================================================================
+# Copy this file to terraform.tfvars and fill in ONLY the <PLACEHOLDER> values.
+# Lines starting with # are optional — uncomment and set if you need them.
+#
+# This template is pre-configured for:
+#   ✓ Private-only VPC deployment (no public IPs)
+#   ✓ Internal NLB with TLS (optional, uncomment to enable)
+#   ✓ GovCloud us-gov-west-1
+#   ✓ dry_run = true (safe first deploy)
+# ===========================================================================
+
+# ── Region & naming ──────────────────────────────────────────────────────
+# aws_region         = "us-gov-west-1"  # Uncomment to override default
+project_name       = "ai-pr-reviewer"
+environment        = "<ENV>"              # prod, nonprod, dev
+log_retention_days = 30
+
+# ── GitHub ───────────────────────────────────────────────────────────────
+github_api_base = "<GITHUB_API_URL>"      # https://api.github.com or https://<GHE>/api/v3
+github_allowed_repos = [
+  # "my-org/my-repo"                     # leave empty to allow all installed repos
+]
+chatbot_auth_mode         = "github_oauth"
+github_oauth_allowed_orgs = ["<YOUR_ORG>"]
+
+# Default UI prefill for GitHub OAuth login experience
+webapp_default_auth_mode             = "bearer"
+webapp_default_github_oauth_base_url = "<GITHUB_OAUTH_BASE_URL>" # e.g. https://github.company.mil
+webapp_default_github_client_id      = "<GITHUB_OAUTH_CLIENT_ID>"
+webapp_default_github_scope          = "read:user read:org"
+
+# ── Bedrock AI ───────────────────────────────────────────────────────────
+bedrock_agent_id       = ""               # Optional: Bedrock Agent ID
+bedrock_agent_alias_id = ""               # Optional: Bedrock Agent Alias
+bedrock_model_id       = "anthropic.claude-3-sonnet-20240229-v1:0"
+
+# ── Safety ───────────────────────────────────────────────────────────────
+dry_run = true                            # KEEP TRUE for first deploy
+
+# ── Auto-PR (remediation PRs) ───────────────────────────────────────────
+auto_pr_enabled       = false
+auto_pr_max_files     = 5
+auto_pr_branch_prefix = "ai-autofix"
+review_comment_mode   = "inline_best_effort"
+
+# ── Chatbot ──────────────────────────────────────────────────────────────
+chatbot_enabled  = true
+chatbot_model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
+
+# ── Private Webapp (EC2, no public IP) ───────────────────────────────────
+webapp_hosting_enabled = true
+webapp_hosting_mode    = "ec2_eip"
+webapp_private_only    = true
+
+webapp_ec2_subnet_id     = "<PRIVATE_SUBNET_ID>"   # subnet-abc123
+webapp_ec2_instance_type = "t3.small"
+# webapp_ec2_key_name    = "<KEY_PAIR_NAME>"        # Uncomment for SSH access
+
+# ── Internal NLB + TLS (uncomment all 4 lines to enable) ────────────────
+# webapp_tls_enabled             = true
+# webapp_tls_acm_certificate_arn = "<ACM_CERT_ARN>"
+# webapp_tls_subnet_ids          = ["<SUBNET_A>", "<SUBNET_B>"]
+
+# ── Observability ────────────────────────────────────────────────────────
+# lambda_tracing_enabled              = true   # X-Ray (default: true)
+# lambda_reserved_concurrency_worker  = 10     # Max concurrent workers (default: 10)
+# lambda_reserved_concurrency_chatbot = 20     # Max concurrent chatbot (default: 20)
+
+# ── Optional features (uncomment to enable) ──────────────────────────────
+# test_gen_enabled        = true
+# pr_description_enabled  = true
+# release_notes_enabled   = true
+# sprint_report_enabled   = true
+# kb_sync_enabled         = true

@@ -24,6 +24,7 @@ logger = get_logger("pr_review_worker")
 
 _dynamodb = boto3.client("dynamodb")
 _cloudwatch = boto3.client("cloudwatch")
+_sqs = boto3.client("sqs")
 
 SAFE_PATCH_CHAR_BUDGET = int(os.getenv("PATCH_CHAR_BUDGET", "45000"))
 IDEMPOTENCY_TTL_SECONDS = int(os.getenv("IDEMPOTENCY_TTL_SECONDS", str(7 * 24 * 60 * 60)))
@@ -455,7 +456,6 @@ def _enqueue_test_gen(
         "base_ref": base_ref,
     }
     try:
-        _sqs = boto3.client("sqs")
         _sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps(message))
         local_logger.info("test_gen_enqueued", extra={"extra": {"pr_number": pr_number}})
     except Exception:  # noqa: BLE001
