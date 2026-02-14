@@ -1,0 +1,3 @@
+# Optional dependencies for running MCP servers in this repository.
+# Keep separate from Lambda requirements to avoid bloating deployment bundles.
+mcp>=1.0.0,<2.0.0
