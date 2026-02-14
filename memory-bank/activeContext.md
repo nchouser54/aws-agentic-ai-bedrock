@@ -20,6 +20,12 @@
 - Implement phase-5 true websocket streaming transport for chatbot responses.
 - Harden websocket auth path to enforce API token checks on `$connect` and websocket query events.
 - Reduce markdown diagnostics in README/SETUP to keep docs maintenance signal clean.
+- Add optional AWS-hosted static webapp deployment (S3 website) with Terraform outputs.
+- Add firewall-allowlist-friendly fixed-IP AWS webapp hosting mode (EC2 + Elastic IP) alongside S3 mode.
+- Add optional HTTPS/domain-ready front door for fixed-IP webapp hosting using NLB + ACM + static EIPs.
+- Support strict private-only webapp hosting with no public IP or public EIP allocation.
+- Provide CloudFormation deploy option for private webapp into existing VPC/subnet (no VPC creation).
+- Provide CloudFormation deploy option for existing VPC + internal NLB TLS private endpoint.
 
 ## Current Blockers
 

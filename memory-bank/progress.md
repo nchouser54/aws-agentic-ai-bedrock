@@ -45,6 +45,17 @@
 - [x] Enforce websocket API token auth for `$connect` and query routes in chatbot lambda
 - [x] Add websocket auth unit tests (unauthorized/authorized connect and unauthorized query)
 - [x] Clean up README/SETUP markdown diagnostics (tables, fence spacing/language, list formatting)
+- [x] Add optional Terraform-managed S3 static hosting for chatbot web UI (`webapp/*` upload + website config)
+- [x] Add webapp hosting variables/examples and outputs (`webapp_url`, `webapp_bucket_name`)
+- [x] Add optional fixed-IP webapp hosting mode (`ec2_eip`) with EC2 + Elastic IP and restrictive CIDR controls
+- [x] Add hosting mode outputs and docs updates for firewall allowlisting (`webapp_hosting_mode`, `webapp_static_ip`)
+- [x] Add optional HTTPS/TLS fixed-IP frontend for webapp via NLB + ACM (`webapp_https_url`, `webapp_tls_static_ips`)
+- [x] Add strict private-only VPC webapp mode (`webapp_private_only`) with no public IP/EIP resources
+- [x] Add CloudFormation template for private webapp in existing VPC/subnet (`infra/cloudformation/private-webapp-existing-vpc.yaml`)
+- [x] Add CloudFormation copy/paste quickstart and doc links (`docs/cloudformation_private_vpc_quickstart.md`)
+- [x] Add CloudFormation template for existing VPC + internal NLB TLS (`infra/cloudformation/private-webapp-internal-nlb-tls-existing-vpc.yaml`)
+- [x] Add CloudFormation internal TLS quickstart and doc links (`docs/cloudformation_private_vpc_internal_nlb_tls_quickstart.md`)
+- [x] Add Day-1 rollout/signoff checklist (`docs/day1_deployment_checklist.md`)
 
 ## Doing
 

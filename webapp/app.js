@@ -29,6 +29,23 @@ const ids = {
 };
 
 const SETTINGS_KEY = "chatbot-webapp-settings-v1";
+const APP_DEFAULTS = window.WEBAPP_DEFAULTS || {};
+const DEFAULT_SETTINGS = {
+  chatbotUrl: APP_DEFAULTS.chatbotUrl || "",
+  authMode: APP_DEFAULTS.authMode || "token",
+  authValue: "",
+  retrievalMode: APP_DEFAULTS.retrievalMode || "hybrid",
+  assistantMode: APP_DEFAULTS.assistantMode || "contextual",
+  llmProvider: APP_DEFAULTS.llmProvider || "bedrock",
+  modelId: "",
+  conversationId: "",
+  streamMode: APP_DEFAULTS.streamMode || "true",
+  jiraJql: "",
+  confluenceCql: "",
+  githubOauthBaseUrl: APP_DEFAULTS.githubOauthBaseUrl || "",
+  githubClientId: APP_DEFAULTS.githubClientId || "",
+  githubScope: APP_DEFAULTS.githubScope || "read:user read:org",
+};
 
 function setStatus(message, kind = "muted") {
   ids.status.className = `status ${kind}`;
@@ -36,27 +53,31 @@ function setStatus(message, kind = "muted") {
 }
 
 function loadSettings() {
+  const resolved = { ...DEFAULT_SETTINGS };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return;
-    const s = JSON.parse(raw);
-    ids.chatbotUrl.value = s.chatbotUrl || "";
-    ids.authMode.value = s.authMode || "token";
-    ids.authValue.value = s.authValue || "";
-    ids.retrievalMode.value = s.retrievalMode || "hybrid";
-    ids.assistantMode.value = s.assistantMode || "contextual";
-    ids.llmProvider.value = s.llmProvider || "bedrock";
-    ids.modelId.value = s.modelId || "";
-    ids.conversationId.value = s.conversationId || "";
-    ids.streamMode.value = s.streamMode || "true";
-    ids.jiraJql.value = s.jiraJql || "";
-    ids.confluenceCql.value = s.confluenceCql || "";
-    ids.githubOauthBaseUrl.value = s.githubOauthBaseUrl || "";
-    ids.githubClientId.value = s.githubClientId || "";
-    ids.githubScope.value = s.githubScope || "read:user read:org";
+    if (raw) {
+      const s = JSON.parse(raw);
+      Object.assign(resolved, s || {});
+    }
   } catch {
     setStatus("Could not load saved settings.", "err");
   }
+
+  ids.chatbotUrl.value = resolved.chatbotUrl || "";
+  ids.authMode.value = resolved.authMode || "token";
+  ids.authValue.value = resolved.authValue || "";
+  ids.retrievalMode.value = resolved.retrievalMode || "hybrid";
+  ids.assistantMode.value = resolved.assistantMode || "contextual";
+  ids.llmProvider.value = resolved.llmProvider || "bedrock";
+  ids.modelId.value = resolved.modelId || "";
+  ids.conversationId.value = resolved.conversationId || "";
+  ids.streamMode.value = resolved.streamMode || "true";
+  ids.jiraJql.value = resolved.jiraJql || "";
+  ids.confluenceCql.value = resolved.confluenceCql || "";
+  ids.githubOauthBaseUrl.value = resolved.githubOauthBaseUrl || "";
+  ids.githubClientId.value = resolved.githubClientId || "";
+  ids.githubScope.value = resolved.githubScope || "read:user read:org";
 }
 
 function saveSettings() {

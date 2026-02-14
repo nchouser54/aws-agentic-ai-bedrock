@@ -5,7 +5,7 @@ TERRAFORM ?= terraform
 
 install:
 	$(PYTHON) -m pip install -r requirements.txt
-	$(PYTHON) -m pip install ruff
+	$(PYTHON) -m pip install ruff pytest
 
 lint:
 	$(PYTHON) -m ruff check src tests scripts

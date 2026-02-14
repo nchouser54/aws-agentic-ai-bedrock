@@ -1,0 +1,261 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Private chatbot webapp with internal NLB + TLS into existing VPC/subnets.
+  No VPC resources are created. No public IPs or public endpoints are created.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: nonprod
+    Description: Environment tag value.
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing VPC ID.
+
+  InstanceSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Existing private subnet ID for the webapp instance.
+
+  NlbSubnetIdA:
+    Type: AWS::EC2::Subnet::Id
+    Description: Existing subnet ID A for internal NLB.
+
+  NlbSubnetIdB:
+    Type: AWS::EC2::Subnet::Id
+    Description: Existing subnet ID B for internal NLB.
+
+  AcmCertificateArn:
+    Type: String
+    Description: Existing ACM certificate ARN (same region) for TLS listener.
+
+  AllowedCidr1:
+    Type: String
+    Default: 10.0.0.0/8
+    Description: Required CIDR allowed to reach webapp backend port 80.
+
+  AllowedCidr2:
+    Type: String
+    Default: ''
+    Description: Optional additional CIDR allowed to reach webapp backend port 80.
+
+  AllowedCidr3:
+    Type: String
+    Default: ''
+    Description: Optional additional CIDR allowed to reach webapp backend port 80.
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t3.nano
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+      - t3.2xlarge
+    Description: EC2 instance size.
+
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+    Description: SSM parameter for AMI ID.
+
+  KeyName:
+    Type: String
+    Default: ''
+    Description: Optional EC2 key pair name.
+
+Conditions:
+  HasKeyName:
+    Fn::Not:
+      - Fn::Equals:
+          - Ref: KeyName
+          - ''
+  HasAllowedCidr2:
+    Fn::Not:
+      - Fn::Equals:
+          - Ref: AllowedCidr2
+          - ''
+  HasAllowedCidr3:
+    Fn::Not:
+      - Fn::Equals:
+          - Ref: AllowedCidr3
+          - ''
+
+Resources:
+  WebappSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Private chatbot webapp HTTP ingress from internal networks
+      VpcId:
+        Ref: VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp:
+            Ref: AllowedCidr1
+        - Fn::If:
+            - HasAllowedCidr2
+            - IpProtocol: tcp
+              FromPort: 80
+              ToPort: 80
+              CidrIp:
+                Ref: AllowedCidr2
+            - Ref: AWS::NoValue
+        - Fn::If:
+            - HasAllowedCidr3
+            - IpProtocol: tcp
+              FromPort: 80
+              ToPort: 80
+              CidrIp:
+                Ref: AllowedCidr3
+            - Ref: AWS::NoValue
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Sub: ${AWS::StackName}-webapp-sg
+        - Key: Environment
+          Value:
+            Ref: EnvironmentName
+
+  WebappInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId:
+        Ref: AmiId
+      InstanceType:
+        Ref: InstanceType
+      KeyName:
+        Fn::If:
+          - HasKeyName
+          - Ref: KeyName
+          - Ref: AWS::NoValue
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          AssociatePublicIpAddress: false
+          SubnetId:
+            Ref: InstanceSubnetId
+          GroupSet:
+            - Ref: WebappSecurityGroup
+      UserData:
+        Fn::Base64:
+          Fn::Sub: |
+            #!/bin/bash
+            set -euxo pipefail
+            yum update -y
+            amazon-linux-extras install nginx1 -y || yum install -y nginx
+            mkdir -p /usr/share/nginx/html
+            cat > /usr/share/nginx/html/index.html <<'HTML'
+            <!doctype html>
+            <html>
+              <head><meta charset="utf-8"><title>Private Chatbot Webapp</title></head>
+              <body style="font-family: Arial, sans-serif; margin: 2rem;">
+                <h2>Private Chatbot Webapp (Internal NLB TLS)</h2>
+                <p>This endpoint is private and served through an internal NLB TLS listener.</p>
+              </body>
+            </html>
+            HTML
+            chown -R nginx:nginx /usr/share/nginx/html
+            systemctl enable nginx
+            systemctl restart nginx
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Sub: ${AWS::StackName}-webapp
+        - Key: Environment
+          Value:
+            Ref: EnvironmentName
+
+  InternalNlb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-nlb
+      Type: network
+      Scheme: internal
+      Subnets:
+        - Ref: NlbSubnetIdA
+        - Ref: NlbSubnetIdB
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Sub: ${AWS::StackName}-nlb
+        - Key: Environment
+          Value:
+            Ref: EnvironmentName
+
+  NlbTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-tg
+      VpcId:
+        Ref: VpcId
+      Port: 80
+      Protocol: TCP
+      TargetType: instance
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /
+      Matcher:
+        HttpCode: 200-399
+
+  NlbTargetAttachment:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroupAttachment
+    Properties:
+      TargetGroupArn:
+        Ref: NlbTargetGroup
+      TargetId:
+        Ref: WebappInstance
+      Port: 80
+
+  NlbTlsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn:
+        Ref: InternalNlb
+      Port: 443
+      Protocol: TLS
+      Certificates:
+        - CertificateArn:
+            Ref: AcmCertificateArn
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn:
+            Ref: NlbTargetGroup
+
+Outputs:
+  WebappInstanceId:
+    Description: EC2 instance ID for private webapp.
+    Value:
+      Ref: WebappInstance
+
+  WebappPrivateIp:
+    Description: Private IP address of webapp EC2.
+    Value:
+      Fn::GetAtt:
+        - WebappInstance
+        - PrivateIp
+
+  InternalNlbDnsName:
+    Description: Internal NLB DNS name for private TLS access.
+    Value:
+      Fn::GetAtt:
+        - InternalNlb
+        - DNSName
+
+  InternalHttpsUrl:
+    Description: Private HTTPS URL for the webapp via internal NLB.
+    Value:
+      Fn::Sub: https://${InternalNlb.DNSName}
+
+  TargetGroupArn:
+    Description: Internal NLB target group ARN.
+    Value:
+      Ref: NlbTargetGroup

@@ -610,8 +610,54 @@ The `atlassian_credentials` Secrets Manager secret includes an optional `platfor
 | `sprint_report_enabled` | Sprint/standup report agent | `false` |
 | `test_gen_enabled` | Test generation agent | `false` |
 | `pr_description_enabled` | PR description generator | `false` |
+| `webapp_hosting_enabled` | Terraform-managed chatbot web UI hosting | `false` |
 | `auto_pr_enabled` | Autofix PR creation | `false` |
 | `dry_run` | Skip posting (log only) | `true` |
+
+### Static chatbot web UI hosting modes
+
+When `webapp_hosting_enabled = true`, choose one mode:
+
+- `webapp_hosting_mode = "s3"` for simple S3 static website hosting
+- `webapp_hosting_mode = "ec2_eip"` for fixed-IP hosting (firewall allowlist friendly)
+
+Key fixed-IP variables:
+
+- `webapp_ec2_subnet_id` (required for `ec2_eip`)
+- `webapp_ec2_allowed_cidrs` (recommended to restrict to enterprise ingress ranges)
+- `webapp_ec2_instance_type`, `webapp_ec2_key_name`, `webapp_ec2_ami_id` (optional tuning)
+
+Strict private-only mode (no public IP usage):
+
+- `webapp_private_only = true`
+- Use private subnets and private DNS routing
+- No Elastic IPs are created for the webapp instance
+
+Optional HTTPS/TLS front door for fixed-IP mode:
+
+- `webapp_tls_enabled = true`
+- `webapp_tls_acm_certificate_arn = "arn:aws-us-gov:acm:..."`
+- `webapp_tls_subnet_ids = ["subnet-a", "subnet-b"]`
+
+When enabled, Terraform provisions an internet-facing NLB with static Elastic IPs and TLS termination.
+Use output `webapp_tls_static_ips` for firewall allowlisting and `webapp_https_url` for endpoint access.
+
+When `webapp_private_only=true`, Terraform provisions an **internal** NLB and does not allocate public static IPs.
+
+For exact operator-friendly copy/paste deployment steps, see:
+
+- `docs/private_vpc_webapp_runbook.md`
+- `docs/private_vpc_existing_lb_runbook.md`
+- `docs/private_vpc_operator_quick_card.md`
+
+For CloudFormation (existing VPC only), see:
+
+- `docs/cloudformation_private_vpc_quickstart.md`
+- `docs/cloudformation_private_vpc_internal_nlb_tls_quickstart.md`
+
+For full Day-1 rollout and signoff tracking, use:
+
+- `docs/day1_deployment_checklist.md`
 
 ### Full List
 

@@ -285,6 +285,11 @@ Quick local consistency checks:
 - `pr_description_url`
 - `release_notes_url`
 - `github_kb_sync_function_name`
+- `webapp_url` (when `webapp_hosting_enabled=true`)
+- `webapp_hosting_mode`
+- `webapp_static_ip` (when `webapp_hosting_mode="ec2_eip"`)
+- `webapp_https_url` (when `webapp_tls_enabled=true`)
+- `webapp_tls_static_ips` (when `webapp_tls_enabled=true`)
 
 ## Local testing
 
@@ -362,6 +367,78 @@ If your environment blocks browser calls to GitHub OAuth endpoints, use manual `
 > Note: if your API Gateway CORS policy does not allow `http://localhost:8080`, browser requests may fail until CORS is enabled for that origin.
 
 > Note: local invokes still expect AWS credentials/resources for full path behavior unless mocked.
+
+### AWS-hosted web app (S3 or fixed-IP EC2)
+
+If you want the chatbot UI hosted in AWS (instead of local only), enable Terraform-managed hosting:
+
+- `webapp_hosting_enabled = true`
+- `webapp_hosting_mode = "s3"` (default) **or** `"ec2_eip"`
+
+S3 website mode (simple public hosting):
+
+- `webapp_hosting_mode = "s3"`
+- `webapp_bucket_name = ""` (optional explicit name; leave empty for derived default)
+
+Fixed-IP mode for firewall allowlisting:
+
+- `webapp_hosting_mode = "ec2_eip"`
+- `webapp_ec2_subnet_id = "subnet-..."` (required)
+- `webapp_ec2_allowed_cidrs = ["203.0.113.10/32"]` (recommended restrictive ingress)
+- Optional: `webapp_ec2_instance_type`, `webapp_ec2_key_name`, `webapp_ec2_ami_id`
+
+Private-only VPC mode (no public IPs at all):
+
+- `webapp_hosting_mode = "ec2_eip"`
+- `webapp_private_only = true`
+- `webapp_ec2_subnet_id = "subnet-private-..."`
+
+In this mode, Terraform does **not** create public EIPs for the instance, and the app is reachable only from within your VPC/network.
+
+HTTPS + domain-ready fixed-IP (recommended for enterprise):
+
+- `webapp_tls_enabled = true`
+- `webapp_tls_acm_certificate_arn = "arn:aws-us-gov:acm:..."`
+- `webapp_tls_subnet_ids = ["subnet-a", "subnet-b"]` (public subnets for NLB)
+
+This provisions an internet-facing NLB with static Elastic IPs and TLS termination.
+Point your DNS record to the output IPs in `webapp_tls_static_ips` (or use the NLB DNS name from `webapp_https_url`).
+
+If `webapp_private_only=true`, the NLB is internal-only and no public static IPs are created.
+
+After `terraform apply`, use outputs:
+
+- `webapp_url`
+- `webapp_hosting_mode`
+- `webapp_static_ip` (fixed-IP mode)
+- `webapp_https_url` (TLS mode)
+- `webapp_tls_static_ips` (TLS mode static allowlist IPs)
+
+For strict private-only mode:
+
+- `webapp_url` returns a private address
+- `webapp_static_ip` is empty
+- `webapp_tls_static_ips` is empty
+
+Then set your chatbot API URL and auth values in the web UI settings page.
+
+Need exact copy/paste steps for private-only deployment?
+
+- `docs/private_vpc_webapp_runbook.md`
+- `docs/private_vpc_operator_quick_card.md` (one-page fast path)
+
+Need exact copy/paste steps for private-only deployment behind your **existing internal enterprise load balancer**?
+
+- `docs/private_vpc_existing_lb_runbook.md`
+
+Need a **CloudFormation** path (existing VPC/subnet, no VPC creation)?
+
+- `docs/cloudformation_private_vpc_quickstart.md`
+- `docs/cloudformation_private_vpc_internal_nlb_tls_quickstart.md` (internal NLB + TLS)
+
+Need a single operator checklist for full rollout/signoff?
+
+- `docs/day1_deployment_checklist.md`
 
 Non-prod rollout checklist for KB mode and scheduled sync:
 

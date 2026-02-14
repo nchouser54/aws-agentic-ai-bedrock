@@ -4,14 +4,74 @@ locals {
   chatbot_auth_github_oauth_enabled = var.chatbot_enabled && var.chatbot_auth_mode == "github_oauth"
   chatbot_memory_enabled            = var.chatbot_enabled && var.chatbot_memory_enabled
   chatbot_websocket_enabled         = var.chatbot_enabled && var.chatbot_websocket_enabled
-  chatbot_metrics_namespace         = trimspace(var.chatbot_metrics_namespace) != "" ? trimspace(var.chatbot_metrics_namespace) : "${var.project_name}/${var.environment}"
-  chatbot_route_auth_type           = local.chatbot_auth_jwt_enabled ? "JWT" : local.chatbot_auth_github_oauth_enabled ? "CUSTOM" : "NONE"
-  kb_sync_any_enabled               = var.kb_sync_enabled || var.github_kb_sync_enabled
+  webapp_hosting_enabled            = var.webapp_hosting_enabled
+  webapp_hosting_mode               = trimspace(var.webapp_hosting_mode)
+  webapp_s3_enabled                 = local.webapp_hosting_enabled && local.webapp_hosting_mode == "s3"
+  webapp_ec2_enabled                = local.webapp_hosting_enabled && local.webapp_hosting_mode == "ec2_eip"
+  webapp_private_only               = local.webapp_ec2_enabled && var.webapp_private_only
+  webapp_tls_enabled                = local.webapp_ec2_enabled && var.webapp_tls_enabled
+  webapp_bucket_name                = trimspace(var.webapp_bucket_name) != "" ? trimspace(var.webapp_bucket_name) : "${local.name_prefix}-${data.aws_caller_identity.current.account_id}-chatbot-webapp"
+  webapp_files = {
+    "index.html" = {
+      source       = "${path.module}/../../webapp/index.html"
+      content_type = "text/html"
+    }
+    "config.js" = {
+      source       = "${path.module}/../../webapp/config.js"
+      content_type = "application/javascript"
+    }
+    "app.js" = {
+      source       = "${path.module}/../../webapp/app.js"
+      content_type = "application/javascript"
+    }
+    "styles.css" = {
+      source       = "${path.module}/../../webapp/styles.css"
+      content_type = "text/css"
+    }
+  }
+  chatbot_metrics_namespace = trimspace(var.chatbot_metrics_namespace) != "" ? trimspace(var.chatbot_metrics_namespace) : "${var.project_name}/${var.environment}"
+  chatbot_route_auth_type   = local.chatbot_auth_jwt_enabled ? "JWT" : local.chatbot_auth_github_oauth_enabled ? "CUSTOM" : "NONE"
+  kb_sync_any_enabled       = var.kb_sync_enabled || var.github_kb_sync_enabled
+  webapp_default_config = {
+    chatbotUrl         = trimspace(var.webapp_default_chatbot_url) != "" ? trimspace(var.webapp_default_chatbot_url) : "${aws_apigatewayv2_api.webhook.api_endpoint}/chatbot/query"
+    authMode           = var.webapp_default_auth_mode
+    retrievalMode      = "hybrid"
+    assistantMode      = "contextual"
+    llmProvider        = "bedrock"
+    streamMode         = "true"
+    githubOauthBaseUrl = trimspace(var.webapp_default_github_oauth_base_url)
+    githubClientId     = trimspace(var.webapp_default_github_client_id)
+    githubScope        = trimspace(var.webapp_default_github_scope)
+    githubAllowedOrgs  = var.github_oauth_allowed_orgs
+  }
+}
+
+locals {
+  webapp_tls_subnet_map = local.webapp_tls_enabled ? { for idx, subnet_id in var.webapp_tls_subnet_ids : tostring(idx) => subnet_id } : {}
+  lambda_tracing_mode   = var.lambda_tracing_enabled ? "Active" : "PassThrough"
+  worker_concurrency    = var.lambda_reserved_concurrency_worker >= 0 ? var.lambda_reserved_concurrency_worker : null
+  chatbot_concurrency   = var.lambda_reserved_concurrency_chatbot >= 0 ? var.lambda_reserved_concurrency_chatbot : null
 }
 
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 data "aws_partition" "current" {}
+
+# Managed policy for X-Ray tracing — attached to all Lambda roles
+data "aws_iam_policy" "xray_write" {
+  count = var.lambda_tracing_enabled ? 1 : 0
+  name  = "AWSXRayDaemonWriteAccess"
+}
+
+data "aws_subnet" "webapp" {
+  count = local.webapp_ec2_enabled ? 1 : 0
+  id    = var.webapp_ec2_subnet_id
+}
+
+data "aws_ssm_parameter" "webapp_ami" {
+  count = local.webapp_ec2_enabled && trimspace(var.webapp_ec2_ami_id) == "" ? 1 : 0
+  name  = "/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2"
+}
 
 check "chatbot_jwt_settings" {
   assert {
@@ -39,6 +99,49 @@ check "github_kb_sync_settings" {
       )
     )
     error_message = "When github_kb_sync_enabled is true, set github_kb_repos and at least one data source id (github_kb_data_source_id or bedrock_kb_data_source_id)."
+  }
+}
+
+check "webapp_ec2_settings" {
+  assert {
+    condition = (
+      !local.webapp_ec2_enabled ||
+      length(trimspace(var.webapp_ec2_subnet_id)) > 0
+    )
+    error_message = "When webapp_hosting_enabled=true and webapp_hosting_mode=ec2_eip, set webapp_ec2_subnet_id."
+  }
+}
+
+check "webapp_private_only_settings" {
+  assert {
+    condition = (
+      !var.webapp_private_only ||
+      var.webapp_hosting_enabled && trimspace(var.webapp_hosting_mode) == "ec2_eip"
+    )
+    error_message = "webapp_private_only requires webapp_hosting_enabled=true and webapp_hosting_mode=ec2_eip."
+  }
+}
+
+check "webapp_tls_settings" {
+  assert {
+    condition = (
+      !local.webapp_tls_enabled ||
+      (
+        length(trimspace(var.webapp_tls_acm_certificate_arn)) > 0 &&
+        length(var.webapp_tls_subnet_ids) > 0
+      )
+    )
+    error_message = "When webapp_tls_enabled=true, set webapp_tls_acm_certificate_arn and at least one webapp_tls_subnet_ids entry."
+  }
+}
+
+check "webapp_s3_not_private_only" {
+  assert {
+    condition = (
+      !var.webapp_private_only ||
+      trimspace(var.webapp_hosting_mode) != "s3"
+    )
+    error_message = "webapp_private_only is incompatible with webapp_hosting_mode=s3. S3 website hosting uses a public endpoint. Use webapp_hosting_mode=ec2_eip for private deployments."
   }
 }
 
@@ -142,7 +245,7 @@ resource "aws_sqs_queue" "pr_review_dlq" {
 
 resource "aws_sqs_queue" "pr_review_queue" {
   name                       = "${local.name_prefix}-pr-review"
-  visibility_timeout_seconds = 180
+  visibility_timeout_seconds = 1080
   message_retention_seconds  = 345600
   kms_master_key_id          = aws_kms_key.app.arn
 
@@ -204,6 +307,193 @@ resource "aws_dynamodb_table" "chatbot_memory" {
 resource "aws_s3_bucket" "kb_sync_documents" {
   count  = local.kb_sync_any_enabled ? 1 : 0
   bucket = "${local.name_prefix}-kb-sync-docs"
+}
+
+resource "aws_s3_bucket" "webapp" {
+  count         = local.webapp_s3_enabled ? 1 : 0
+  bucket        = local.webapp_bucket_name
+  force_destroy = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "webapp" {
+  count  = local.webapp_s3_enabled ? 1 : 0
+  bucket = aws_s3_bucket.webapp[0].id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "webapp" {
+  count                   = local.webapp_s3_enabled ? 1 : 0
+  bucket                  = aws_s3_bucket.webapp[0].id
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+}
+
+resource "aws_s3_bucket_website_configuration" "webapp" {
+  count  = local.webapp_s3_enabled ? 1 : 0
+  bucket = aws_s3_bucket.webapp[0].id
+
+  index_document {
+    suffix = "index.html"
+  }
+
+  error_document {
+    key = "index.html"
+  }
+}
+
+resource "aws_s3_bucket_policy" "webapp_public_read" {
+  count  = local.webapp_s3_enabled ? 1 : 0
+  bucket = aws_s3_bucket.webapp[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "PublicReadGetObject"
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = ["s3:GetObject"]
+        Resource  = ["${aws_s3_bucket.webapp[0].arn}/*"]
+      }
+    ]
+  })
+
+  depends_on = [aws_s3_bucket_public_access_block.webapp]
+}
+
+resource "aws_s3_object" "webapp_files" {
+  for_each = local.webapp_s3_enabled ? local.webapp_files : {}
+
+  bucket       = aws_s3_bucket.webapp[0].id
+  key          = each.key
+  source       = each.value.source
+  etag         = filemd5(each.value.source)
+  content_type = each.value.content_type
+}
+
+resource "aws_security_group" "webapp_ec2" {
+  count       = local.webapp_ec2_enabled ? 1 : 0
+  name        = "${local.name_prefix}-webapp-ec2-sg"
+  description = "Allow HTTP access to EC2-hosted static chatbot webapp"
+  vpc_id      = data.aws_subnet.webapp[0].vpc_id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = var.webapp_ec2_allowed_cidrs
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_instance" "webapp" {
+  count                       = local.webapp_ec2_enabled ? 1 : 0
+  ami                         = trimspace(var.webapp_ec2_ami_id) != "" ? trimspace(var.webapp_ec2_ami_id) : data.aws_ssm_parameter.webapp_ami[0].value
+  instance_type               = var.webapp_ec2_instance_type
+  subnet_id                   = var.webapp_ec2_subnet_id
+  key_name                    = trimspace(var.webapp_ec2_key_name) != "" ? trimspace(var.webapp_ec2_key_name) : null
+  vpc_security_group_ids      = [aws_security_group.webapp_ec2[0].id]
+  associate_public_ip_address = !local.webapp_private_only
+
+  user_data = <<-EOT
+    #!/bin/bash
+    set -euxo pipefail
+    yum update -y
+    amazon-linux-extras install nginx1 -y || yum install -y nginx
+    mkdir -p /usr/share/nginx/html
+    echo '${base64encode(file("${path.module}/../../webapp/index.html"))}' | base64 -d > /usr/share/nginx/html/index.html
+    echo '${base64encode(format("window.WEBAPP_DEFAULTS = %s;\n", jsonencode(local.webapp_default_config)))}' | base64 -d > /usr/share/nginx/html/config.js
+    echo '${base64encode(file("${path.module}/../../webapp/app.js"))}' | base64 -d > /usr/share/nginx/html/app.js
+    echo '${base64encode(file("${path.module}/../../webapp/styles.css"))}' | base64 -d > /usr/share/nginx/html/styles.css
+    chown -R nginx:nginx /usr/share/nginx/html
+    chmod 0644 /usr/share/nginx/html/index.html /usr/share/nginx/html/config.js /usr/share/nginx/html/app.js /usr/share/nginx/html/styles.css
+    systemctl enable nginx
+    systemctl restart nginx
+  EOT
+
+  user_data_replace_on_change = true
+
+  tags = {
+    Name = "${local.name_prefix}-chatbot-webapp"
+  }
+}
+
+resource "aws_eip" "webapp" {
+  count    = local.webapp_ec2_enabled && !local.webapp_private_only ? 1 : 0
+  domain   = "vpc"
+  instance = aws_instance.webapp[0].id
+
+  depends_on = [aws_instance.webapp]
+}
+
+resource "aws_eip" "webapp_tls" {
+  for_each = local.webapp_tls_enabled && !local.webapp_private_only ? local.webapp_tls_subnet_map : {}
+  domain   = "vpc"
+}
+
+resource "aws_lb" "webapp" {
+  count              = local.webapp_tls_enabled ? 1 : 0
+  name               = "${local.name_prefix}-webapp-nlb"
+  load_balancer_type = "network"
+  internal           = local.webapp_private_only
+  subnets            = local.webapp_private_only ? var.webapp_tls_subnet_ids : null
+
+  dynamic "subnet_mapping" {
+    for_each = local.webapp_private_only ? {} : local.webapp_tls_subnet_map
+    content {
+      subnet_id     = subnet_mapping.value
+      allocation_id = aws_eip.webapp_tls[subnet_mapping.key].id
+    }
+  }
+}
+
+resource "aws_lb_target_group" "webapp" {
+  count       = local.webapp_tls_enabled ? 1 : 0
+  name        = "${local.name_prefix}-webapp-tg"
+  port        = 80
+  protocol    = "TCP"
+  target_type = "instance"
+  vpc_id      = data.aws_subnet.webapp[0].vpc_id
+
+  health_check {
+    protocol = "HTTP"
+    path     = "/"
+    matcher  = "200-399"
+  }
+}
+
+resource "aws_lb_target_group_attachment" "webapp" {
+  count            = local.webapp_tls_enabled ? 1 : 0
+  target_group_arn = aws_lb_target_group.webapp[0].arn
+  target_id        = aws_instance.webapp[0].id
+  port             = 80
+}
+
+resource "aws_lb_listener" "webapp_https" {
+  count             = local.webapp_tls_enabled ? 1 : 0
+  load_balancer_arn = aws_lb.webapp[0].arn
+  port              = 443
+  protocol          = "TLS"
+  certificate_arn   = var.webapp_tls_acm_certificate_arn
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.webapp[0].arn
+  }
 }
 
 resource "aws_dynamodb_table" "kb_sync_state" {
@@ -641,6 +931,39 @@ resource "aws_iam_role_policy_attachment" "kb_sync_policy" {
   policy_arn = aws_iam_policy.kb_sync_policy[0].arn
 }
 
+# ---------------------------------------------------------------------------
+# X-Ray tracing IAM — attach managed policy to all Lambda roles
+# ---------------------------------------------------------------------------
+resource "aws_iam_role_policy_attachment" "xray_webhook" {
+  count      = var.lambda_tracing_enabled ? 1 : 0
+  role       = aws_iam_role.webhook_lambda.name
+  policy_arn = data.aws_iam_policy.xray_write[0].arn
+}
+
+resource "aws_iam_role_policy_attachment" "xray_worker" {
+  count      = var.lambda_tracing_enabled ? 1 : 0
+  role       = aws_iam_role.worker_lambda.name
+  policy_arn = data.aws_iam_policy.xray_write[0].arn
+}
+
+resource "aws_iam_role_policy_attachment" "xray_chatbot" {
+  count      = var.lambda_tracing_enabled && var.chatbot_enabled ? 1 : 0
+  role       = aws_iam_role.chatbot_lambda[0].name
+  policy_arn = data.aws_iam_policy.xray_write[0].arn
+}
+
+resource "aws_iam_role_policy_attachment" "xray_chatbot_authorizer" {
+  count      = var.lambda_tracing_enabled && local.chatbot_auth_github_oauth_enabled ? 1 : 0
+  role       = aws_iam_role.chatbot_github_oauth_authorizer_lambda[0].name
+  policy_arn = data.aws_iam_policy.xray_write[0].arn
+}
+
+resource "aws_iam_role_policy_attachment" "xray_kb_sync" {
+  count      = var.lambda_tracing_enabled && local.kb_sync_any_enabled ? 1 : 0
+  role       = aws_iam_role.kb_sync_lambda[0].name
+  policy_arn = data.aws_iam_policy.xray_write[0].arn
+}
+
 resource "aws_lambda_function" "webhook_receiver" {
   function_name    = "${local.name_prefix}-webhook-receiver"
   role             = aws_iam_role.webhook_lambda.arn
@@ -659,6 +982,10 @@ resource "aws_lambda_function" "webhook_receiver" {
       PR_DESCRIPTION_QUEUE_URL = var.pr_description_enabled ? aws_sqs_queue.pr_description_queue[0].id : ""
     }
   }
+
+  tracing_config {
+    mode = local.lambda_tracing_mode
+  }
 }
 
 resource "aws_lambda_function" "pr_review_worker" {
@@ -673,7 +1000,7 @@ resource "aws_lambda_function" "pr_review_worker" {
 
   environment {
     variables = {
-      AWS_REGION                        = "us-gov-west-1"
+      AWS_REGION                        = data.aws_region.current.name
       BEDROCK_AGENT_ID                  = var.bedrock_agent_id
       BEDROCK_AGENT_ALIAS_ID            = var.bedrock_agent_alias_id
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
@@ -690,6 +1017,12 @@ resource "aws_lambda_function" "pr_review_worker" {
       ATLASSIAN_CREDENTIALS_SECRET_ARN  = aws_secretsmanager_secret.atlassian_credentials.arn
       TEST_GEN_QUEUE_URL                = var.test_gen_enabled ? aws_sqs_queue.test_gen_queue[0].id : ""
     }
+  }
+
+  reserved_concurrent_executions = local.worker_concurrency
+
+  tracing_config {
+    mode = local.lambda_tracing_mode
   }
 }
 
@@ -716,7 +1049,7 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
 
   environment {
     variables = {
-      AWS_REGION                                     = "us-gov-west-1"
+      AWS_REGION                                     = data.aws_region.current.name
       CHATBOT_MODEL_ID                               = var.chatbot_model_id
       BEDROCK_MODEL_ID                               = var.bedrock_model_id
       CHATBOT_RETRIEVAL_MODE                         = var.chatbot_retrieval_mode
@@ -755,6 +1088,12 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
       GITHUB_APP_IDS_SECRET_ARN                      = var.chatbot_github_live_enabled ? aws_secretsmanager_secret.github_app_ids.arn : ""
     }
   }
+
+  reserved_concurrent_executions = local.chatbot_concurrency
+
+  tracing_config {
+    mode = local.lambda_tracing_mode
+  }
 }
 
 resource "aws_lambda_function" "chatbot_github_oauth_authorizer" {
@@ -770,10 +1109,14 @@ resource "aws_lambda_function" "chatbot_github_oauth_authorizer" {
 
   environment {
     variables = {
-      AWS_REGION                = "us-gov-west-1"
+      AWS_REGION                = data.aws_region.current.name
       GITHUB_API_BASE           = var.github_api_base
       GITHUB_OAUTH_ALLOWED_ORGS = join(",", var.github_oauth_allowed_orgs)
     }
+  }
+
+  tracing_config {
+    mode = local.lambda_tracing_mode
   }
 }
 
@@ -790,7 +1133,7 @@ resource "aws_lambda_function" "teams_chatbot_adapter" {
 
   environment {
     variables = {
-      AWS_REGION                       = "us-gov-west-1"
+      AWS_REGION                       = data.aws_region.current.name
       CHATBOT_MODEL_ID                 = var.chatbot_model_id
       BEDROCK_MODEL_ID                 = var.bedrock_model_id
       CHATBOT_RETRIEVAL_MODE           = var.chatbot_retrieval_mode
@@ -799,6 +1142,10 @@ resource "aws_lambda_function" "teams_chatbot_adapter" {
       ATLASSIAN_CREDENTIALS_SECRET_ARN = aws_secretsmanager_secret.atlassian_credentials.arn
       TEAMS_ADAPTER_TOKEN_SECRET_ARN   = var.chatbot_enabled && var.teams_adapter_enabled ? aws_secretsmanager_secret.teams_adapter_token[0].arn : ""
     }
+  }
+
+  tracing_config {
+    mode = local.lambda_tracing_mode
   }
 }
 
@@ -815,7 +1162,7 @@ resource "aws_lambda_function" "confluence_kb_sync" {
 
   environment {
     variables = {
-      AWS_REGION                       = "us-gov-west-1"
+      AWS_REGION                       = data.aws_region.current.name
       ATLASSIAN_CREDENTIALS_SECRET_ARN = aws_secretsmanager_secret.atlassian_credentials.arn
       BEDROCK_KNOWLEDGE_BASE_ID        = var.bedrock_knowledge_base_id
       BEDROCK_KB_DATA_SOURCE_ID        = var.bedrock_kb_data_source_id
@@ -825,6 +1172,10 @@ resource "aws_lambda_function" "confluence_kb_sync" {
       CONFLUENCE_SYNC_LIMIT            = tostring(var.confluence_sync_limit)
       KB_SYNC_STATE_TABLE              = aws_dynamodb_table.kb_sync_state[0].name
     }
+  }
+
+  tracing_config {
+    mode = local.lambda_tracing_mode
   }
 }
 
@@ -841,7 +1192,7 @@ resource "aws_lambda_function" "github_kb_sync" {
 
   environment {
     variables = {
-      AWS_REGION                        = "us-gov-west-1"
+      AWS_REGION                        = data.aws_region.current.name
       GITHUB_API_BASE                   = var.github_api_base
       GITHUB_APP_PRIVATE_KEY_SECRET_ARN = aws_secretsmanager_secret.github_app_private_key_pem.arn
       GITHUB_APP_IDS_SECRET_ARN         = aws_secretsmanager_secret.github_app_ids.arn
@@ -854,6 +1205,10 @@ resource "aws_lambda_function" "github_kb_sync" {
       GITHUB_KB_INCLUDE_PATTERNS        = join(",", var.github_kb_include_patterns)
       GITHUB_KB_MAX_FILES_PER_REPO      = tostring(var.github_kb_max_files_per_repo)
     }
+  }
+
+  tracing_config {
+    mode = local.lambda_tracing_mode
   }
 }
 
@@ -1220,6 +1575,12 @@ resource "aws_iam_role_policy_attachment" "release_notes_policy" {
   policy_arn = aws_iam_policy.release_notes_policy[0].arn
 }
 
+resource "aws_iam_role_policy_attachment" "xray_release_notes" {
+  count      = var.lambda_tracing_enabled && var.release_notes_enabled ? 1 : 0
+  role       = aws_iam_role.release_notes_lambda[0].name
+  policy_arn = data.aws_iam_policy.xray_write[0].arn
+}
+
 resource "aws_lambda_function" "release_notes" {
   count            = var.release_notes_enabled ? 1 : 0
   function_name    = "${local.name_prefix}-release-notes"
@@ -1233,7 +1594,7 @@ resource "aws_lambda_function" "release_notes" {
 
   environment {
     variables = {
-      AWS_REGION                        = "us-gov-west-1"
+      AWS_REGION                        = data.aws_region.current.name
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
       RELEASE_NOTES_MODEL_ID            = var.release_notes_model_id
       GITHUB_API_BASE                   = var.github_api_base
@@ -1242,6 +1603,10 @@ resource "aws_lambda_function" "release_notes" {
       ATLASSIAN_CREDENTIALS_SECRET_ARN  = aws_secretsmanager_secret.atlassian_credentials.arn
       DRY_RUN                           = tostring(var.dry_run)
     }
+  }
+
+  tracing_config {
+    mode = local.lambda_tracing_mode
   }
 }
 
@@ -1339,6 +1704,12 @@ resource "aws_iam_role_policy_attachment" "sprint_report_policy" {
   policy_arn = aws_iam_policy.sprint_report_policy[0].arn
 }
 
+resource "aws_iam_role_policy_attachment" "xray_sprint_report" {
+  count      = var.lambda_tracing_enabled && var.sprint_report_enabled ? 1 : 0
+  role       = aws_iam_role.sprint_report_lambda[0].name
+  policy_arn = data.aws_iam_policy.xray_write[0].arn
+}
+
 resource "aws_lambda_function" "sprint_report" {
   count            = var.sprint_report_enabled ? 1 : 0
   function_name    = "${local.name_prefix}-sprint-report"
@@ -1352,7 +1723,7 @@ resource "aws_lambda_function" "sprint_report" {
 
   environment {
     variables = {
-      AWS_REGION                        = "us-gov-west-1"
+      AWS_REGION                        = data.aws_region.current.name
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
       SPRINT_REPORT_MODEL_ID            = var.sprint_report_model_id
       GITHUB_API_BASE                   = var.github_api_base
@@ -1365,6 +1736,10 @@ resource "aws_lambda_function" "sprint_report" {
       SPRINT_REPORT_TYPE                = var.sprint_report_type
       SPRINT_REPORT_DAYS_BACK           = tostring(var.sprint_report_days_back)
     }
+  }
+
+  tracing_config {
+    mode = local.lambda_tracing_mode
   }
 }
 
@@ -1435,7 +1810,7 @@ resource "aws_sqs_queue" "test_gen_dlq" {
 resource "aws_sqs_queue" "test_gen_queue" {
   count                      = var.test_gen_enabled ? 1 : 0
   name                       = "${local.name_prefix}-test-gen"
-  visibility_timeout_seconds = 300
+  visibility_timeout_seconds = 1800
   message_retention_seconds  = 345600
   kms_master_key_id          = aws_kms_key.app.arn
 
@@ -1513,6 +1888,12 @@ resource "aws_iam_role_policy_attachment" "test_gen_policy" {
   policy_arn = aws_iam_policy.test_gen_policy[0].arn
 }
 
+resource "aws_iam_role_policy_attachment" "xray_test_gen" {
+  count      = var.lambda_tracing_enabled && var.test_gen_enabled ? 1 : 0
+  role       = aws_iam_role.test_gen_lambda[0].name
+  policy_arn = data.aws_iam_policy.xray_write[0].arn
+}
+
 resource "aws_lambda_function" "test_gen" {
   count            = var.test_gen_enabled ? 1 : 0
   function_name    = "${local.name_prefix}-test-gen"
@@ -1526,7 +1907,7 @@ resource "aws_lambda_function" "test_gen" {
 
   environment {
     variables = {
-      AWS_REGION                        = "us-gov-west-1"
+      AWS_REGION                        = data.aws_region.current.name
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
       TEST_GEN_MODEL_ID                 = var.test_gen_model_id
       TEST_GEN_DELIVERY_MODE            = var.test_gen_delivery_mode
@@ -1536,6 +1917,12 @@ resource "aws_lambda_function" "test_gen" {
       GITHUB_APP_IDS_SECRET_ARN         = aws_secretsmanager_secret.github_app_ids.arn
       DRY_RUN                           = tostring(var.dry_run)
     }
+  }
+
+  reserved_concurrent_executions = local.worker_concurrency
+
+  tracing_config {
+    mode = local.lambda_tracing_mode
   }
 }
 
@@ -1592,7 +1979,7 @@ resource "aws_sqs_queue" "pr_description_dlq" {
 resource "aws_sqs_queue" "pr_description_queue" {
   count                      = var.pr_description_enabled ? 1 : 0
   name                       = "${local.name_prefix}-pr-description"
-  visibility_timeout_seconds = 180
+  visibility_timeout_seconds = 720
   message_retention_seconds  = 345600
   kms_master_key_id          = aws_kms_key.app.arn
 
@@ -1671,6 +2058,12 @@ resource "aws_iam_role_policy_attachment" "pr_description_policy" {
   policy_arn = aws_iam_policy.pr_description_policy[0].arn
 }
 
+resource "aws_iam_role_policy_attachment" "xray_pr_description" {
+  count      = var.lambda_tracing_enabled && var.pr_description_enabled ? 1 : 0
+  role       = aws_iam_role.pr_description_lambda[0].name
+  policy_arn = data.aws_iam_policy.xray_write[0].arn
+}
+
 resource "aws_lambda_function" "pr_description" {
   count            = var.pr_description_enabled ? 1 : 0
   function_name    = "${local.name_prefix}-pr-description"
@@ -1684,7 +2077,7 @@ resource "aws_lambda_function" "pr_description" {
 
   environment {
     variables = {
-      AWS_REGION                        = "us-gov-west-1"
+      AWS_REGION                        = data.aws_region.current.name
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
       PR_DESCRIPTION_MODEL_ID           = var.pr_description_model_id
       GITHUB_API_BASE                   = var.github_api_base
@@ -1693,6 +2086,12 @@ resource "aws_lambda_function" "pr_description" {
       ATLASSIAN_CREDENTIALS_SECRET_ARN  = aws_secretsmanager_secret.atlassian_credentials.arn
       DRY_RUN                           = tostring(var.dry_run)
     }
+  }
+
+  reserved_concurrent_executions = local.worker_concurrency
+
+  tracing_config {
+    mode = local.lambda_tracing_mode
   }
 }
 

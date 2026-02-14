@@ -1,0 +1,1 @@
+window.WEBAPP_DEFAULTS = window.WEBAPP_DEFAULTS || {};

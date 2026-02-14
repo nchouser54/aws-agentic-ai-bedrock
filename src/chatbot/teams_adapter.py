@@ -10,6 +10,14 @@ import boto3
 from chatbot.app import handle_query
 
 _cached_teams_token: str | None = None
+_secrets_client: Any | None = None
+
+
+def _get_secrets_client() -> Any:
+    global _secrets_client  # noqa: PLW0603
+    if _secrets_client is None:
+        _secrets_client = boto3.client("secretsmanager")
+    return _secrets_client
 
 
 def _load_teams_token() -> str:
@@ -20,7 +28,7 @@ def _load_teams_token() -> str:
 
     secret_arn = os.getenv("TEAMS_ADAPTER_TOKEN_SECRET_ARN", "").strip()
     if secret_arn:
-        client = boto3.client("secretsmanager")
+        client = _get_secrets_client()
         resp = client.get_secret_value(SecretId=secret_arn)
         _cached_teams_token = (resp.get("SecretString") or "").strip()
     else:

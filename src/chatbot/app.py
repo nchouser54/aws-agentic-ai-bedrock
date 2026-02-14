@@ -29,6 +29,22 @@ _cloudwatch: Any | None = None
 
 _cached_api_token: str | None = None
 _cached_anthropic_api_key: str | None = None
+_dynamodb_client_cached: Any | None = None
+_secrets_client_cached: Any | None = None
+
+
+def _secrets_client() -> Any:
+    global _secrets_client_cached  # noqa: PLW0603
+    if _secrets_client_cached is None:
+        _secrets_client_cached = boto3.client("secretsmanager")
+    return _secrets_client_cached
+
+
+def _dynamodb_client() -> Any:
+    global _dynamodb_client_cached  # noqa: PLW0603
+    if _dynamodb_client_cached is None:
+        _dynamodb_client_cached = boto3.client("dynamodb", region_name=os.getenv("AWS_REGION", DEFAULT_REGION))
+    return _dynamodb_client_cached
 
 
 def _metrics_namespace() -> str:
@@ -134,7 +150,7 @@ def _load_api_token() -> str:
 
     secret_arn = os.getenv("CHATBOT_API_TOKEN_SECRET_ARN", "").strip()
     if secret_arn:
-        client = boto3.client("secretsmanager")
+        client = _secrets_client()
         resp = client.get_secret_value(SecretId=secret_arn)
         _cached_api_token = (resp.get("SecretString") or "").strip()
     else:
@@ -187,7 +203,7 @@ def _load_anthropic_api_key() -> str:
 
     secret_arn = os.getenv("CHATBOT_ANTHROPIC_API_KEY_SECRET_ARN", "").strip()
     if secret_arn:
-        client = boto3.client("secretsmanager")
+        client = _secrets_client()
         resp = client.get_secret_value(SecretId=secret_arn)
         _cached_anthropic_api_key = (resp.get("SecretString") or "").strip()
     else:
@@ -301,7 +317,7 @@ def _record_quota_event_and_validate(bucket_key: str, limit: int) -> None:
     window_start = now_ms - 60_000
     expires_at = int(time.time()) + 2 * 24 * 60 * 60
 
-    client = boto3.client("dynamodb", region_name=os.getenv("AWS_REGION", DEFAULT_REGION))
+    client = _dynamodb_client()
     try:
         resp = client.query(
             TableName=table,
@@ -388,7 +404,7 @@ def _track_conversation_index(actor_id: str, conversation_id: str) -> None:
 
     now_ms = int(time.time() * 1000)
     expires_at = int(time.time()) + 60 * 24 * 60 * 60
-    client = boto3.client("dynamodb", region_name=os.getenv("AWS_REGION", DEFAULT_REGION))
+    client = _dynamodb_client()
 
     try:
         client.put_item(
@@ -439,7 +455,7 @@ def _load_conversation_history(actor_id: str, conversation_id: str | None) -> li
     conversation_key = _conversation_storage_key(actor_id, conversation_id)
 
     max_turns = max(1, int(os.getenv("CHATBOT_MEMORY_MAX_TURNS", "6")))
-    client = boto3.client("dynamodb", region_name=os.getenv("AWS_REGION", DEFAULT_REGION))
+    client = _dynamodb_client()
     try:
         resp = client.query(
             TableName=table,
@@ -482,7 +498,7 @@ def _append_conversation_turn(actor_id: str, conversation_id: str | None, user_q
     ttl_days = max(1, int(os.getenv("CHATBOT_MEMORY_TTL_DAYS", "30")))
     now_ms = int(time.time() * 1000)
     expires_at = int(time.time()) + (ttl_days * 24 * 60 * 60)
-    client = boto3.client("dynamodb", region_name=os.getenv("AWS_REGION", DEFAULT_REGION))
+    client = _dynamodb_client()
 
     # Best-effort compaction summary for large histories.
     history = _load_conversation_history(actor_id, conversation_id)
@@ -534,7 +550,7 @@ def _delete_partition_items(partition_key: str) -> int:
     if not table:
         return 0
 
-    client = boto3.client("dynamodb", region_name=os.getenv("AWS_REGION", DEFAULT_REGION))
+    client = _dynamodb_client()
     deleted = 0
 
     try:
@@ -568,7 +584,7 @@ def _list_actor_conversations(actor_id: str) -> list[str]:
     if not table:
         return []
 
-    client = boto3.client("dynamodb", region_name=os.getenv("AWS_REGION", DEFAULT_REGION))
+    client = _dynamodb_client()
     seen: set[str] = set()
     ordered: list[str] = []
     try:
