@@ -319,6 +319,67 @@ Quick local consistency checks:
 - `python scripts/trigger_kb_sync.py --function-name <kb_sync_function_name>`
 - `python scripts/predeploy_nonprod_checks.py --tfvars infra/terraform/terraform.tfvars`
 
+### GitHub MCP server (optional)
+
+This repo now includes an MCP server that reuses existing GitHub App auth/client code:
+
+- Entry point: `src/mcp_server/github_pr_server.py`
+- Optional dependency file: `requirements-mcp.txt`
+
+Additional MCP server options are available:
+
+- `src/mcp_server/github_release_ops_server.py`
+- `src/mcp_server/atlassian_context_server.py`
+- `src/mcp_server/unified_context_server.py`
+
+Install + run:
+
+- `make install-mcp`
+- `export GITHUB_APP_IDS_SECRET_ARN=<secret-arn>`
+- `export GITHUB_APP_PRIVATE_KEY_SECRET_ARN=<secret-arn>`
+- `export GITHUB_API_BASE=https://api.github.com` (or your GHES API base)
+- `make mcp-github-server`
+
+Atlassian MCP env var:
+
+- `export ATLASSIAN_CREDENTIALS_SECRET_ARN=<secret-arn>`
+
+List/run server options:
+
+- `make mcp-list`
+- `make mcp-github-server`
+- `make mcp-github-release-server`
+- `make mcp-atlassian-server`
+- `make mcp-unified-server`
+
+Exposed MCP tools:
+
+- `list_open_pull_requests(repo_full_name, per_page=20)`
+- `get_pull_request(repo_full_name, pull_number)`
+- `get_pull_request_files(repo_full_name, pull_number)`
+- `search_repository_code(repo_full_name, query, per_page=10)`
+
+Other server toolsets:
+
+- GitHub Release/Ops:
+  - `list_tags(repo_full_name, per_page=30)`
+  - `get_latest_release(repo_full_name)`
+  - `get_release_by_tag(repo_full_name, tag)`
+  - `compare_commits(repo_full_name, base, head)`
+  - `list_merged_prs_between(repo_full_name, base_sha, head_sha)`
+- Atlassian Context:
+  - `get_jira_issue(issue_key)`
+  - `search_jira(jql, max_results=10)`
+  - `get_confluence_page(page_id, body_format="storage")`
+  - `search_confluence(cql, limit=10)`
+  - `get_atlassian_platform()`
+- Unified Context:
+  - `github_list_open_pull_requests(...)`
+  - `github_search_repository_code(...)`
+  - `jira_search(...)`
+  - `confluence_search(...)`
+  - `health_context()`
+
 ### Small local web app (chatbot UI)
 
 This repository now includes a tiny browser UI for querying the chatbot API:
