@@ -1,0 +1,54 @@
+- description: "Schema compliance for standard code-quality review"
+  vars:
+    pr_title: "fix(auth): avoid None dereference in token parser"
+    pr_body: "Bug fix for intermittent auth failures when header is absent."
+    changed_files_json: |
+      [
+        {
+          "filename": "src/auth.py",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 2,
+          "changes": 8,
+          "patch": "@@ -10,2 +10,5 @@\n- token = headers['Authorization'].split(' ')[1]\n+ if not headers or 'Authorization' not in headers:\n+     return None\n+ parts = headers.get('Authorization', '').split(' ', 1)\n+ token = parts[1] if len(parts) == 2 else None\n"
+        }
+      ]
+  assert:
+    - type: is-json
+    - type: javascript
+      value: |
+        const review = JSON.parse(output);
+        if (!review || typeof review !== 'object') return false;
+        if (typeof review.summary !== 'string' || !review.summary.trim()) return false;
+        if (!['low', 'medium', 'high'].includes(review.overall_risk)) return false;
+        if (!Array.isArray(review.findings)) return false;
+        return review.findings.every((f) =>
+          ['bug', 'security', 'style', 'performance', 'tests', 'docs'].includes(f.type) &&
+          ['low', 'medium', 'high'].includes(f.severity) &&
+          typeof f.file === 'string' &&
+          typeof f.message === 'string'
+        );
+
+- description: "Schema compliance for obvious secret-handling diff"
+  vars:
+    pr_title: "feat(config): add temporary API key fallback"
+    pr_body: "Adds temporary fallback for local testing."
+    changed_files_json: |
+      [
+        {
+          "filename": "src/config.py",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 0,
+          "changes": 4,
+          "patch": "@@ -2,0 +2,4 @@\n+DEFAULT_API_KEY = 'sk-test-hardcoded'\n+def get_api_key():\n+    return os.getenv('API_KEY') or DEFAULT_API_KEY\n"
+        }
+      ]
+  assert:
+    - type: is-json
+    - type: javascript
+      value: |
+        const review = JSON.parse(output);
+        if (!Array.isArray(review.findings)) return false;
+        // Keep this structural and low-flake while still requiring analysis output.
+        return review.findings.length >= 1;

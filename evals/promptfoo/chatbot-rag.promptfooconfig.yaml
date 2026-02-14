@@ -1,0 +1,13 @@
+description: "Chatbot retrieval-grounded answer regressions (Bedrock)"
+
+prompts:
+  - "file://evals/promptfoo/prompts/chatbot_rag_prompt.txt"
+
+providers:
+  - id: "bedrock:${PROMPTFOO_BEDROCK_MODEL_ID}"
+    config:
+      region: "${PROMPTFOO_AWS_REGION}"
+      temperature: 0.0
+      max_tokens: 500
+
+tests: "file://evals/promptfoo/tests/chatbot_rag_tests.yaml"

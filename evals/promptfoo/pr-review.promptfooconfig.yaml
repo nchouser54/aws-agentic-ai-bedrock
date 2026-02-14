@@ -1,0 +1,13 @@
+description: "PR reviewer JSON regression checks (Bedrock)"
+
+prompts:
+  - "file://evals/promptfoo/prompts/pr_review_prompt.txt"
+
+providers:
+  - id: "bedrock:${PROMPTFOO_BEDROCK_MODEL_ID}"
+    config:
+      region: "${PROMPTFOO_AWS_REGION}"
+      temperature: 0.1
+      max_tokens: 1200
+
+tests: "file://evals/promptfoo/tests/pr_review_tests.yaml"

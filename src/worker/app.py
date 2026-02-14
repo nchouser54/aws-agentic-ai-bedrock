@@ -524,6 +524,9 @@ def _process_record(record: dict[str, Any]) -> None:
         model_id=os.environ["BEDROCK_MODEL_ID"],
         agent_id=os.getenv("BEDROCK_AGENT_ID") or None,
         agent_alias_id=os.getenv("BEDROCK_AGENT_ALIAS_ID") or None,
+        guardrail_identifier=os.getenv("BEDROCK_GUARDRAIL_ID") or None,
+        guardrail_version=os.getenv("BEDROCK_GUARDRAIL_VERSION") or None,
+        guardrail_trace=os.getenv("BEDROCK_GUARDRAIL_TRACE") or None,
     )
     result = parse_review_result(bedrock.analyze_pr(prompt))
     result.findings = _sanitize_findings(result.findings)

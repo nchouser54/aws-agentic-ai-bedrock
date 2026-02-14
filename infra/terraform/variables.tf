@@ -52,6 +52,29 @@ variable "bedrock_model_id" {
   default     = "anthropic.claude-3-sonnet-20240229-v1:0"
 }
 
+variable "bedrock_guardrail_id" {
+  description = "Optional Bedrock Guardrail identifier applied to direct InvokeModel calls (for example PR reviewer fallback)"
+  type        = string
+  default     = ""
+}
+
+variable "bedrock_guardrail_version" {
+  description = "Bedrock Guardrail version for bedrock_guardrail_id (numeric version or DRAFT)"
+  type        = string
+  default     = ""
+}
+
+variable "bedrock_guardrail_trace" {
+  description = "Optional Bedrock InvokeModel trace mode when guardrails are enabled"
+  type        = string
+  default     = "DISABLED"
+
+  validation {
+    condition     = contains(["ENABLED", "DISABLED", "ENABLED_FULL"], var.bedrock_guardrail_trace)
+    error_message = "Must be one of: ENABLED, DISABLED, ENABLED_FULL."
+  }
+}
+
 variable "dry_run" {
   description = "Dry-run mode for worker posting"
   type        = bool
@@ -97,6 +120,29 @@ variable "chatbot_model_id" {
   description = "Bedrock model ID for Jira/Confluence chatbot"
   type        = string
   default     = "anthropic.claude-3-sonnet-20240229-v1:0"
+}
+
+variable "chatbot_guardrail_id" {
+  description = "Optional Bedrock Guardrail identifier for chatbot Converse requests"
+  type        = string
+  default     = ""
+}
+
+variable "chatbot_guardrail_version" {
+  description = "Bedrock Guardrail version for chatbot_guardrail_id (numeric version or DRAFT)"
+  type        = string
+  default     = ""
+}
+
+variable "chatbot_guardrail_trace" {
+  description = "Optional Bedrock Converse guardrail trace mode for chatbot"
+  type        = string
+  default     = "disabled"
+
+  validation {
+    condition     = contains(["enabled", "disabled"], var.chatbot_guardrail_trace)
+    error_message = "Must be one of: enabled, disabled."
+  }
 }
 
 variable "chatbot_retrieval_mode" {

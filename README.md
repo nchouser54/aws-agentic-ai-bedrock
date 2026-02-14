@@ -67,6 +67,9 @@ Worker Lambda env vars:
 - `BEDROCK_AGENT_ID` (optional)
 - `BEDROCK_AGENT_ALIAS_ID` (optional)
 - `BEDROCK_MODEL_ID` (fallback model)
+- `BEDROCK_GUARDRAIL_ID` (optional; apply guardrails on direct Bedrock model invocation)
+- `BEDROCK_GUARDRAIL_VERSION` (required when `BEDROCK_GUARDRAIL_ID` is set; numeric or `DRAFT`)
+- `BEDROCK_GUARDRAIL_TRACE` (optional: `ENABLED|DISABLED|ENABLED_FULL`, default `DISABLED`)
 - `GITHUB_API_BASE=https://github.example.com/api/v3` (or `https://api.github.com` for github.com)
 - `DRY_RUN=true|false`
 - `AUTO_PR_ENABLED=true|false`
@@ -127,6 +130,13 @@ Bedrock model selection controls:
 
 - `CHATBOT_ALLOWED_MODEL_IDS` (CSV; optional allow-list for request `model_id`)
 - If unset, any model ID available to the account/region can be requested.
+
+Chatbot Bedrock guardrails (optional):
+
+- `CHATBOT_GUARDRAIL_ID`
+- `CHATBOT_GUARDRAIL_VERSION`
+- `CHATBOT_GUARDRAIL_TRACE` (`enabled|disabled`, default `disabled`)
+- If chatbot-specific values are unset, chatbot falls back to `BEDROCK_GUARDRAIL_ID` + `BEDROCK_GUARDRAIL_VERSION`.
 
 Model discovery endpoint:
 
@@ -518,6 +528,48 @@ Run the same checks locally:
 
 - `make install`
 - `make check`
+
+## Prompt Regression Evals (Promptfoo)
+
+Prompt eval suites live under `evals/promptfoo`:
+
+- PR-review JSON/schema regressions: `evals/promptfoo/pr-review.promptfooconfig.yaml`
+- Chatbot retrieval-grounding regressions: `evals/promptfoo/chatbot-rag.promptfooconfig.yaml`
+
+Run locally (requires AWS credentials with Bedrock runtime access):
+
+- `make promptfoo-eval-pr`
+- `make promptfoo-eval-chatbot`
+
+Optional env vars:
+
+- `PROMPTFOO_AWS_REGION` (default `us-gov-west-1`)
+- `PROMPTFOO_BEDROCK_MODEL_ID` (default `anthropic.claude-3-5-sonnet-20240620-v1:0`)
+
+A manual GitHub Actions workflow is also included:
+
+- `.github/workflows/prompt-evals.yml`
+- Configure one credential mode in repository secrets:
+  - `AWS_ROLE_TO_ASSUME` (preferred OIDC role), or
+  - `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (+ optional `AWS_SESSION_TOKEN`)
+
+## Lambda Power Tuning
+
+Run tuning locally with an existing Lambda Power Tuning Step Functions state machine:
+
+- `python scripts/run_lambda_power_tuning.py --state-machine-arn <arn> --function-name <lambda-name-or-arn> --region us-gov-west-1`
+
+Useful options:
+
+- `--strategy cost|speed|balanced`
+- `--num 25`
+- `--power-values 128,256,512,768,1024,1536,2048,2560,3008`
+- `--payload-file payload.json` (or `--payload-json '{...}'`)
+
+Manual workflow for repeatable runs + artifact upload:
+
+- `.github/workflows/lambda-power-tuning.yml`
+- The workflow expects an existing Lambda Power Tuning Step Functions state machine ARN as input.
 
 ## PR metadata standards
 

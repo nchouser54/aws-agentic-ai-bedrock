@@ -23,5 +23,9 @@ crash.log
 ._*
 .vscode/settings.json
 
+# Prompt/eval artifacts
+promptfoo-results/
+lambda-power-tuning-result.json
+
 # Local env secrets
 .env

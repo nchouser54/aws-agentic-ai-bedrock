@@ -102,6 +102,26 @@ check "github_kb_sync_settings" {
   }
 }
 
+check "bedrock_guardrail_settings" {
+  assert {
+    condition = (
+      (length(trimspace(var.bedrock_guardrail_id)) == 0 && length(trimspace(var.bedrock_guardrail_version)) == 0) ||
+      (length(trimspace(var.bedrock_guardrail_id)) > 0 && length(trimspace(var.bedrock_guardrail_version)) > 0)
+    )
+    error_message = "Set both bedrock_guardrail_id and bedrock_guardrail_version together, or leave both empty."
+  }
+}
+
+check "chatbot_guardrail_settings" {
+  assert {
+    condition = (
+      (length(trimspace(var.chatbot_guardrail_id)) == 0 && length(trimspace(var.chatbot_guardrail_version)) == 0) ||
+      (length(trimspace(var.chatbot_guardrail_id)) > 0 && length(trimspace(var.chatbot_guardrail_version)) > 0)
+    )
+    error_message = "Set both chatbot_guardrail_id and chatbot_guardrail_version together, or leave both empty."
+  }
+}
+
 check "webapp_ec2_settings" {
   assert {
     condition = (
@@ -1004,6 +1024,9 @@ resource "aws_lambda_function" "pr_review_worker" {
       BEDROCK_AGENT_ID                  = var.bedrock_agent_id
       BEDROCK_AGENT_ALIAS_ID            = var.bedrock_agent_alias_id
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
+      BEDROCK_GUARDRAIL_ID              = var.bedrock_guardrail_id
+      BEDROCK_GUARDRAIL_VERSION         = var.bedrock_guardrail_version
+      BEDROCK_GUARDRAIL_TRACE           = var.bedrock_guardrail_trace
       GITHUB_API_BASE                   = var.github_api_base
       DRY_RUN                           = tostring(var.dry_run)
       IDEMPOTENCY_TABLE                 = aws_dynamodb_table.idempotency.name
@@ -1052,6 +1075,12 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
       AWS_REGION                                     = data.aws_region.current.name
       CHATBOT_MODEL_ID                               = var.chatbot_model_id
       BEDROCK_MODEL_ID                               = var.bedrock_model_id
+      BEDROCK_GUARDRAIL_ID                           = var.bedrock_guardrail_id
+      BEDROCK_GUARDRAIL_VERSION                      = var.bedrock_guardrail_version
+      BEDROCK_GUARDRAIL_TRACE                        = var.bedrock_guardrail_trace
+      CHATBOT_GUARDRAIL_ID                           = var.chatbot_guardrail_id
+      CHATBOT_GUARDRAIL_VERSION                      = var.chatbot_guardrail_version
+      CHATBOT_GUARDRAIL_TRACE                        = var.chatbot_guardrail_trace
       CHATBOT_RETRIEVAL_MODE                         = var.chatbot_retrieval_mode
       CHATBOT_DEFAULT_ASSISTANT_MODE                 = var.chatbot_default_assistant_mode
       CHATBOT_LLM_PROVIDER                           = var.chatbot_llm_provider
@@ -1136,6 +1165,12 @@ resource "aws_lambda_function" "teams_chatbot_adapter" {
       AWS_REGION                       = data.aws_region.current.name
       CHATBOT_MODEL_ID                 = var.chatbot_model_id
       BEDROCK_MODEL_ID                 = var.bedrock_model_id
+      BEDROCK_GUARDRAIL_ID             = var.bedrock_guardrail_id
+      BEDROCK_GUARDRAIL_VERSION        = var.bedrock_guardrail_version
+      BEDROCK_GUARDRAIL_TRACE          = var.bedrock_guardrail_trace
+      CHATBOT_GUARDRAIL_ID             = var.chatbot_guardrail_id
+      CHATBOT_GUARDRAIL_VERSION        = var.chatbot_guardrail_version
+      CHATBOT_GUARDRAIL_TRACE          = var.chatbot_guardrail_trace
       CHATBOT_RETRIEVAL_MODE           = var.chatbot_retrieval_mode
       BEDROCK_KNOWLEDGE_BASE_ID        = var.bedrock_knowledge_base_id
       BEDROCK_KB_TOP_K                 = tostring(var.bedrock_kb_top_k)

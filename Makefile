@@ -1,4 +1,4 @@
-.PHONY: install install-mcp mcp-github-server mcp-atlassian-server mcp-github-release-server mcp-unified-server mcp-list lint test check terraform-fmt-check terraform-validate verify-toolchain
+.PHONY: install install-mcp mcp-github-server mcp-atlassian-server mcp-github-release-server mcp-unified-server mcp-list lint test check terraform-fmt-check terraform-validate verify-toolchain promptfoo-eval-pr promptfoo-eval-chatbot
 
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 TERRAFORM ?= terraform
@@ -44,5 +44,15 @@ terraform-validate:
 
 verify-toolchain:
 	$(PYTHON) scripts/predeploy_nonprod_checks.py --tfvars infra/terraform/terraform.nonprod.tfvars.example
+
+promptfoo-eval-pr:
+	PROMPTFOO_AWS_REGION=$${PROMPTFOO_AWS_REGION:-us-gov-west-1} \
+	PROMPTFOO_BEDROCK_MODEL_ID=$${PROMPTFOO_BEDROCK_MODEL_ID:-anthropic.claude-3-5-sonnet-20240620-v1:0} \
+	npx promptfoo@latest eval --config evals/promptfoo/pr-review.promptfooconfig.yaml --output promptfoo-results/pr-review.json
+
+promptfoo-eval-chatbot:
+	PROMPTFOO_AWS_REGION=$${PROMPTFOO_AWS_REGION:-us-gov-west-1} \
+	PROMPTFOO_BEDROCK_MODEL_ID=$${PROMPTFOO_BEDROCK_MODEL_ID:-anthropic.claude-3-5-sonnet-20240620-v1:0} \
+	npx promptfoo@latest eval --config evals/promptfoo/chatbot-rag.promptfooconfig.yaml --output promptfoo-results/chatbot-rag.json
 
 check: lint test

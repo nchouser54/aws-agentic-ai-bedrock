@@ -1,0 +1,83 @@
+name: Prompt Evals
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Promptfoo suite to run"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - pr-review
+          - chatbot-rag
+      aws_region:
+        description: "AWS region for Bedrock runtime"
+        required: true
+        default: "us-gov-west-1"
+      model_id:
+        description: "Bedrock model ID for Promptfoo provider"
+        required: true
+        default: "anthropic.claude-3-5-sonnet-20240620-v1:0"
+
+jobs:
+  run-prompt-evals:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROMPTFOO_AWS_REGION: ${{ inputs.aws_region }}
+      PROMPTFOO_BEDROCK_MODEL_ID: ${{ inputs.model_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Configure AWS credentials (OIDC role)
+        if: ${{ secrets.AWS_ROLE_TO_ASSUME != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ inputs.aws_region }}
+          role-session-name: promptfoo-evals
+
+      - name: Configure AWS credentials (access keys fallback)
+        if: ${{ secrets.AWS_ROLE_TO_ASSUME == '' && secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_SECRET_ACCESS_KEY != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Validate AWS credential configuration
+        if: ${{ secrets.AWS_ROLE_TO_ASSUME == '' && (secrets.AWS_ACCESS_KEY_ID == '' || secrets.AWS_SECRET_ACCESS_KEY == '') }}
+        run: |
+          echo "::error::Set AWS_ROLE_TO_ASSUME or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY secrets to run prompt evals."
+          exit 1
+
+      - name: Run Promptfoo evals
+        run: |
+          mkdir -p promptfoo-results
+          if [ "${{ inputs.suite }}" = "all" ] || [ "${{ inputs.suite }}" = "pr-review" ]; then
+            npx promptfoo@latest eval \
+              --config evals/promptfoo/pr-review.promptfooconfig.yaml \
+              --output promptfoo-results/pr-review.json
+          fi
+          if [ "${{ inputs.suite }}" = "all" ] || [ "${{ inputs.suite }}" = "chatbot-rag" ]; then
+            npx promptfoo@latest eval \
+              --config evals/promptfoo/chatbot-rag.promptfooconfig.yaml \
+              --output promptfoo-results/chatbot-rag.json
+          fi
+
+      - name: Upload Promptfoo results
+        uses: actions/upload-artifact@v4
+        with:
+          name: promptfoo-results
+          path: promptfoo-results/

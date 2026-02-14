@@ -8,6 +8,13 @@ import boto3
 from botocore.client import BaseClient
 
 
+def _normalize_invoke_trace(value: str | None) -> str | None:
+    normalized = (value or "").strip().upper()
+    if normalized in {"ENABLED", "DISABLED", "ENABLED_FULL"}:
+        return normalized
+    return None
+
+
 class BedrockReviewClient:
     def __init__(
         self,
@@ -15,12 +22,18 @@ class BedrockReviewClient:
         model_id: str,
         agent_id: Optional[str] = None,
         agent_alias_id: Optional[str] = None,
+        guardrail_identifier: str | None = None,
+        guardrail_version: str | None = None,
+        guardrail_trace: str | None = None,
         agent_runtime: Optional[BaseClient] = None,
         bedrock_runtime: Optional[BaseClient] = None,
     ) -> None:
         self._model_id = model_id
         self._agent_id = agent_id
         self._agent_alias_id = agent_alias_id
+        self._guardrail_identifier = (guardrail_identifier or "").strip() or None
+        self._guardrail_version = (guardrail_version or "").strip() or None
+        self._guardrail_trace = _normalize_invoke_trace(guardrail_trace)
         self._agent_runtime = agent_runtime or boto3.client("bedrock-agent-runtime", region_name=region)
         self._bedrock_runtime = bedrock_runtime or boto3.client("bedrock-runtime", region_name=region)
 
@@ -69,12 +82,20 @@ class BedrockReviewClient:
                 }
             ],
         }
-        response = self._bedrock_runtime.invoke_model(
-            modelId=self._model_id,
-            contentType="application/json",
-            accept="application/json",
-            body=json.dumps(body),
-        )
+
+        invoke_kwargs: dict = {
+            "modelId": self._model_id,
+            "contentType": "application/json",
+            "accept": "application/json",
+            "body": json.dumps(body),
+        }
+        if self._guardrail_identifier and self._guardrail_version:
+            invoke_kwargs["guardrailIdentifier"] = self._guardrail_identifier
+            invoke_kwargs["guardrailVersion"] = self._guardrail_version
+            if self._guardrail_trace:
+                invoke_kwargs["trace"] = self._guardrail_trace
+
+        response = self._bedrock_runtime.invoke_model(**invoke_kwargs)
         payload = json.loads(response["body"].read())
         content = payload.get("content", [])
         if not content:

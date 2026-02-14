@@ -1,0 +1,28 @@
+- description: "Uses provided deployment window context"
+  vars:
+    query: "When is the approved deployment window?"
+    context: |
+      Release policy:
+      - Approved deployment window is Sunday 02:00 UTC.
+      - Emergency changes require director approval.
+  assert:
+    - type: is-json
+    - type: javascript
+      value: |
+        const obj = JSON.parse(output);
+        if (!obj || typeof obj.answer !== 'string') return false;
+        return obj.answer.includes('Sunday 02:00 UTC') && obj.used_context === true;
+
+- description: "Returns explicit insufficient-context signal"
+  vars:
+    query: "What is the incident commander on-call phone number?"
+    context: |
+      Runbook metadata:
+      - Service owner: Platform Engineering
+      - Primary channel: #platform-ops
+  assert:
+    - type: is-json
+    - type: javascript
+      value: |
+        const obj = JSON.parse(output);
+        return obj.answer === 'INSUFFICIENT_CONTEXT' && obj.used_context === false;

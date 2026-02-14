@@ -726,9 +726,15 @@ def _answer_with_provider(
         return client.answer(system_prompt=system_prompt, user_prompt=user_prompt)
 
     _validate_bedrock_model_id(model_id)
+    guardrail_identifier = (os.getenv("CHATBOT_GUARDRAIL_ID") or os.getenv("BEDROCK_GUARDRAIL_ID") or "").strip()
+    guardrail_version = (os.getenv("CHATBOT_GUARDRAIL_VERSION") or os.getenv("BEDROCK_GUARDRAIL_VERSION") or "").strip()
+    guardrail_trace = (os.getenv("CHATBOT_GUARDRAIL_TRACE") or "").strip()
     client = BedrockChatClient(
         region=os.getenv("AWS_REGION", DEFAULT_REGION),
         model_id=model_id,
+        guardrail_identifier=guardrail_identifier or None,
+        guardrail_version=guardrail_version or None,
+        guardrail_trace=guardrail_trace or None,
     )
     return client.answer(system_prompt=system_prompt, user_prompt=user_prompt)
 
