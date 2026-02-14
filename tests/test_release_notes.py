@@ -178,6 +178,43 @@ def test_lambda_handler_success(mock_auth_cls, mock_gh_cls, mock_gen) -> None:
     assert body["previous_tag"] == "v1.0"
 
 
+@patch("release_notes.app.generate_release_notes", return_value="# Notes")
+@patch("release_notes.app.GitHubClient")
+@patch("release_notes.app.GitHubAppAuth")
+def test_lambda_handler_update_release_string_false(mock_auth_cls, mock_gh_cls, _mock_gen) -> None:
+    mock_auth = MagicMock()
+    mock_auth.get_installation_token.return_value = "tok"
+    mock_auth_cls.return_value = mock_auth
+
+    mock_gh = MagicMock()
+    mock_gh_cls.return_value = mock_gh
+
+    with patch.dict(
+        "os.environ",
+        {
+            "GITHUB_APP_IDS_SECRET_ARN": "arn:ids",
+            "GITHUB_APP_PRIVATE_KEY_SECRET_ARN": "arn:key",
+            "BEDROCK_MODEL_ID": "model",
+        },
+        clear=False,
+    ):
+        out = lambda_handler(
+            _api_event(body={
+                "repo": "my-org/my-repo",
+                "tag": "v2.0",
+                "previous_tag": "v1.0",
+                "update_release": "false",
+                "dry_run": "false",
+            }),
+            None,
+        )
+
+    assert out["statusCode"] == 200
+    body = json.loads(out["body"])
+    assert body["release_url"] == ""
+    mock_gh.get_release_by_tag.assert_not_called()
+
+
 @patch("release_notes.app._detect_previous_tag", return_value=None)
 @patch("release_notes.app.GitHubClient")
 @patch("release_notes.app.GitHubAppAuth")

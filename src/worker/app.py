@@ -99,16 +99,22 @@ def _is_sensitive_file(path: str) -> bool:
 
 def _emit_metric(metric_name: str, value: float, unit: str = "Count") -> None:
     namespace = os.getenv("METRICS_NAMESPACE", "AIPrReviewer")
-    _cloudwatch.put_metric_data(
-        Namespace=namespace,
-        MetricData=[
-            {
-                "MetricName": metric_name,
-                "Unit": unit,
-                "Value": value,
-            }
-        ],
-    )
+    try:
+        _cloudwatch.put_metric_data(
+            Namespace=namespace,
+            MetricData=[
+                {
+                    "MetricName": metric_name,
+                    "Unit": unit,
+                    "Value": value,
+                }
+            ],
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "metric_emit_failed",
+            extra={"extra": {"metric_name": metric_name, "namespace": namespace}},
+        )
 
 
 def _claim_idempotency(repo_full_name: str, pr_number: int, head_sha: str) -> bool:

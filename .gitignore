@@ -20,6 +20,7 @@ crash.log
 
 # OS/editor
 .DS_Store
+._*
 .vscode/settings.json
 
 # Local env secrets

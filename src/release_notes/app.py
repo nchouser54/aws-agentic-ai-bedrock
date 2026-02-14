@@ -52,6 +52,22 @@ Improvements, Documentation, Breaking Changes, Other.
 """
 
 
+def _as_bool(value: Any, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "t", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "f", "no", "n", "off", ""}:
+            return False
+    return default
+
+
 def _extract_jira_keys_from_prs(prs: list[dict[str, Any]]) -> dict[str, list[str]]:
     """Map PR number -> list of Jira keys found in title + body + branch."""
     pr_keys: dict[str, list[str]] = {}
@@ -202,8 +218,8 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
 
     owner, repo = repo_full.split("/", maxsplit=1)
     region = os.getenv("AWS_REGION", DEFAULT_REGION)
-    dry_run = str(body.get("dry_run", os.getenv("DRY_RUN", "false"))).lower() == "true"
-    update_release = body.get("update_release", False)
+    dry_run = _as_bool(body.get("dry_run", os.getenv("DRY_RUN", "false")), default=False)
+    update_release = _as_bool(body.get("update_release"), default=False)
 
     # Authenticate as GitHub App
     auth = GitHubAppAuth(

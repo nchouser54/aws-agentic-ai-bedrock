@@ -50,6 +50,22 @@ Rules:
 """
 
 
+def _as_bool(value: Any, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "t", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "f", "no", "n", "off", ""}:
+            return False
+    return default
+
+
 # ---- Jira helpers ------------------------------------------------------------
 
 
@@ -270,7 +286,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
 
     repo_full = (body.get("repo") or "").strip()
     pr_number = body.get("pr_number")
-    apply_to_pr = body.get("apply", True)
+    apply_to_pr = _as_bool(body.get("apply"), default=True)
 
     if not repo_full or not pr_number or "/" not in repo_full:
         return {"statusCode": 400, "body": json.dumps({
@@ -280,7 +296,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     owner, repo = repo_full.split("/", maxsplit=1)
     region = os.getenv("AWS_REGION", DEFAULT_REGION)
     model_id = os.environ.get("PR_DESCRIPTION_MODEL_ID") or os.environ.get("BEDROCK_MODEL_ID", "")
-    dry_run = str(body.get("dry_run", os.getenv("DRY_RUN", "false"))).lower() == "true"
+    dry_run = _as_bool(body.get("dry_run", os.getenv("DRY_RUN", "false")), default=False)
     atlassian_secret_arn = os.getenv("ATLASSIAN_CREDENTIALS_SECRET_ARN", "")
 
     auth = GitHubAppAuth(

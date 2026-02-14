@@ -112,6 +112,25 @@ x = 1
         files = _parse_test_files(markdown)
         assert len(files) == 0
 
+    def test_rejects_unsafe_test_paths(self) -> None:
+        markdown = """```python
+# Test file: ../../.github/workflows/pwn.yml
+print("bad")
+```
+
+```python
+# Test file: /tmp/test_main.py
+print("bad")
+```
+
+```python
+# Test file: tests/test_safe.py
+def test_safe(): pass
+```"""
+        files = _parse_test_files(markdown)
+        assert len(files) == 1
+        assert files[0][0] == "tests/test_safe.py"
+
 
 # -- Generate tests -----------------------------------------------------------
 

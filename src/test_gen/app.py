@@ -248,6 +248,22 @@ def _post_as_draft_pr(
     logger.info("test_draft_pr_created", extra={"extra": {"pr_number": pr_number, "branch": branch_name}})
 
 
+def _is_safe_generated_test_path(path: str) -> bool:
+    normalized = (path or "").strip().replace("\\", "/")
+    if not normalized:
+        return False
+    if normalized.startswith("/") or normalized.startswith("./"):
+        return False
+
+    parts = [part for part in normalized.split("/") if part]
+    if not parts or any(part in {".", ".."} for part in parts):
+        return False
+
+    lower = normalized.lower()
+    allowed_prefixes = ("tests/", "test/", "__tests__/", "spec/")
+    return lower.startswith(allowed_prefixes)
+
+
 def _parse_test_files(markdown: str) -> list[tuple[str, str]]:
     """Extract (path, content) tuples from markdown code blocks.
 
@@ -276,7 +292,7 @@ def _parse_test_files(markdown: str) -> list[tuple[str, str]]:
             stripped = line.strip()
             if not current_path and stripped.startswith("#") and "test file:" in stripped.lower():
                 path = stripped.split(":", 1)[1].strip()
-                if path:
+                if path and _is_safe_generated_test_path(path):
                     current_path = path
                     continue
             current_lines.append(line)

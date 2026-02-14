@@ -184,6 +184,52 @@ def test_lambda_handler_api_gateway(mock_auth_cls: MagicMock, mock_jira: MagicMo
     assert body["applied"] is False
 
 
+@patch("pr_description.app.BedrockChatClient")
+@patch("pr_description.app._fetch_jira_context")
+@patch("pr_description.app.GitHubAppAuth")
+def test_lambda_handler_apply_string_false(
+    mock_auth_cls: MagicMock,
+    mock_jira: MagicMock,
+    mock_chat_cls: MagicMock,
+) -> None:
+    mock_chat = MagicMock()
+    mock_chat.answer.return_value = "Generated description"
+    mock_chat_cls.return_value = mock_chat
+    mock_jira.return_value = []
+
+    mock_auth = MagicMock()
+    mock_auth.get_installation_token.return_value = "tok"
+    mock_auth_cls.return_value = mock_auth
+
+    with patch("pr_description.app.GitHubClient") as mock_gh_cls:
+        gh = MagicMock()
+        gh.get_pull_request.return_value = {
+            "number": 1, "title": "feat", "body": "desc",
+            "head": {"ref": "b", "sha": "sha"}, "base": {"ref": "main"},
+        }
+        gh.get_pull_request_files.return_value = [
+            {"filename": "a.py", "status": "modified", "additions": 1, "deletions": 0, "patch": "@@"},
+        ]
+        gh.list_pull_commits.return_value = [{"sha": "c1", "commit": {"message": "feat"}}]
+        mock_gh_cls.return_value = gh
+
+        with patch.dict("os.environ", {
+            "GITHUB_APP_IDS_SECRET_ARN": "arn:ids",
+            "GITHUB_APP_PRIVATE_KEY_SECRET_ARN": "arn:key",
+            "BEDROCK_MODEL_ID": "claude",
+        }):
+            event = {
+                "requestContext": {"http": {"method": "POST"}},
+                "body": json.dumps({"repo": "o/r", "pr_number": 1, "apply": "false"}),
+            }
+            result = lambda_handler(event, None)
+
+    assert result["statusCode"] == 200
+    body = json.loads(result["body"])
+    assert body["applied"] is False
+    gh.update_pull_request.assert_not_called()
+
+
 def test_lambda_handler_bad_method() -> None:
     event = {"requestContext": {"http": {"method": "DELETE"}}, "body": "{}"}
     result = lambda_handler(event, None)
