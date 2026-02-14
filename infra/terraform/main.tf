@@ -1147,6 +1147,7 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
       BEDROCK_KNOWLEDGE_BASE_ID                      = var.bedrock_knowledge_base_id
       BEDROCK_KB_TOP_K                               = tostring(var.bedrock_kb_top_k)
       ATLASSIAN_CREDENTIALS_SECRET_ARN               = aws_secretsmanager_secret.atlassian_credentials.arn
+      CHATBOT_ATLASSIAN_USER_AUTH_ENABLED            = tostring(var.chatbot_atlassian_user_auth_enabled)
       CHATBOT_API_TOKEN_SECRET_ARN                   = var.chatbot_enabled ? aws_secretsmanager_secret.chatbot_api_token[0].arn : ""
       GITHUB_CHAT_LIVE_ENABLED                       = tostring(var.chatbot_github_live_enabled)
       GITHUB_CHAT_REPOS                              = join(",", var.chatbot_github_live_repos)

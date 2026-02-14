@@ -52,7 +52,12 @@ class FakeSession:
         self.last_request_kwargs: dict = {}
 
     def request(self, method: str, url: str, headers=None, auth=None, timeout=None, **kwargs):
-        self.last_request_kwargs = {"method": method, "url": url, "params": kwargs.get("params")}
+        self.last_request_kwargs = {
+            "method": method,
+            "url": url,
+            "params": kwargs.get("params"),
+            "auth": auth,
+        }
         # Cloud routes
         if "/rest/api/3/search/jql" in url:
             return FakeResponse(200, {"issues": [{"key": "ENG-1"}]})
@@ -197,3 +202,17 @@ def test_invalid_platform_raises() -> None:
     client = AtlassianClient("arn:fake", secrets_client=BadPlatformSecrets(), session=FakeSession())
     with pytest.raises(ValueError, match="Invalid Atlassian platform"):
         client.search_jira("project=X")
+
+
+def test_user_auth_overrides_shared_credentials() -> None:
+    session = FakeSession()
+    client = AtlassianClient(
+        "arn:fake",
+        secrets_client=_make_secrets("cloud"),
+        session=session,
+        email_override="engineer@example.com",
+        api_token_override="user-token-123",
+    )
+
+    client.search_jira("project=ENG")
+    assert session.last_request_kwargs["auth"] == ("engineer@example.com", "user-token-123")

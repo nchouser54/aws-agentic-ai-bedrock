@@ -256,6 +256,12 @@ variable "chatbot_memory_enabled" {
   default     = false
 }
 
+variable "chatbot_atlassian_user_auth_enabled" {
+  description = "Allow optional per-request Jira/Confluence user credentials override (falls back to shared service account when omitted)"
+  type        = bool
+  default     = false
+}
+
 variable "chatbot_memory_max_turns" {
   description = "Maximum number of recent memory turns included in each chatbot prompt"
   type        = number

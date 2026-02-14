@@ -101,6 +101,7 @@ Chatbot endpoint:
   - `jira_jql` (optional)
   - `confluence_cql` (optional)
   - `retrieval_mode` (optional: `live|kb|hybrid`; defaults to `hybrid`)
+  - `atlassian_email` + `atlassian_api_token` (optional pair; only used when `CHATBOT_ATLASSIAN_USER_AUTH_ENABLED=true`)
 - Response includes:
   - `answer` (assistant response; contextual mode appends a compact citations footer by default)
   - `citations` (structured source records for Jira/Confluence/KB/GitHub context)
@@ -204,6 +205,12 @@ Conversation memory options (optional):
 - `CHATBOT_USER_REQUESTS_PER_MINUTE` (default `120`)
 - `CHATBOT_CONVERSATION_REQUESTS_PER_MINUTE` (default `60`)
 - `CHATBOT_QUOTA_FAIL_OPEN=false|true` (default `false`; recommended fail-closed behavior)
+
+Atlassian auth mode:
+
+- Default behavior uses shared service-account credentials from `ATLASSIAN_CREDENTIALS_SECRET_ARN`.
+- Optional per-user override: set `CHATBOT_ATLASSIAN_USER_AUTH_ENABLED=true`, then send request-scoped `atlassian_email` + `atlassian_api_token` (or headers `X-Atlassian-Email` + `X-Atlassian-Api-Token`).
+- If per-user override is enabled and only one credential is provided, the request is rejected.
 
 Response cache options (optional):
 

@@ -57,6 +57,7 @@ chatbot_guardrail_trace   = "disabled"    # enabled | disabled
 chatbot_allowed_llm_providers = ["bedrock"]
 chatbot_allowed_model_ids = ["anthropic.claude-3-sonnet-20240229-v1:0"]
 chatbot_allowed_anthropic_model_ids = []
+chatbot_atlassian_user_auth_enabled = false
 chatbot_quota_fail_open = false
 chatbot_response_cache_enabled = false
 chatbot_response_cache_table = ""

@@ -178,6 +178,7 @@ def _error_status_code(error_code: str) -> int:
         "model_not_allowed",
         "anthropic_direct_disabled",
         "data_exfiltration_attempt",
+        "atlassian_user_auth_disabled",
     }:
         return 403
     if normalized in {"quota_backend_unavailable", "dynamodb_unavailable"}:
@@ -359,6 +360,16 @@ def _image_banned_terms() -> list[str]:
     return [term.strip().lower() for term in raw.split(",") if term.strip()]
 
 
+def _header_value(headers: dict[str, Any] | None, name: str) -> str:
+    target = str(name or "").strip().lower()
+    if not target:
+        return ""
+    for key, value in (headers or {}).items():
+        if str(key).lower() == target:
+            return str(value or "").strip()
+    return ""
+
+
 def _websocket_default_chunk_chars() -> int:
     return max(20, int(os.getenv("CHATBOT_WEBSOCKET_DEFAULT_CHUNK_CHARS", "120")))
 
@@ -389,6 +400,35 @@ def _context_max_chars_per_source() -> int:
 
 def _context_max_total_chars() -> int:
     return max(1024, int(os.getenv("CHATBOT_CONTEXT_MAX_TOTAL_CHARS", "12000")))
+
+
+def _atlassian_user_auth_enabled() -> bool:
+    return os.getenv("CHATBOT_ATLASSIAN_USER_AUTH_ENABLED", "false").strip().lower() == "true"
+
+
+def _resolve_atlassian_request_auth(
+    user_email: str | None,
+    user_api_token: str | None,
+) -> tuple[str | None, str | None, str]:
+    email = str(user_email or "").strip()
+    token = str(user_api_token or "").strip()
+    if not email and not token:
+        return None, None, "service_account"
+
+    if not _atlassian_user_auth_enabled():
+        raise ValueError("atlassian_user_auth_disabled")
+
+    if not email or not token:
+        raise ValueError("atlassian_user_credentials_incomplete")
+
+    if len(email) > 320 or len(token) > 4096:
+        raise ValueError("atlassian_user_credentials_invalid")
+    if any(ch in email for ch in ("\r", "\n", "\t")):
+        raise ValueError("atlassian_user_credentials_invalid")
+    if any(ch in token for ch in ("\r", "\n")):
+        raise ValueError("atlassian_user_credentials_invalid")
+
+    return email, token, "user_credentials"
 
 
 def _budgets_enabled() -> bool:
@@ -2112,6 +2152,8 @@ def handle_query(
     stream: bool = False,
     stream_chunk_chars: int = 120,
     stream_callback: Callable[[str], None] | None = None,
+    atlassian_user_email: str | None = None,
+    atlassian_user_api_token: str | None = None,
 ) -> dict[str, Any]:
     local_logger = get_logger("jira_confluence_chatbot", correlation_id=correlation_id)
 
@@ -2128,6 +2170,18 @@ def handle_query(
     history_text = _format_history_for_prompt(history)
     stream_enabled = bool(stream or stream_callback is not None)
     provider_telemetry: dict[str, Any] = {}
+    atlassian_email_override: str | None = None
+    atlassian_api_token_override: str | None = None
+    atlassian_auth_mode = "none" if resolved_assistant_mode == "general" else "service_account"
+    if resolved_assistant_mode == "contextual":
+        (
+            atlassian_email_override,
+            atlassian_api_token_override,
+            atlassian_auth_mode,
+        ) = _resolve_atlassian_request_auth(
+            atlassian_user_email,
+            atlassian_user_api_token,
+        )
 
     cache_enabled = _response_cache_enabled()
     cache_eligible = cache_enabled and len(query.strip()) >= _response_cache_min_query_length()
@@ -2193,6 +2247,10 @@ def handle_query(
         cached_sources.setdefault("memory_enabled", _chat_memory_enabled())
         cached_sources.setdefault("memory_turns", len(history))
         cached_sources.setdefault("mode", "none" if resolved_assistant_mode == "general" else mode)
+        cached_sources.setdefault(
+            "atlassian_auth_mode",
+            "none" if resolved_assistant_mode == "general" else atlassian_auth_mode,
+        )
         cached_sources["response_cache"] = {
             "enabled": cache_enabled,
             "eligible": cache_eligible,
@@ -2349,6 +2407,7 @@ def handle_query(
                     "hit": False,
                     "tier": "none",
                 },
+                "atlassian_auth_mode": "none",
                 "mode": "none",
                 "context_source": "none",
                 "kb_count": 0,
@@ -2396,7 +2455,11 @@ def handle_query(
 
         use_live = mode == "live" or (mode == "hybrid" and not kb_items)
         if use_live:
-            atlassian = AtlassianClient(credentials_secret_arn=os.environ["ATLASSIAN_CREDENTIALS_SECRET_ARN"])
+            atlassian = AtlassianClient(
+                credentials_secret_arn=os.environ["ATLASSIAN_CREDENTIALS_SECRET_ARN"],
+                email_override=atlassian_email_override,
+                api_token_override=atlassian_api_token_override,
+            )
             with ThreadPoolExecutor(max_workers=3) as pool:
                 jira_future = pool.submit(atlassian.search_jira, jira_jql, 5)
                 confluence_future = pool.submit(atlassian.search_confluence, confluence_cql, 5)
@@ -2405,6 +2468,8 @@ def handle_query(
                 conf_items = confluence_future.result()
                 github_items = github_future.result()
             context_source = "live" if mode == "live" else "hybrid_fallback"
+        else:
+            atlassian_auth_mode = "none"
 
         jira_items, blocked = _sanitize_context_items("jira", jira_items, local_logger)
         context_items_blocked += blocked
@@ -2525,6 +2590,7 @@ def handle_query(
                 "hit": False,
                 "tier": "none",
             },
+            "atlassian_auth_mode": atlassian_auth_mode,
             "context_budget": context_budget,
             "mode": mode,
             "context_source": context_source,
@@ -2617,12 +2683,21 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             return {"statusCode": 200}
 
         actor_id = _actor_id(event)
+        headers = event.get("headers") or {}
         jira_jql = str(body.get("jira_jql") or "").strip() or "order by updated DESC"
         confluence_cql = str(body.get("confluence_cql") or "").strip() or "type=page order by lastmodified desc"
         assistant_mode = _normalize_assistant_mode(body.get("assistant_mode"))
         llm_provider = _normalize_llm_provider(body.get("llm_provider"))
         model_id = str(body.get("model_id") or "").strip() or None
         conversation_id = str(body.get("conversation_id") or "").strip() or None
+        atlassian_user_email = (
+            str(body.get("atlassian_email") or "").strip() or _header_value(headers, "x-atlassian-email") or None
+        )
+        atlassian_user_api_token = (
+            str(body.get("atlassian_api_token") or "").strip()
+            or _header_value(headers, "x-atlassian-api-token")
+            or None
+        )
         retrieval_mode = _normalize_retrieval_mode(body.get("retrieval_mode"))
         chunk_chars = max(20, min(int(body.get("stream_chunk_chars") or _websocket_default_chunk_chars()), 1000))
 
@@ -2673,6 +2748,8 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 actor_id=actor_id,
                 stream=False,
                 stream_callback=on_stream_delta,
+                atlassian_user_email=atlassian_user_email,
+                atlassian_user_api_token=atlassian_user_api_token,
             )
         except ValueError as exc:
             error_code = str(exc)
@@ -2786,6 +2863,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
 
     query = str(body.get("query") or "").strip()
     actor_id = _actor_id(event)
+    request_headers = event.get("headers") or {}
     is_image_route = path.endswith("/chatbot/image")
     if is_image_route:
         if not query:
@@ -2942,6 +3020,14 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     llm_provider = _normalize_llm_provider(body.get("llm_provider"))
     model_id = str(body.get("model_id") or "").strip() or None
     conversation_id = str(body.get("conversation_id") or "").strip() or None
+    atlassian_user_email = (
+        str(body.get("atlassian_email") or "").strip() or _header_value(request_headers, "x-atlassian-email") or None
+    )
+    atlassian_user_api_token = (
+        str(body.get("atlassian_api_token") or "").strip()
+        or _header_value(request_headers, "x-atlassian-api-token")
+        or None
+    )
     retrieval_mode = _normalize_retrieval_mode(body.get("retrieval_mode"))
     stream = bool(body.get("stream") is True)
     stream_chunk_chars = int(body.get("stream_chunk_chars") or 120)
@@ -2974,6 +3060,8 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             actor_id=actor_id,
             stream=stream,
             stream_chunk_chars=stream_chunk_chars,
+            atlassian_user_email=atlassian_user_email,
+            atlassian_user_api_token=atlassian_user_api_token,
         )
     except ValueError as exc:
         error_code = str(exc)

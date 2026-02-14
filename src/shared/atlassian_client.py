@@ -42,11 +42,15 @@ class AtlassianClient:
         credentials_secret_arn: str,
         secrets_client: Optional[BaseClient] = None,
         session: Optional[requests.Session] = None,
+        email_override: Optional[str] = None,
+        api_token_override: Optional[str] = None,
     ) -> None:
         self._credentials_secret_arn = credentials_secret_arn
         self._secrets = secrets_client or boto3.client("secretsmanager")
         self._session = session or requests.Session()
         self._credentials_cache: Optional[dict[str, str]] = None
+        self._email_override = (email_override or "").strip() or None
+        self._api_token_override = (api_token_override or "").strip() or None
 
     # -- credentials -----------------------------------------------------------
 
@@ -74,8 +78,8 @@ class AtlassianClient:
         self._credentials_cache = {
             "jira_base_url": data["jira_base_url"].rstrip("/"),
             "confluence_base_url": data["confluence_base_url"].rstrip("/"),
-            "email": data["email"],
-            "api_token": data["api_token"],
+            "email": self._email_override or data["email"],
+            "api_token": self._api_token_override or data["api_token"],
             "platform": platform,
         }
         return self._credentials_cache

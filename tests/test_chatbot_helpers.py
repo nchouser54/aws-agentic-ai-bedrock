@@ -284,6 +284,70 @@ def test_handle_query_live_mode(mock_atlassian_cls, mock_chat_cls) -> None:
 
 
 @patch("chatbot.app.BedrockChatClient")
+@patch("chatbot.app.AtlassianClient")
+def test_handle_query_live_mode_with_user_atlassian_override(mock_atlassian_cls, mock_chat_cls) -> None:
+    mock_chat = MagicMock()
+    mock_chat.answer.return_value = "Live mode answer"
+    mock_chat_cls.return_value = mock_chat
+
+    mock_atlassian = MagicMock()
+    mock_atlassian.search_jira.return_value = [{"key": "ENG-1", "fields": {"summary": "Fix"}}]
+    mock_atlassian.search_confluence.return_value = [{"title": "Runbook", "url": "https://wiki/runbook"}]
+    mock_atlassian_cls.return_value = mock_atlassian
+
+    with patch.dict(
+        "os.environ",
+        {
+            "ATLASSIAN_CREDENTIALS_SECRET_ARN": "arn:fake",
+            "CHATBOT_MODEL_ID": "anthropic.model",
+            "CHATBOT_ATLASSIAN_USER_AUTH_ENABLED": "true",
+        },
+        clear=False,
+    ):
+        _out = handle_query(
+            "what is broken",
+            "project=ENG",
+            "type=page",
+            "corr-live-user-auth",
+            retrieval_mode="live",
+            atlassian_user_email="engineer@example.com",
+            atlassian_user_api_token="user-token",
+        )
+
+    assert mock_atlassian_cls.call_args.kwargs["email_override"] == "engineer@example.com"
+    assert mock_atlassian_cls.call_args.kwargs["api_token_override"] == "user-token"
+
+
+@patch("chatbot.app.BedrockChatClient")
+def test_handle_query_rejects_partial_user_atlassian_credentials(mock_chat_cls) -> None:
+    with patch.dict(
+        "os.environ",
+        {
+            "ATLASSIAN_CREDENTIALS_SECRET_ARN": "arn:fake",
+            "CHATBOT_MODEL_ID": "anthropic.model",
+            "CHATBOT_ATLASSIAN_USER_AUTH_ENABLED": "true",
+        },
+        clear=False,
+    ):
+        try:
+            handle_query(
+                "what is broken",
+                "project=ENG",
+                "type=page",
+                "corr-live-user-auth-invalid",
+                retrieval_mode="live",
+                atlassian_user_email="engineer@example.com",
+                atlassian_user_api_token=None,
+            )
+        except ValueError as exc:
+            assert str(exc) == "atlassian_user_credentials_incomplete"
+        else:
+            raise AssertionError("Expected ValueError for partial user Atlassian credentials")
+
+    mock_chat_cls.assert_not_called()
+
+
+@patch("chatbot.app.BedrockChatClient")
 @patch("chatbot.app.GitHubClient")
 @patch("chatbot.app.GitHubAppAuth")
 @patch("chatbot.app.AtlassianClient")
@@ -1094,6 +1158,34 @@ def test_lambda_handler_auth_passed() -> None:
                 _api_event(body={"query": "test"}, headers={"x-api-token": "my-secret"}),
                 None,
             )
+    assert out["statusCode"] == 200
+
+
+def test_lambda_handler_passes_atlassian_user_credentials_to_handle_query() -> None:
+    import chatbot.app as chatbot_mod
+
+    chatbot_mod._cached_api_token = None
+    env = {
+        "CHATBOT_API_TOKEN_SECRET_ARN": "",
+        "CHATBOT_API_TOKEN": "",
+        "ATLASSIAN_CREDENTIALS_SECRET_ARN": "arn:fake",
+        "CHATBOT_MODEL_ID": "model",
+    }
+    body = {
+        "query": "test",
+        "atlassian_email": "engineer@example.com",
+        "atlassian_api_token": "user-token",
+    }
+
+    def _fake_handle_query(*_args, **kwargs):
+        assert kwargs["atlassian_user_email"] == "engineer@example.com"
+        assert kwargs["atlassian_user_api_token"] == "user-token"
+        return {"answer": "ok", "sources": {}}
+
+    with patch.dict("os.environ", env, clear=False):
+        with patch("chatbot.app.handle_query", side_effect=_fake_handle_query):
+            out = lambda_handler(_api_event(body=body), None)
+
     assert out["statusCode"] == 200
 
 
