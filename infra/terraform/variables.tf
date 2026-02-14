@@ -178,8 +178,27 @@ variable "chatbot_llm_provider" {
   }
 }
 
+variable "chatbot_allowed_llm_providers" {
+  description = "Allow-list of requestable chatbot providers"
+  type        = list(string)
+  default     = ["bedrock"]
+
+  validation {
+    condition = alltrue([
+      for provider in var.chatbot_allowed_llm_providers : contains(["bedrock", "anthropic_direct"], provider)
+    ])
+    error_message = "chatbot_allowed_llm_providers values must be bedrock and/or anthropic_direct."
+  }
+}
+
 variable "chatbot_allowed_model_ids" {
   description = "Optional allow-list of Bedrock model IDs that the chatbot may use when model_id override is supplied"
+  type        = list(string)
+  default     = []
+}
+
+variable "chatbot_allowed_anthropic_model_ids" {
+  description = "Optional allow-list of direct Anthropic model IDs that the chatbot may use when model_id override is supplied"
   type        = list(string)
   default     = []
 }
@@ -290,6 +309,227 @@ variable "chatbot_conversation_requests_per_minute" {
     condition     = var.chatbot_conversation_requests_per_minute >= 1
     error_message = "Must be at least 1."
   }
+}
+
+variable "chatbot_quota_fail_open" {
+  description = "Allow requests when quota backend checks fail (not recommended)"
+  type        = bool
+  default     = false
+}
+
+variable "chatbot_response_cache_enabled" {
+  description = "Enable semantic response cache for repeated chatbot queries"
+  type        = bool
+  default     = false
+}
+
+variable "chatbot_response_cache_table" {
+  description = "Optional DynamoDB table for chatbot response cache; defaults to chatbot memory table when available"
+  type        = string
+  default     = ""
+}
+
+variable "chatbot_response_cache_ttl_seconds" {
+  description = "TTL in seconds for chatbot response cache entries"
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = var.chatbot_response_cache_ttl_seconds >= 30
+    error_message = "Must be at least 30."
+  }
+}
+
+variable "chatbot_response_cache_min_query_length" {
+  description = "Minimum query length before chatbot response cache lookup is attempted"
+  type        = number
+  default     = 12
+
+  validation {
+    condition     = var.chatbot_response_cache_min_query_length >= 1
+    error_message = "Must be at least 1."
+  }
+}
+
+variable "chatbot_response_cache_max_answer_chars" {
+  description = "Maximum cached chatbot answer size in characters"
+  type        = number
+  default     = 16000
+
+  validation {
+    condition     = var.chatbot_response_cache_max_answer_chars >= 200
+    error_message = "Must be at least 200."
+  }
+}
+
+variable "chatbot_response_cache_lock_ttl_seconds" {
+  description = "Short-lived lock TTL in seconds for response cache miss single-flight coordination"
+  type        = number
+  default     = 15
+
+  validation {
+    condition     = var.chatbot_response_cache_lock_ttl_seconds >= 5
+    error_message = "Must be at least 5."
+  }
+}
+
+variable "chatbot_response_cache_lock_wait_ms" {
+  description = "Wait interval in milliseconds when another invocation is generating a cache entry"
+  type        = number
+  default     = 150
+
+  validation {
+    condition     = var.chatbot_response_cache_lock_wait_ms >= 50
+    error_message = "Must be at least 50."
+  }
+}
+
+variable "chatbot_response_cache_lock_wait_attempts" {
+  description = "Number of wait-retry attempts when response cache lock is already held"
+  type        = number
+  default     = 6
+
+  validation {
+    condition     = var.chatbot_response_cache_lock_wait_attempts >= 1
+    error_message = "Must be at least 1."
+  }
+}
+
+variable "chatbot_rerank_enabled" {
+  description = "Enable lexical reranking of retrieved context before prompting"
+  type        = bool
+  default     = true
+}
+
+variable "chatbot_rerank_top_k_per_source" {
+  description = "Number of top reranked context items to keep per source"
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.chatbot_rerank_top_k_per_source >= 1
+    error_message = "Must be at least 1."
+  }
+}
+
+variable "chatbot_prompt_safety_enabled" {
+  description = "Enable prompt injection and data-exfiltration detection for chatbot queries/context"
+  type        = bool
+  default     = true
+}
+
+variable "chatbot_context_safety_block_request" {
+  description = "Fail the request when unsafe patterns are found in retrieved context instead of dropping those items"
+  type        = bool
+  default     = false
+}
+
+variable "chatbot_safety_scan_char_limit" {
+  description = "Maximum characters scanned per prompt/context item for safety detection"
+  type        = number
+  default     = 8000
+
+  validation {
+    condition     = var.chatbot_safety_scan_char_limit >= 256
+    error_message = "Must be at least 256."
+  }
+}
+
+variable "chatbot_context_max_chars_per_source" {
+  description = "Maximum context characters per source block (Jira/Confluence/KB/GitHub) included in chatbot prompts"
+  type        = number
+  default     = 3500
+
+  validation {
+    condition     = var.chatbot_context_max_chars_per_source >= 256
+    error_message = "Must be at least 256."
+  }
+}
+
+variable "chatbot_context_max_total_chars" {
+  description = "Maximum total context characters included in chatbot prompts across all sources"
+  type        = number
+  default     = 12000
+
+  validation {
+    condition     = var.chatbot_context_max_total_chars >= 1024
+    error_message = "Must be at least 1024."
+  }
+}
+
+variable "chatbot_budgets_enabled" {
+  description = "Enable conversation-level budget tracking and model routing"
+  type        = bool
+  default     = false
+}
+
+variable "chatbot_budget_table" {
+  description = "Optional DynamoDB table for budget tracking; defaults to chatbot memory table when available"
+  type        = string
+  default     = ""
+}
+
+variable "chatbot_budget_soft_limit_usd" {
+  description = "Conversation-level soft budget limit in USD for routing toward low-cost models"
+  type        = number
+  default     = 0.5
+
+  validation {
+    condition     = var.chatbot_budget_soft_limit_usd >= 0
+    error_message = "Must be >= 0."
+  }
+}
+
+variable "chatbot_budget_hard_limit_usd" {
+  description = "Conversation-level hard budget limit in USD; requests are rejected when exceeded"
+  type        = number
+  default     = 1.0
+
+  validation {
+    condition     = var.chatbot_budget_hard_limit_usd >= var.chatbot_budget_soft_limit_usd
+    error_message = "Must be >= chatbot_budget_soft_limit_usd."
+  }
+}
+
+variable "chatbot_budget_ttl_days" {
+  description = "Days before conversation budget tracking records expire"
+  type        = number
+  default     = 90
+
+  validation {
+    condition     = var.chatbot_budget_ttl_days >= 1
+    error_message = "Must be at least 1."
+  }
+}
+
+variable "chatbot_router_low_cost_bedrock_model_id" {
+  description = "Optional low-cost Bedrock model for dynamic routing"
+  type        = string
+  default     = ""
+}
+
+variable "chatbot_router_high_quality_bedrock_model_id" {
+  description = "Optional high-quality Bedrock model override for dynamic routing"
+  type        = string
+  default     = ""
+}
+
+variable "chatbot_router_low_cost_anthropic_model_id" {
+  description = "Optional low-cost Anthropic-direct model for dynamic routing"
+  type        = string
+  default     = ""
+}
+
+variable "chatbot_router_high_quality_anthropic_model_id" {
+  description = "Optional high-quality Anthropic-direct model override for dynamic routing"
+  type        = string
+  default     = ""
+}
+
+variable "chatbot_model_pricing_json" {
+  description = "Optional JSON map of model pricing used for budget cost estimation"
+  type        = string
+  default     = "{}"
 }
 
 variable "chatbot_image_model_id" {

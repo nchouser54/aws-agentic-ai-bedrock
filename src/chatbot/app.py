@@ -6,8 +6,10 @@ import json
 import os
 import re
 import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import boto3
 
@@ -25,6 +27,29 @@ ALLOWED_RETRIEVAL_MODES = {"live", "kb", "hybrid"}
 ALLOWED_ASSISTANT_MODES = {"contextual", "general"}
 ALLOWED_LLM_PROVIDERS = {"bedrock", "anthropic_direct"}
 _VALID_CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+_VALID_FEEDBACK_SENTIMENTS = {"positive", "negative", "neutral"}
+_SAFETY_INJECTION_PATTERNS = (
+    re.compile(r"ignore\s+(all\s+)?(previous|prior)\s+instructions?", re.IGNORECASE),
+    re.compile(r"(system|developer)\s+prompt", re.IGNORECASE),
+    re.compile(r"disregard\s+(the\s+)?(rules|instructions?)", re.IGNORECASE),
+    re.compile(r"override\s+(the\s+)?(policy|instructions?)", re.IGNORECASE),
+)
+_SAFETY_EXFILTRATION_PATTERNS = (
+    re.compile(
+        r"(show|reveal|dump|print|send|exfiltrat\w*)\s+.{0,50}"
+        r"(api[\s_-]?key|secret|token|password|private[\s_-]?key|credential|env(?:ironment)?\s*var)",
+        re.IGNORECASE,
+    ),
+    re.compile(r"BEGIN\s+(RSA|OPENSSH|EC)\s+PRIVATE\s+KEY", re.IGNORECASE),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+)
+_SENSITIVE_STORE_PATTERNS = (
+    re.compile(r"BEGIN\s+(RSA|OPENSSH|EC)\s+PRIVATE\s+KEY", re.IGNORECASE),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"(?i)aws_secret_access_key\s*[:=]\s*[A-Za-z0-9/+=]{20,}"),
+    re.compile(r"(?i)(api[_-]?key|token|password|secret)\s*[:=]\s*[A-Za-z0-9._~+/=-]{12,}"),
+    re.compile(r"(?i)authorization:\s*bearer\s+[A-Za-z0-9._~+/=-]{12,}"),
+)
 _cloudwatch: Any | None = None
 
 _cached_api_token: str | None = None
@@ -101,6 +126,8 @@ def _route_name(path: str) -> str:
         return "image"
     if path.endswith("/chatbot/models"):
         return "models"
+    if path.endswith("/chatbot/feedback"):
+        return "feedback"
     return "other"
 
 
@@ -140,6 +167,22 @@ def _respond(
     if headers is not None:
         response["headers"] = headers
     return response
+
+
+def _error_status_code(error_code: str) -> int:
+    normalized = (error_code or "").strip().lower()
+    if normalized in {"rate_limit_exceeded", "conversation_budget_exceeded"}:
+        return 429
+    if normalized in {
+        "provider_not_allowed",
+        "model_not_allowed",
+        "anthropic_direct_disabled",
+        "data_exfiltration_attempt",
+    }:
+        return 403
+    if normalized in {"quota_backend_unavailable", "dynamodb_unavailable"}:
+        return 503
+    return 400
 
 
 def _load_api_token() -> str:
@@ -183,17 +226,70 @@ def _normalize_llm_provider(value: str | None) -> str:
     return provider
 
 
+def _allowed_llm_providers() -> set[str]:
+    raw = os.getenv("CHATBOT_ALLOWED_LLM_PROVIDERS", "").strip()
+    if raw:
+        allowed = {item.strip().lower() for item in raw.split(",") if item.strip()}
+        filtered = {item for item in allowed if item in ALLOWED_LLM_PROVIDERS}
+        return filtered or {"bedrock"}
+
+    providers = {"bedrock"}
+    if os.getenv("CHATBOT_ENABLE_ANTHROPIC_DIRECT", "false").strip().lower() == "true":
+        providers.add("anthropic_direct")
+    return providers
+
+
+def _validate_provider(provider: str) -> None:
+    if provider not in _allowed_llm_providers():
+        raise ValueError("provider_not_allowed")
+
+
+def _default_bedrock_model_ids() -> set[str]:
+    defaults: set[str] = set()
+    for env_name in ("CHATBOT_MODEL_ID", "BEDROCK_MODEL_ID"):
+        candidate = os.getenv(env_name, "").strip()
+        if candidate:
+            defaults.add(candidate)
+    return defaults
+
+
 def _allowed_bedrock_model_ids() -> set[str]:
-    raw = os.getenv("CHATBOT_ALLOWED_MODEL_IDS", "")
-    return {item.strip() for item in raw.split(",") if item.strip()}
+    raw = os.getenv("CHATBOT_ALLOWED_MODEL_IDS", "").strip()
+    if raw:
+        return {item.strip() for item in raw.split(",") if item.strip()}
+    return _default_bedrock_model_ids()
+
+
+def _allowed_anthropic_model_ids() -> set[str]:
+    raw = os.getenv("CHATBOT_ALLOWED_ANTHROPIC_MODEL_IDS", "").strip()
+    if raw:
+        return {item.strip() for item in raw.split(",") if item.strip()}
+    default_model = os.getenv("CHATBOT_ANTHROPIC_MODEL_ID", "claude-sonnet-4-5").strip()
+    return {default_model} if default_model else set()
 
 
 def _validate_bedrock_model_id(model_id: str) -> None:
     if not model_id:
         raise ValueError("model_id_required")
     allowlist = _allowed_bedrock_model_ids()
-    if allowlist and model_id not in allowlist:
+    if not allowlist or model_id not in allowlist:
         raise ValueError("model_not_allowed")
+
+
+def _validate_anthropic_model_id(model_id: str) -> None:
+    if not model_id:
+        raise ValueError("model_id_required")
+    allowlist = _allowed_anthropic_model_ids()
+    if not allowlist or model_id not in allowlist:
+        raise ValueError("model_not_allowed")
+
+
+def _validate_model_policy(provider: str, model_id: str) -> None:
+    _validate_provider(provider)
+    if provider == "anthropic_direct":
+        _validate_anthropic_model_id(model_id)
+        return
+    _validate_bedrock_model_id(model_id)
 
 
 def _load_anthropic_api_key() -> str:
@@ -239,6 +335,10 @@ def _conversation_requests_per_minute_limit() -> int:
     return max(1, int(os.getenv("CHATBOT_CONVERSATION_REQUESTS_PER_MINUTE", "60")))
 
 
+def _quota_fail_open() -> bool:
+    return os.getenv("CHATBOT_QUOTA_FAIL_OPEN", "false").strip().lower() == "true"
+
+
 def _image_user_requests_per_minute_limit() -> int:
     return max(1, int(os.getenv("CHATBOT_IMAGE_USER_REQUESTS_PER_MINUTE", "30")))
 
@@ -261,6 +361,116 @@ def _image_banned_terms() -> list[str]:
 
 def _websocket_default_chunk_chars() -> int:
     return max(20, int(os.getenv("CHATBOT_WEBSOCKET_DEFAULT_CHUNK_CHARS", "120")))
+
+
+def _rerank_enabled() -> bool:
+    return os.getenv("CHATBOT_RERANK_ENABLED", "true").strip().lower() == "true"
+
+
+def _rerank_top_k_per_source() -> int:
+    return max(1, int(os.getenv("CHATBOT_RERANK_TOP_K_PER_SOURCE", "3")))
+
+
+def _prompt_safety_enabled() -> bool:
+    return os.getenv("CHATBOT_PROMPT_SAFETY_ENABLED", "true").strip().lower() == "true"
+
+
+def _context_safety_block_request() -> bool:
+    return os.getenv("CHATBOT_CONTEXT_SAFETY_BLOCK_REQUEST", "false").strip().lower() == "true"
+
+
+def _safety_scan_char_limit() -> int:
+    return max(256, int(os.getenv("CHATBOT_SAFETY_SCAN_CHAR_LIMIT", "8000")))
+
+
+def _context_max_chars_per_source() -> int:
+    return max(256, int(os.getenv("CHATBOT_CONTEXT_MAX_CHARS_PER_SOURCE", "3500")))
+
+
+def _context_max_total_chars() -> int:
+    return max(1024, int(os.getenv("CHATBOT_CONTEXT_MAX_TOTAL_CHARS", "12000")))
+
+
+def _budgets_enabled() -> bool:
+    return os.getenv("CHATBOT_BUDGETS_ENABLED", "false").strip().lower() == "true"
+
+
+def _budget_table() -> str:
+    explicit = os.getenv("CHATBOT_BUDGET_TABLE", "").strip()
+    if explicit:
+        return explicit
+    return _chat_memory_table()
+
+
+def _budget_soft_limit_usd() -> float:
+    try:
+        return max(0.0, float(os.getenv("CHATBOT_BUDGET_SOFT_LIMIT_USD", "0.50")))
+    except ValueError:
+        return 0.5
+
+
+def _budget_hard_limit_usd() -> float:
+    try:
+        hard = max(0.0, float(os.getenv("CHATBOT_BUDGET_HARD_LIMIT_USD", "1.00")))
+    except ValueError:
+        hard = 1.0
+    return max(hard, _budget_soft_limit_usd())
+
+
+def _budget_ttl_days() -> int:
+    return max(1, int(os.getenv("CHATBOT_BUDGET_TTL_DAYS", "90")))
+
+
+def _router_low_cost_model(provider: str) -> str:
+    if provider == "anthropic_direct":
+        return (os.getenv("CHATBOT_ROUTER_LOW_COST_ANTHROPIC_MODEL_ID", "") or "").strip()
+    return (os.getenv("CHATBOT_ROUTER_LOW_COST_BEDROCK_MODEL_ID", "") or "").strip()
+
+
+def _router_high_quality_model(provider: str, fallback: str) -> str:
+    if provider == "anthropic_direct":
+        candidate = (os.getenv("CHATBOT_ROUTER_HIGH_QUALITY_ANTHROPIC_MODEL_ID", "") or "").strip()
+    else:
+        candidate = (os.getenv("CHATBOT_ROUTER_HIGH_QUALITY_BEDROCK_MODEL_ID", "") or "").strip()
+    return candidate or fallback
+
+
+def _budget_storage_key(actor_id: str, conversation_id: str | None) -> str:
+    conv = conversation_id or "default"
+    return f"budget#{actor_id}#{conv}"
+
+
+def _estimate_tokens(value: str) -> int:
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    return max(1, (len(text) + 3) // 4)
+
+
+def _query_complexity(query: str) -> str:
+    text = str(query or "").strip().lower()
+    if not text:
+        return "low"
+
+    tokens = re.findall(r"[a-z0-9_]+", text)
+    if len(tokens) >= 36:
+        return "high"
+    if len(tokens) <= 10:
+        return "low"
+
+    complexity_hints = (
+        "root cause",
+        "tradeoff",
+        "architecture",
+        "threat model",
+        "postmortem",
+        "multi-step",
+        "compare",
+        "migration plan",
+    )
+    if any(hint in text for hint in complexity_hints):
+        return "high"
+    return "medium"
 
 
 def _normalize_conversation_id(value: str | None) -> str | None:
@@ -305,6 +515,692 @@ def _conversation_storage_key(actor_id: str, conversation_id: str) -> str:
     return f"conv#{actor_id}#{conversation_id}"
 
 
+def _extract_context_text(source: str, item: dict[str, Any]) -> str:
+    if source == "jira":
+        fields = item.get("fields") or {}
+        return " ".join(
+            part
+            for part in [
+                str(item.get("key") or ""),
+                str(fields.get("summary") or ""),
+                str((fields.get("status") or {}).get("name") or ""),
+                str(fields.get("description") or ""),
+            ]
+            if part
+        )
+    if source == "confluence":
+        return " ".join(
+            part
+            for part in [
+                str(item.get("title") or (item.get("content") or {}).get("title") or ""),
+                str(item.get("url") or item.get("_links", {}).get("webui") or ""),
+                str(item.get("excerpt") or ""),
+                str(item.get("body") or ""),
+            ]
+            if part
+        )
+    if source == "knowledge_base":
+        return " ".join(
+            part
+            for part in [
+                str(item.get("title") or ""),
+                str(item.get("uri") or ""),
+                str(item.get("text") or ""),
+            ]
+            if part
+        )
+    if source == "github":
+        return " ".join(
+            part
+            for part in [
+                str(item.get("repo") or ""),
+                str(item.get("path") or ""),
+                str(item.get("url") or ""),
+                str(item.get("text") or ""),
+            ]
+            if part
+        )
+    return str(item)
+
+
+def _detect_safety_categories(value: str) -> list[str]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    scanned = text[: _safety_scan_char_limit()]
+
+    categories: set[str] = set()
+    for pattern in _SAFETY_INJECTION_PATTERNS:
+        if pattern.search(scanned):
+            categories.add("prompt_injection")
+            break
+
+    for pattern in _SAFETY_EXFILTRATION_PATTERNS:
+        if pattern.search(scanned):
+            categories.add("data_exfiltration")
+            break
+
+    return sorted(categories)
+
+
+def _emit_safety_event(stage: str, source: str, category: str) -> None:
+    _emit_metric(
+        "ChatbotSafetyEventCount",
+        1,
+        dimensions={
+            "Route": "query",
+            "Method": "POST",
+            "Stage": stage,
+            "Source": source,
+            "Category": category,
+        },
+    )
+
+
+def _emit_sensitive_store_skip(target: str) -> None:
+    _emit_metric(
+        "ChatbotSensitiveStoreSkippedCount",
+        1,
+        dimensions={"Route": "query", "Method": "POST", "Target": target},
+    )
+
+
+def _contains_sensitive_storage_content(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+
+    scanned = text[: _safety_scan_char_limit()]
+    for pattern in _SENSITIVE_STORE_PATTERNS:
+        if pattern.search(scanned):
+            return True
+    return False
+
+
+def _enforce_prompt_safety(query: str, local_logger: Any) -> None:
+    if not _prompt_safety_enabled():
+        return
+
+    categories = _detect_safety_categories(query)
+    if not categories:
+        return
+
+    for category in categories:
+        _emit_safety_event("user_input", "query", category)
+
+    local_logger.warning(
+        "chatbot_prompt_safety_rejected",
+        extra={"extra": {"categories": categories}},
+    )
+    if "data_exfiltration" in categories:
+        raise ValueError("data_exfiltration_attempt")
+    raise ValueError("unsafe_prompt_detected")
+
+
+def _sanitize_context_items(source: str, items: list[dict[str, Any]], local_logger: Any) -> tuple[list[dict[str, Any]], int]:
+    if not _prompt_safety_enabled():
+        return items, 0
+
+    filtered: list[dict[str, Any]] = []
+    blocked = 0
+    for item in items:
+        categories = _detect_safety_categories(_extract_context_text(source, item))
+        if not categories:
+            filtered.append(item)
+            continue
+
+        blocked += 1
+        for category in categories:
+            _emit_safety_event("retrieved_context", source, category)
+        local_logger.warning(
+            "chatbot_context_item_blocked",
+            extra={"extra": {"source": source, "categories": categories}},
+        )
+        if _context_safety_block_request():
+            if "data_exfiltration" in categories:
+                raise ValueError("data_exfiltration_attempt")
+            raise ValueError("unsafe_context_detected")
+
+    return filtered, blocked
+
+
+def _tokenize_for_rerank(value: str) -> set[str]:
+    return {token for token in re.findall(r"[a-z0-9_]{2,}", str(value or "").lower())}
+
+
+def _rerank_context_items(query: str, source: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not _rerank_enabled() or len(items) <= 1:
+        return items
+
+    query_terms = _tokenize_for_rerank(query)
+    if not query_terms:
+        return items[: _rerank_top_k_per_source()]
+
+    scored: list[tuple[float, int, dict[str, Any]]] = []
+    for idx, item in enumerate(items):
+        text = _extract_context_text(source, item)
+        item_terms = _tokenize_for_rerank(text)
+        overlap = len(query_terms & item_terms)
+        phrase_hits = 1 if str(query or "").strip().lower() in str(text).lower() else 0
+        score = (overlap * 10.0) + (phrase_hits * 3.0)
+        scored.append((score, -idx, item))
+
+    scored.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    top_k = _rerank_top_k_per_source()
+    return [item for _score, _idx, item in scored[:top_k]]
+
+
+def _load_model_pricing() -> dict[str, dict[str, float]]:
+    raw = (os.getenv("CHATBOT_MODEL_PRICING_JSON", "") or "").strip()
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("chatbot_model_pricing_json_invalid")
+        return {}
+
+    pricing: dict[str, dict[str, float]] = {}
+    if not isinstance(payload, dict):
+        return pricing
+
+    for model_id, row in payload.items():
+        if not isinstance(row, dict):
+            continue
+        try:
+            input_per_1k = float(row.get("input_per_1k") or row.get("input") or 0.0)
+            output_per_1k = float(row.get("output_per_1k") or row.get("output") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        pricing[str(model_id)] = {
+            "input_per_1k": max(0.0, input_per_1k),
+            "output_per_1k": max(0.0, output_per_1k),
+        }
+    return pricing
+
+
+def _estimate_cost_usd(model_id: str, prompt_tokens: int, completion_tokens: int) -> float:
+    pricing = _load_model_pricing().get(model_id, {})
+    input_price = float(pricing.get("input_per_1k") or 0.0)
+    output_price = float(pricing.get("output_per_1k") or 0.0)
+    return ((prompt_tokens / 1000.0) * input_price) + ((completion_tokens / 1000.0) * output_price)
+
+
+def _load_budget_state(actor_id: str, conversation_id: str | None) -> dict[str, Any]:
+    state = {
+        "enabled": _budgets_enabled(),
+        "tracked": False,
+        "spent_usd": 0.0,
+        "request_count": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+    }
+    if not _budgets_enabled():
+        return state
+
+    table = _budget_table()
+    if not table:
+        return state
+
+    key = _budget_storage_key(actor_id, conversation_id)
+    try:
+        resp = _dynamodb_client().get_item(
+            TableName=table,
+            Key={
+                "conversation_id": {"S": key},
+                "timestamp_ms": {"N": "0"},
+            },
+            ConsistentRead=False,
+        )
+    except Exception:
+        logger.warning("chat_budget_read_failed", extra={"extra": {"conversation_id": key}})
+        return state
+
+    item = resp.get("Item") or {}
+    if not item:
+        return state
+
+    state["tracked"] = True
+    try:
+        state["spent_usd"] = float(str((item.get("cost_usd") or {}).get("N") or "0"))
+        state["request_count"] = int(str((item.get("request_count") or {}).get("N") or "0"))
+        state["input_tokens"] = int(str((item.get("input_tokens") or {}).get("N") or "0"))
+        state["output_tokens"] = int(str((item.get("output_tokens") or {}).get("N") or "0"))
+    except ValueError:
+        pass
+    return state
+
+
+def _record_budget_usage(
+    *,
+    actor_id: str,
+    conversation_id: str | None,
+    model_id: str,
+    routing_reason: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    estimated_cost_usd: float,
+) -> None:
+    if not _budgets_enabled():
+        return
+
+    table = _budget_table()
+    if not table:
+        return
+
+    key = _budget_storage_key(actor_id, conversation_id)
+    now_ms = int(time.time() * 1000)
+    expires_at = int(time.time()) + (_budget_ttl_days() * 24 * 60 * 60)
+    payload = {
+        "updated_at_ms": now_ms,
+        "last_model_id": model_id,
+        "last_route_reason": routing_reason,
+        "last_prompt_tokens": prompt_tokens,
+        "last_completion_tokens": completion_tokens,
+        "last_estimated_cost_usd": round(estimated_cost_usd, 8),
+    }
+
+    try:
+        _dynamodb_client().update_item(
+            TableName=table,
+            Key={
+                "conversation_id": {"S": key},
+                "timestamp_ms": {"N": "0"},
+            },
+            UpdateExpression=(
+                "SET #role = :role, #content = :content, #expires_at = :expires_at "
+                "ADD #request_count :request_count, #input_tokens :input_tokens, "
+                "#output_tokens :output_tokens, #cost_usd :cost_usd"
+            ),
+            ExpressionAttributeNames={
+                "#role": "role",
+                "#content": "content",
+                "#expires_at": "expires_at",
+                "#request_count": "request_count",
+                "#input_tokens": "input_tokens",
+                "#output_tokens": "output_tokens",
+                "#cost_usd": "cost_usd",
+            },
+            ExpressionAttributeValues={
+                ":role": {"S": "budget"},
+                ":content": {"S": json.dumps(payload, ensure_ascii=True)},
+                ":expires_at": {"N": str(expires_at)},
+                ":request_count": {"N": "1"},
+                ":input_tokens": {"N": str(max(0, prompt_tokens))},
+                ":output_tokens": {"N": str(max(0, completion_tokens))},
+                ":cost_usd": {"N": f"{max(0.0, estimated_cost_usd):.8f}"},
+            },
+        )
+    except Exception:
+        logger.warning("chat_budget_write_failed", extra={"extra": {"conversation_id": key}})
+
+
+def _is_model_allowed(provider: str, model_id: str) -> bool:
+    try:
+        _validate_model_policy(provider, model_id)
+    except ValueError:
+        return False
+    return True
+
+
+def _route_model_with_budget(
+    provider: str,
+    initial_model_id: str,
+    query: str,
+    actor_id: str,
+    conversation_id: str | None,
+) -> tuple[str, dict[str, Any]]:
+    high_quality_model = _router_high_quality_model(provider, initial_model_id)
+    routed_model = initial_model_id
+    low_cost_model = _router_low_cost_model(provider)
+    complexity = _query_complexity(query)
+    budget_state = _load_budget_state(actor_id, conversation_id)
+    soft_limit = _budget_soft_limit_usd()
+    hard_limit = _budget_hard_limit_usd()
+
+    reason = "default"
+    if high_quality_model != initial_model_id:
+        if _is_model_allowed(provider, high_quality_model):
+            routed_model = high_quality_model
+        else:
+            reason = "high_quality_model_not_allowed"
+
+    if budget_state["enabled"] and budget_state["spent_usd"] >= hard_limit:
+        raise ValueError("conversation_budget_exceeded")
+
+    if low_cost_model and _is_model_allowed(provider, low_cost_model):
+        if budget_state["enabled"] and budget_state["spent_usd"] >= soft_limit:
+            routed_model = low_cost_model
+            reason = "budget_soft_limit"
+        elif complexity == "low":
+            routed_model = low_cost_model
+            reason = "low_complexity"
+        else:
+            reason = "high_complexity"
+    elif low_cost_model:
+        reason = "low_cost_model_not_allowed"
+
+    _emit_metric(
+        "ChatbotModelRouteCount",
+        1,
+        dimensions={
+            "Route": "query",
+            "Method": "POST",
+            "Provider": provider,
+            "Reason": reason,
+        },
+    )
+
+    return routed_model, {
+        "enabled": bool(budget_state.get("enabled")),
+        "tracked": bool(budget_state.get("tracked")),
+        "spent_usd": round(float(budget_state.get("spent_usd") or 0.0), 8),
+        "soft_limit_usd": soft_limit,
+        "hard_limit_usd": hard_limit,
+        "request_count": int(budget_state.get("request_count") or 0),
+        "complexity": complexity,
+        "route_reason": reason,
+        "requested_model_id": initial_model_id,
+        "model_id": routed_model,
+    }
+
+
+def _response_cache_enabled() -> bool:
+    return os.getenv("CHATBOT_RESPONSE_CACHE_ENABLED", "false").strip().lower() == "true"
+
+
+def _response_cache_table() -> str:
+    explicit = os.getenv("CHATBOT_RESPONSE_CACHE_TABLE", "").strip()
+    if explicit:
+        return explicit
+    return _chat_memory_table()
+
+
+def _response_cache_ttl_seconds() -> int:
+    return max(30, int(os.getenv("CHATBOT_RESPONSE_CACHE_TTL_SECONDS", "300")))
+
+
+def _response_cache_min_query_length() -> int:
+    return max(1, int(os.getenv("CHATBOT_RESPONSE_CACHE_MIN_QUERY_LENGTH", "12")))
+
+
+def _response_cache_max_answer_chars() -> int:
+    return max(200, int(os.getenv("CHATBOT_RESPONSE_CACHE_MAX_ANSWER_CHARS", "16000")))
+
+
+def _response_cache_stopwords() -> set[str]:
+    return {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "for",
+        "from",
+        "how",
+        "i",
+        "in",
+        "is",
+        "it",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "to",
+        "what",
+        "when",
+        "where",
+        "which",
+        "with",
+        "you",
+        "your",
+    }
+
+
+def _normalize_cache_token(value: str) -> str:
+    token = str(value or "").strip().lower()
+    if token.endswith("ies") and len(token) > 4:
+        token = token[:-3] + "y"
+    elif token.endswith("s") and len(token) > 4 and not token.endswith("ss"):
+        token = token[:-1]
+    return token
+
+
+def _semantic_query_signature(query: str) -> str:
+    raw_tokens = [_normalize_cache_token(tok) for tok in re.findall(r"[a-z0-9_]{2,}", str(query or "").lower())]
+    stopwords = _response_cache_stopwords()
+    filtered = [tok for tok in raw_tokens if tok not in stopwords]
+    selected = sorted(set(filtered or raw_tokens))
+    return " ".join(selected[:32]).strip()
+
+
+def _response_cache_key(
+    *,
+    query: str,
+    assistant_mode: str,
+    retrieval_mode: str,
+    provider: str,
+    model_id: str,
+    conversation_id: str | None,
+    history_text: str,
+    jira_jql: str,
+    confluence_cql: str,
+) -> str:
+    payload = {
+        "v": 1,
+        "query_semantic": _semantic_query_signature(query),
+        "assistant_mode": assistant_mode,
+        "retrieval_mode": retrieval_mode,
+        "provider": provider,
+        "model_id": model_id,
+        "conversation_id": conversation_id or "",
+        "history_digest": hashlib.sha256(history_text.encode("utf-8")).hexdigest()[:16] if history_text else "",
+        "jira_jql": jira_jql if assistant_mode == "contextual" else "",
+        "confluence_cql": confluence_cql if assistant_mode == "contextual" else "",
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _response_cache_partition_key(actor_id: str, cache_key: str) -> str:
+    return f"resp_cache#{actor_id}#{cache_key}"
+
+
+def _load_cached_response(actor_id: str, cache_key: str) -> dict[str, Any] | None:
+    if not _response_cache_enabled():
+        return None
+
+    table = _response_cache_table()
+    if not table:
+        return None
+
+    partition_key = _response_cache_partition_key(actor_id, cache_key)
+    try:
+        resp = _dynamodb_client().get_item(
+            TableName=table,
+            Key={
+                "conversation_id": {"S": partition_key},
+                "timestamp_ms": {"N": "0"},
+            },
+            ConsistentRead=False,
+        )
+    except Exception:
+        logger.warning("chat_response_cache_read_failed", extra={"extra": {"conversation_id": partition_key}})
+        return None
+
+    item = resp.get("Item") or {}
+    if not item:
+        return None
+
+    try:
+        expires_at = int(str((item.get("expires_at") or {}).get("N") or "0"))
+    except ValueError:
+        expires_at = 0
+    if expires_at and expires_at <= int(time.time()):
+        return None
+
+    content = str((item.get("content") or {}).get("S") or "").strip()
+    if not content:
+        return None
+
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    answer = str(payload.get("answer") or "").strip()
+    if not answer:
+        return None
+
+    sources = payload.get("sources")
+    if not isinstance(sources, dict):
+        sources = {}
+    citations = payload.get("citations")
+    if not isinstance(citations, list):
+        citations = []
+
+    return {
+        "answer": answer,
+        "sources": sources,
+        "citations": citations,
+        "stored_at_ms": int(payload.get("stored_at_ms") or 0),
+    }
+
+
+def _store_cached_response(actor_id: str, cache_key: str, payload: dict[str, Any]) -> bool:
+    if not _response_cache_enabled():
+        return False
+
+    table = _response_cache_table()
+    if not table:
+        return False
+
+    answer = str(payload.get("answer") or "").strip()
+    if not answer or len(answer) > _response_cache_max_answer_chars():
+        return False
+
+    sources = payload.get("sources")
+    if not isinstance(sources, dict):
+        sources = {}
+    citations = payload.get("citations")
+    if not isinstance(citations, list):
+        citations = []
+    sensitivity_probe = json.dumps(
+        {"answer": answer, "citations": citations},
+        ensure_ascii=True,
+    )
+    if _contains_sensitive_storage_content(sensitivity_probe):
+        _emit_sensitive_store_skip("response_cache")
+        return False
+
+    now_ms = int(time.time() * 1000)
+    expires_at = int(time.time()) + _response_cache_ttl_seconds()
+    record = {
+        "answer": answer,
+        "sources": sources,
+        "citations": citations,
+        "stored_at_ms": now_ms,
+    }
+    partition_key = _response_cache_partition_key(actor_id, cache_key)
+
+    try:
+        _dynamodb_client().put_item(
+            TableName=table,
+            Item={
+                "conversation_id": {"S": partition_key},
+                "timestamp_ms": {"N": "0"},
+                "role": {"S": "response_cache"},
+                "content": {"S": json.dumps(record, ensure_ascii=True)},
+                "expires_at": {"N": str(expires_at)},
+            },
+        )
+    except Exception:
+        logger.warning("chat_response_cache_write_failed", extra={"extra": {"conversation_id": partition_key}})
+        return False
+
+    _emit_metric("ChatbotCacheStoreCount", 1, dimensions={"Route": "query", "Method": "POST"})
+    return True
+
+
+def _response_cache_lock_ttl_seconds() -> int:
+    return max(5, min(60, int(os.getenv("CHATBOT_RESPONSE_CACHE_LOCK_TTL_SECONDS", "15"))))
+
+
+def _response_cache_lock_wait_ms() -> int:
+    return max(50, min(1000, int(os.getenv("CHATBOT_RESPONSE_CACHE_LOCK_WAIT_MS", "150"))))
+
+
+def _response_cache_lock_wait_attempts() -> int:
+    return max(1, min(20, int(os.getenv("CHATBOT_RESPONSE_CACHE_LOCK_WAIT_ATTEMPTS", "6"))))
+
+
+def _response_cache_lock_partition_key(actor_id: str, cache_key: str) -> str:
+    return f"resp_cache_lock#{actor_id}#{cache_key}"
+
+
+def _is_conditional_check_failed(error: Exception) -> bool:
+    code = str((((getattr(error, "response", {}) or {}).get("Error") or {}).get("Code") or ""))
+    return code == "ConditionalCheckFailedException"
+
+
+def _acquire_response_cache_lock(actor_id: str, cache_key: str) -> bool:
+    if not _response_cache_enabled():
+        return False
+
+    table = _response_cache_table()
+    if not table:
+        return False
+
+    now = int(time.time())
+    expires_at = now + _response_cache_lock_ttl_seconds()
+    lock_key = _response_cache_lock_partition_key(actor_id, cache_key)
+    try:
+        _dynamodb_client().put_item(
+            TableName=table,
+            Item={
+                "conversation_id": {"S": lock_key},
+                "timestamp_ms": {"N": "0"},
+                "role": {"S": "response_cache_lock"},
+                "content": {"S": "1"},
+                "expires_at": {"N": str(expires_at)},
+            },
+            ConditionExpression="attribute_not_exists(conversation_id) OR expires_at < :now",
+            ExpressionAttributeValues={
+                ":now": {"N": str(now)},
+            },
+        )
+        return True
+    except Exception as exc:
+        if _is_conditional_check_failed(exc):
+            return False
+        logger.warning("chat_response_cache_lock_failed", extra={"extra": {"conversation_id": lock_key}})
+        return False
+
+
+def _release_response_cache_lock(actor_id: str, cache_key: str) -> None:
+    table = _response_cache_table()
+    if not table:
+        return
+
+    lock_key = _response_cache_lock_partition_key(actor_id, cache_key)
+    try:
+        _dynamodb_client().delete_item(
+            TableName=table,
+            Key={
+                "conversation_id": {"S": lock_key},
+                "timestamp_ms": {"N": "0"},
+            },
+        )
+    except Exception:
+        logger.warning("chat_response_cache_lock_release_failed", extra={"extra": {"conversation_id": lock_key}})
+
+
 def _record_quota_event_and_validate(bucket_key: str, limit: int) -> None:
     if not _chat_memory_enabled():
         return
@@ -314,37 +1210,47 @@ def _record_quota_event_and_validate(bucket_key: str, limit: int) -> None:
         return
 
     now_ms = int(time.time() * 1000)
-    window_start = now_ms - 60_000
+    minute_bucket_ms = (now_ms // 60_000) * 60_000
     expires_at = int(time.time()) + 2 * 24 * 60 * 60
 
     client = _dynamodb_client()
     try:
-        resp = client.query(
+        client.update_item(
             TableName=table,
-            KeyConditionExpression="conversation_id = :cid and timestamp_ms >= :start",
-            ExpressionAttributeValues={
-                ":cid": {"S": bucket_key},
-                ":start": {"N": str(window_start)},
-            },
-        )
-        count = len(resp.get("Items") or [])
-        if count >= limit:
-            raise ValueError("rate_limit_exceeded")
-
-        client.put_item(
-            TableName=table,
-            Item={
+            Key={
                 "conversation_id": {"S": bucket_key},
-                "timestamp_ms": {"N": str(now_ms)},
-                "role": {"S": "quota"},
-                "content": {"S": "1"},
-                "expires_at": {"N": str(expires_at)},
+                "timestamp_ms": {"N": str(minute_bucket_ms)},
+            },
+            UpdateExpression=(
+                "SET #role = :role, #content = :content, #expires_at = :expires_at "
+                "ADD #request_count :inc"
+            ),
+            ConditionExpression="attribute_not_exists(#request_count) OR #request_count < :limit",
+            ExpressionAttributeNames={
+                "#role": "role",
+                "#content": "content",
+                "#expires_at": "expires_at",
+                "#request_count": "request_count",
+            },
+            ExpressionAttributeValues={
+                ":role": {"S": "quota_counter"},
+                ":content": {"S": "1"},
+                ":expires_at": {"N": str(expires_at)},
+                ":inc": {"N": "1"},
+                ":limit": {"N": str(max(1, limit))},
             },
         )
-    except ValueError:
-        raise
-    except Exception:
+    except Exception as exc:
+        if _is_conditional_check_failed(exc):
+            raise ValueError("rate_limit_exceeded")
+        _emit_metric(
+            "ChatbotQuotaBackendErrorCount",
+            1,
+            dimensions={"BucketPrefix": bucket_key.split("#", 1)[0] if "#" in bucket_key else bucket_key},
+        )
         logger.warning("chat_quota_check_failed", extra={"extra": {"bucket_key": bucket_key}})
+        if not _quota_fail_open():
+            raise ValueError("quota_backend_unavailable")
 
 
 def _enforce_rate_quotas(actor_id: str, conversation_id: str | None) -> None:
@@ -487,6 +1393,14 @@ def _load_conversation_history(actor_id: str, conversation_id: str | None) -> li
 
 def _append_conversation_turn(actor_id: str, conversation_id: str | None, user_query: str, answer: str) -> None:
     if not conversation_id or not _chat_memory_enabled():
+        return
+
+    if _contains_sensitive_storage_content(user_query) or _contains_sensitive_storage_content(answer):
+        _emit_sensitive_store_skip("memory")
+        logger.info(
+            "chat_memory_store_skipped_sensitive",
+            extra={"extra": {"conversation_id": conversation_id, "actor_id": actor_id}},
+        )
         return
 
     table = _chat_memory_table()
@@ -707,7 +1621,14 @@ def _answer_with_provider(
     model_id: str,
     system_prompt: str,
     user_prompt: str,
+    stream_callback: Callable[[str], None] | None = None,
+    telemetry: dict[str, Any] | None = None,
 ) -> str:
+    _validate_model_policy(provider, model_id)
+    if telemetry is not None:
+        telemetry["provider"] = provider
+        telemetry["model_id"] = model_id
+
     if provider == "anthropic_direct":
         enabled = os.getenv("CHATBOT_ENABLE_ANTHROPIC_DIRECT", "false").strip().lower() == "true"
         if not enabled:
@@ -723,12 +1644,18 @@ def _answer_with_provider(
             api_base=os.getenv("CHATBOT_ANTHROPIC_API_BASE", "https://api.anthropic.com"),
             max_tokens=int(os.getenv("CHATBOT_MAX_TOKENS", "1200")),
         )
-        return client.answer(system_prompt=system_prompt, user_prompt=user_prompt)
+        if telemetry is not None:
+            telemetry["guardrail_configured"] = False
+        if stream_callback is None:
+            return client.answer(system_prompt=system_prompt, user_prompt=user_prompt)
+        return client.stream_answer(system_prompt=system_prompt, user_prompt=user_prompt, on_delta=stream_callback)
 
-    _validate_bedrock_model_id(model_id)
     guardrail_identifier = (os.getenv("CHATBOT_GUARDRAIL_ID") or os.getenv("BEDROCK_GUARDRAIL_ID") or "").strip()
     guardrail_version = (os.getenv("CHATBOT_GUARDRAIL_VERSION") or os.getenv("BEDROCK_GUARDRAIL_VERSION") or "").strip()
     guardrail_trace = (os.getenv("CHATBOT_GUARDRAIL_TRACE") or "").strip()
+    guardrail_configured = bool(guardrail_identifier and guardrail_version)
+    if telemetry is not None:
+        telemetry["guardrail_configured"] = guardrail_configured
     client = BedrockChatClient(
         region=os.getenv("AWS_REGION", DEFAULT_REGION),
         model_id=model_id,
@@ -736,7 +1663,14 @@ def _answer_with_provider(
         guardrail_version=guardrail_version or None,
         guardrail_trace=guardrail_trace or None,
     )
-    return client.answer(system_prompt=system_prompt, user_prompt=user_prompt)
+    if stream_callback is None:
+        return client.answer(system_prompt=system_prompt, user_prompt=user_prompt, telemetry=telemetry)
+    return client.stream_answer(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        on_delta=stream_callback,
+        telemetry=telemetry,
+    )
 
 
 def _request_path(event: dict[str, Any]) -> str:
@@ -777,6 +1711,45 @@ def _list_bedrock_models(region: str) -> list[dict[str, Any]]:
 
     models.sort(key=lambda m: (m["provider"].lower(), m["name"].lower(), m["model_id"].lower()))
     return models
+
+
+def _truncate_for_budget(value: str, max_chars: int) -> str:
+    text = str(value or "")
+    if max_chars <= 0:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 3:
+        return text[:max_chars]
+    return text[: max_chars - 3].rstrip() + "..."
+
+
+def _apply_context_budget(context_blob: dict[str, str]) -> tuple[dict[str, str], dict[str, Any]]:
+    per_source_limit = _context_max_chars_per_source()
+    total_limit = _context_max_total_chars()
+    ordered_sources = ("knowledge_base", "jira", "confluence", "github")
+
+    trimmed: dict[str, str] = {}
+    trimmed_chars_by_source: dict[str, int] = {}
+    total_used = 0
+
+    for source in ordered_sources:
+        original = str(context_blob.get(source) or "")
+        step = _truncate_for_budget(original, per_source_limit)
+        remaining = max(0, total_limit - total_used)
+        final = _truncate_for_budget(step, remaining) if remaining else ""
+        trimmed[source] = final
+        trimmed_chars_by_source[source] = max(0, len(original) - len(final))
+        total_used += len(final)
+
+    metadata = {
+        "per_source_limit": per_source_limit,
+        "total_limit": total_limit,
+        "total_used_chars": total_used,
+        "total_trimmed_chars": sum(trimmed_chars_by_source.values()),
+        "trimmed_chars_by_source": trimmed_chars_by_source,
+    }
+    return trimmed, metadata
 
 
 def _format_jira(issues: list[dict[str, Any]]) -> str:
@@ -899,6 +1872,218 @@ def _load_github_context(query: str, local_logger: Any) -> list[dict[str, Any]]:
     return collected
 
 
+def _citation_max_items() -> int:
+    return max(1, min(12, int(os.getenv("CHATBOT_CITATION_MAX_ITEMS", "6"))))
+
+
+def _append_citations_to_answer() -> bool:
+    return os.getenv("CHATBOT_APPEND_CITATIONS", "true").strip().lower() == "true"
+
+
+def _build_citations(
+    jira_items: list[dict[str, Any]],
+    conf_items: list[dict[str, Any]],
+    kb_items: list[dict[str, Any]],
+    github_items: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    citations: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def add(source: str, title: str, locator: str) -> None:
+        normalized_title = str(title or "").strip() or "Untitled"
+        normalized_locator = str(locator or "").strip()
+        key = (source, normalized_title, normalized_locator)
+        if key in seen:
+            return
+        seen.add(key)
+        item: dict[str, str] = {
+            "source": source,
+            "title": normalized_title,
+        }
+        if normalized_locator:
+            item["locator"] = normalized_locator
+        citations.append(item)
+
+    for issue in jira_items:
+        key = str(issue.get("key") or "UNKNOWN")
+        summary = str((issue.get("fields") or {}).get("summary") or "").strip()
+        add("jira", f"{key}: {summary}" if summary else key, str(issue.get("self") or ""))
+
+    for page in conf_items:
+        title = str(page.get("title") or (page.get("content") or {}).get("title") or "Untitled")
+        locator = str(page.get("url") or page.get("_links", {}).get("webui") or "")
+        add("confluence", title, locator)
+
+    for doc in kb_items:
+        add("knowledge_base", str(doc.get("title") or "Untitled"), str(doc.get("uri") or ""))
+
+    for result in github_items:
+        repo = str(result.get("repo") or "").strip()
+        path = str(result.get("path") or "").strip()
+        title = f"{repo}:{path}" if repo and path else path or repo or "GitHub context"
+        add("github", title, str(result.get("url") or ""))
+
+    return citations
+
+
+def _append_citation_footer(answer: str, citations: list[dict[str, str]]) -> str:
+    if not citations or not _append_citations_to_answer():
+        return answer
+
+    lines = ["Sources:"]
+    for idx, citation in enumerate(citations[: _citation_max_items()], start=1):
+        title = str(citation.get("title") or "Untitled")
+        locator = str(citation.get("locator") or "").strip()
+        source = str(citation.get("source") or "source")
+        suffix = f" ({locator})" if locator else ""
+        lines.append(f"[{idx}] {source}: {title}{suffix}")
+
+    return f"{answer.rstrip()}\n\n" + "\n".join(lines)
+
+
+def _guardrail_outcome(telemetry: dict[str, Any]) -> dict[str, Any]:
+    stop_reason = str(telemetry.get("stop_reason") or "").strip()
+    configured = bool(telemetry.get("guardrail_configured"))
+    intervened = bool(telemetry.get("guardrail_intervened")) or "guardrail" in stop_reason.lower()
+    return {
+        "configured": configured,
+        "intervened": intervened,
+        "stop_reason": stop_reason,
+    }
+
+
+def _emit_guardrail_telemetry(provider: str, outcome: dict[str, Any]) -> None:
+    configured = bool(outcome.get("configured"))
+    intervened = bool(outcome.get("intervened"))
+    if intervened:
+        state = "intervened"
+    elif configured:
+        state = "configured_no_intervention"
+    else:
+        state = "not_configured"
+
+    _emit_metric(
+        "ChatbotGuardrailOutcomeCount",
+        1,
+        dimensions={
+            "Route": "query",
+            "Method": "POST",
+            "Provider": provider,
+            "Outcome": state,
+        },
+    )
+
+
+def _feedback_table() -> str:
+    explicit = os.getenv("CHATBOT_FEEDBACK_TABLE", "").strip()
+    if explicit:
+        return explicit
+    return _chat_memory_table()
+
+
+def _normalize_feedback_sentiment(value: str | None) -> str | None:
+    normalized = (value or "").strip().lower()
+    if not normalized:
+        return None
+    aliases = {
+        "up": "positive",
+        "thumbs_up": "positive",
+        "down": "negative",
+        "thumbs_down": "negative",
+    }
+    mapped = aliases.get(normalized, normalized)
+    if mapped in _VALID_FEEDBACK_SENTIMENTS:
+        return mapped
+    return None
+
+
+def _parse_feedback_rating(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        rating = int(value)
+    else:
+        raw = str(value).strip()
+        if not raw or not raw.isdigit():
+            return None
+        rating = int(raw)
+    if 1 <= rating <= 5:
+        return rating
+    return None
+
+
+def _feedback_sentiment_from_rating(rating: int | None) -> str | None:
+    if rating is None:
+        return None
+    if rating >= 4:
+        return "positive"
+    if rating <= 2:
+        return "negative"
+    return "neutral"
+
+
+def _store_feedback(actor_id: str, feedback: dict[str, Any]) -> bool:
+    table = _feedback_table()
+    if not table:
+        return False
+
+    now_ms = int(time.time() * 1000)
+    ttl_days = max(1, int(os.getenv("CHATBOT_FEEDBACK_TTL_DAYS", "90")))
+    expires_at = int(time.time()) + (ttl_days * 24 * 60 * 60)
+    feedback_id = str(feedback.get("feedback_id") or uuid.uuid4())
+    client = _dynamodb_client()
+
+    item = {
+        "conversation_id": {"S": f"feedback#{actor_id}"},
+        "timestamp_ms": {"N": str(now_ms)},
+        "role": {"S": "feedback"},
+        "content": {
+            "S": json.dumps(
+                {
+                    "feedback_id": feedback_id,
+                    "conversation_id": feedback.get("conversation_id"),
+                    "rating": feedback.get("rating"),
+                    "sentiment": feedback.get("sentiment"),
+                    "comment": feedback.get("comment"),
+                    "query": feedback.get("query"),
+                    "answer": feedback.get("answer"),
+                },
+                ensure_ascii=True,
+            )
+        },
+        "expires_at": {"N": str(expires_at)},
+    }
+    client.put_item(TableName=table, Item=item)
+    return True
+
+
+def _parse_feedback_payload(body: dict[str, Any]) -> dict[str, Any]:
+    rating = _parse_feedback_rating(body.get("rating"))
+    sentiment = _normalize_feedback_sentiment(body.get("sentiment")) or _feedback_sentiment_from_rating(rating)
+    if rating is None and sentiment is None:
+        raise ValueError("feedback_rating_or_sentiment_required")
+
+    comment = str(body.get("comment") or "").strip()
+    if len(comment) > 2000:
+        raise ValueError("feedback_comment_too_long")
+
+    query = str(body.get("query") or "").strip()
+    answer = str(body.get("answer") or "").strip()
+    conversation_id = _normalize_conversation_id(str(body.get("conversation_id") or "").strip() or None)
+
+    return {
+        "feedback_id": str(body.get("feedback_id") or uuid.uuid4()),
+        "conversation_id": conversation_id,
+        "rating": rating,
+        "sentiment": sentiment,
+        "comment": comment or None,
+        "query": query[:4000] if query else None,
+        "answer": answer[:6000] if answer else None,
+    }
+
+
 def handle_query(
     query: str,
     jira_jql: str,
@@ -912,153 +2097,472 @@ def handle_query(
     actor_id: str = "anonymous",
     stream: bool = False,
     stream_chunk_chars: int = 120,
+    stream_callback: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     local_logger = get_logger("jira_confluence_chatbot", correlation_id=correlation_id)
 
     resolved_assistant_mode = _normalize_assistant_mode(assistant_mode)
+    # Normalize once — callers may pass None for env-var fallback.
+    mode = _normalize_retrieval_mode(retrieval_mode or os.getenv("CHATBOT_RETRIEVAL_MODE", "hybrid"))
     resolved_llm_provider = _normalize_llm_provider(llm_provider)
     resolved_model_id = _resolve_model_id(resolved_llm_provider, model_id)
+    _validate_model_policy(resolved_llm_provider, resolved_model_id)
     resolved_conversation_id = _normalize_conversation_id(conversation_id)
+    _enforce_prompt_safety(query, local_logger)
     _enforce_rate_quotas(actor_id, resolved_conversation_id)
     history = _load_conversation_history(actor_id, resolved_conversation_id)
     history_text = _format_history_for_prompt(history)
+    stream_enabled = bool(stream or stream_callback is not None)
+    provider_telemetry: dict[str, Any] = {}
 
-    if resolved_assistant_mode == "general":
-        system_prompt = (
-            "You are a helpful enterprise AI assistant. Provide clear, practical answers. "
-            "If policies or environment constraints are unknown, state assumptions explicitly."
-        )
-        general_user_prompt = (
-            f"Conversation history:\n{history_text}\n\nLatest user question:\n{query}"
-            if history_text
-            else query
-        )
-        answer = _answer_with_provider(
+    cache_enabled = _response_cache_enabled()
+    cache_eligible = cache_enabled and len(query.strip()) >= _response_cache_min_query_length()
+    cache_mode = mode if resolved_assistant_mode == "contextual" else "none"
+    cache_exact_key: str | None = None
+    cache_faq_key: str | None = None
+    cached_response: dict[str, Any] | None = None
+    cache_tier = "none"
+
+    if cache_eligible:
+        cache_exact_key = _response_cache_key(
+            query=query,
+            assistant_mode=resolved_assistant_mode,
+            retrieval_mode=cache_mode,
             provider=resolved_llm_provider,
             model_id=resolved_model_id,
-            system_prompt=system_prompt,
-            user_prompt=general_user_prompt,
+            conversation_id=resolved_conversation_id,
+            history_text=history_text,
+            jira_jql=jira_jql,
+            confluence_cql=confluence_cql,
         )
-        _append_conversation_turn(actor_id, resolved_conversation_id, query, answer)
+        cache_faq_key = _response_cache_key(
+            query=query,
+            assistant_mode=resolved_assistant_mode,
+            retrieval_mode=cache_mode,
+            provider=resolved_llm_provider,
+            model_id=resolved_model_id,
+            conversation_id=None,
+            history_text="",
+            jira_jql=jira_jql,
+            confluence_cql=confluence_cql,
+        )
+        if cache_faq_key == cache_exact_key:
+            cache_faq_key = None
 
-        chunks = _chunk_text(answer, stream_chunk_chars) if stream else []
+        cached_response = _load_cached_response(actor_id, cache_exact_key)
+        if cached_response:
+            cache_tier = "exact"
+        elif cache_faq_key:
+            cached_response = _load_cached_response(actor_id, cache_faq_key)
+            if cached_response:
+                cache_tier = "faq"
+
+        _emit_metric(
+            "ChatbotCacheHitCount" if cached_response else "ChatbotCacheMissCount",
+            1,
+            dimensions={"Route": "query", "Method": "POST", "Tier": cache_tier},
+        )
+
+    if cached_response:
+        answer = str(cached_response.get("answer") or "").strip()
+        if stream_callback is not None and answer:
+            stream_callback(answer)
+        _append_conversation_turn(actor_id, resolved_conversation_id, query, answer)
+        chunks = _chunk_text(answer, stream_chunk_chars) if (stream and stream_callback is None) else []
+        cached_citations_raw = cached_response.get("citations")
+        cached_citations = list(cached_citations_raw) if isinstance(cached_citations_raw, list) else []
+        cached_sources_raw = cached_response.get("sources")
+        cached_sources = dict(cached_sources_raw) if isinstance(cached_sources_raw, dict) else {}
+        cached_sources.setdefault("assistant_mode", resolved_assistant_mode)
+        cached_sources.setdefault("provider", resolved_llm_provider)
+        cached_sources.setdefault("model_id", resolved_model_id)
+        cached_sources.setdefault("memory_enabled", _chat_memory_enabled())
+        cached_sources.setdefault("memory_turns", len(history))
+        cached_sources.setdefault("mode", "none" if resolved_assistant_mode == "general" else mode)
+        cached_sources["response_cache"] = {
+            "enabled": cache_enabled,
+            "eligible": cache_eligible,
+            "hit": True,
+            "tier": cache_tier,
+            "stored_at_ms": int(cached_response.get("stored_at_ms") or 0),
+        }
 
         return {
             "answer": answer,
             "conversation_id": resolved_conversation_id,
-            "stream": {"enabled": stream, "chunk_count": len(chunks), "chunks": chunks},
-            "sources": {
+            "citations": cached_citations[: _citation_max_items()],
+            "stream": {"enabled": stream_enabled, "chunk_count": len(chunks), "chunks": chunks},
+            "sources": cached_sources,
+        }
+
+    cache_lock_key: str | None = None
+    cache_lock_acquired = False
+    cache_store_keys: list[str] = []
+    if cache_eligible and cache_exact_key:
+        cache_store_keys = [cache_exact_key]
+        if cache_faq_key:
+            cache_store_keys.append(cache_faq_key)
+        cache_lock_key = cache_faq_key or cache_exact_key
+        cache_lock_acquired = _acquire_response_cache_lock(actor_id, cache_lock_key)
+
+        if not cache_lock_acquired:
+            wait_seconds = _response_cache_lock_wait_ms() / 1000.0
+            for _ in range(_response_cache_lock_wait_attempts()):
+                time.sleep(wait_seconds)
+                cached_response = _load_cached_response(actor_id, cache_exact_key)
+                cache_tier = "exact"
+                if not cached_response and cache_faq_key:
+                    cached_response = _load_cached_response(actor_id, cache_faq_key)
+                    cache_tier = "faq" if cached_response else "none"
+                if not cached_response:
+                    continue
+
+                _emit_metric(
+                    "ChatbotCacheHitCount",
+                    1,
+                    dimensions={"Route": "query", "Method": "POST", "Tier": f"{cache_tier}_wait"},
+                )
+                answer = str(cached_response.get("answer") or "").strip()
+                if stream_callback is not None and answer:
+                    stream_callback(answer)
+                _append_conversation_turn(actor_id, resolved_conversation_id, query, answer)
+                chunks = _chunk_text(answer, stream_chunk_chars) if (stream and stream_callback is None) else []
+                cached_citations_raw = cached_response.get("citations")
+                cached_citations = list(cached_citations_raw) if isinstance(cached_citations_raw, list) else []
+                cached_sources_raw = cached_response.get("sources")
+                cached_sources = dict(cached_sources_raw) if isinstance(cached_sources_raw, dict) else {}
+                cached_sources.setdefault("assistant_mode", resolved_assistant_mode)
+                cached_sources.setdefault("provider", resolved_llm_provider)
+                cached_sources.setdefault("model_id", resolved_model_id)
+                cached_sources.setdefault("memory_enabled", _chat_memory_enabled())
+                cached_sources.setdefault("memory_turns", len(history))
+                cached_sources.setdefault("mode", "none" if resolved_assistant_mode == "general" else mode)
+                cached_sources["response_cache"] = {
+                    "enabled": cache_enabled,
+                    "eligible": cache_eligible,
+                    "hit": True,
+                    "tier": cache_tier,
+                    "stored_at_ms": int(cached_response.get("stored_at_ms") or 0),
+                }
+                return {
+                    "answer": answer,
+                    "conversation_id": resolved_conversation_id,
+                    "citations": cached_citations[: _citation_max_items()],
+                    "stream": {"enabled": stream_enabled, "chunk_count": len(chunks), "chunks": chunks},
+                    "sources": cached_sources,
+                }
+
+            # Another invocation likely has this key in-flight; avoid duplicate cache writes.
+            cache_store_keys = []
+
+    routed_model_id, budget = _route_model_with_budget(
+        provider=resolved_llm_provider,
+        initial_model_id=resolved_model_id,
+        query=query,
+        actor_id=actor_id,
+        conversation_id=resolved_conversation_id,
+    )
+
+    try:
+        if resolved_assistant_mode == "general":
+            system_prompt = (
+                "You are a helpful enterprise AI assistant. Provide clear, practical answers. "
+                "If policies or environment constraints are unknown, state assumptions explicitly."
+            )
+            general_user_prompt = (
+                f"Conversation history:\n{history_text}\n\nLatest user question:\n{query}"
+                if history_text
+                else query
+            )
+            answer = _answer_with_provider(
+                provider=resolved_llm_provider,
+                model_id=routed_model_id,
+                system_prompt=system_prompt,
+                user_prompt=general_user_prompt,
+                stream_callback=stream_callback,
+                telemetry=provider_telemetry,
+            )
+            guardrail = _guardrail_outcome(provider_telemetry)
+            _emit_guardrail_telemetry(resolved_llm_provider, guardrail)
+            prompt_tokens = _estimate_tokens(system_prompt) + _estimate_tokens(general_user_prompt)
+            completion_tokens = _estimate_tokens(answer)
+            estimated_cost_usd = _estimate_cost_usd(routed_model_id, prompt_tokens, completion_tokens)
+            _record_budget_usage(
+                actor_id=actor_id,
+                conversation_id=resolved_conversation_id,
+                model_id=routed_model_id,
+                routing_reason=str(budget.get("route_reason") or "default"),
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                estimated_cost_usd=estimated_cost_usd,
+            )
+
+            budget_details = {
+                **budget,
+                "last_prompt_tokens": prompt_tokens,
+                "last_completion_tokens": completion_tokens,
+                "last_estimated_cost_usd": round(estimated_cost_usd, 8),
+            }
+            _append_conversation_turn(actor_id, resolved_conversation_id, query, answer)
+
+            chunks = _chunk_text(answer, stream_chunk_chars) if (stream and stream_callback is None) else []
+            response_sources = {
                 "assistant_mode": resolved_assistant_mode,
                 "provider": resolved_llm_provider,
-                "model_id": resolved_model_id,
+                "model_id": routed_model_id,
                 "memory_enabled": _chat_memory_enabled(),
                 "memory_turns": len(history),
+                "guardrail": guardrail,
+                "model_routing": {
+                    "requested_model_id": resolved_model_id,
+                    "effective_model_id": routed_model_id,
+                    "reason": budget_details.get("route_reason"),
+                    "complexity": budget_details.get("complexity"),
+                },
+                "budget": budget_details,
+                "rerank": {
+                    "enabled": False,
+                    "top_k_per_source": 0,
+                    "counts": {},
+                },
+                "safety": {
+                    "enabled": _prompt_safety_enabled(),
+                    "context_items_blocked": 0,
+                },
+                "response_cache": {
+                    "enabled": cache_enabled,
+                    "eligible": cache_eligible,
+                    "hit": False,
+                    "tier": "none",
+                },
                 "mode": "none",
                 "context_source": "none",
                 "kb_count": 0,
                 "jira_count": 0,
                 "confluence_count": 0,
                 "github_count": 0,
-            },
-        }
-
-    # M6: Normalize once — callers may pass None for env-var fallback
-    mode = _normalize_retrieval_mode(retrieval_mode or os.getenv("CHATBOT_RETRIEVAL_MODE", "hybrid"))
-    jira_items: list[dict[str, Any]] = []
-    conf_items: list[dict[str, Any]] = []
-    kb_items: list[dict[str, Any]] = []
-    github_items: list[dict[str, Any]] = []
-    context_source = "live"
-
-    if mode in {"kb", "hybrid"} and os.getenv("BEDROCK_KNOWLEDGE_BASE_ID", "").strip():
-        kb_client = BedrockKnowledgeBaseClient(
-            region=os.getenv("AWS_REGION", DEFAULT_REGION),
-            knowledge_base_id=os.environ["BEDROCK_KNOWLEDGE_BASE_ID"],
-            top_k=int(os.getenv("BEDROCK_KB_TOP_K", "5")),
-        )
-        # Circuit breaker: gracefully fall back to live if KB retrieval fails
-        try:
-            kb_items = kb_client.retrieve(query)
-        except Exception:
-            local_logger.warning("kb_retrieval_failed_falling_back", extra={"extra": {"mode": mode}})
-            kb_items = []
-        if kb_items:
-            context_source = "kb"
-
-    use_live = mode == "live" or (mode == "hybrid" and not kb_items)
-    if use_live:
-        atlassian = AtlassianClient(credentials_secret_arn=os.environ["ATLASSIAN_CREDENTIALS_SECRET_ARN"])
-        jira_items = atlassian.search_jira(jira_jql, max_results=5)
-        conf_items = atlassian.search_confluence(confluence_cql, limit=5)
-        github_items = _load_github_context(query, local_logger)
-        context_source = "live" if mode == "live" else "hybrid_fallback"
-
-    context_blob = {
-        "jira": _format_jira(jira_items),
-        "confluence": _format_confluence(conf_items),
-        "knowledge_base": _format_kb(kb_items),
-        "github": _format_github(github_items),
-    }
-
-    system_prompt = (
-        "You are an enterprise engineering assistant. Use only the provided Knowledge Base, Jira, and "
-        "Confluence and GitHub context. "
-        "If information is missing, state assumptions explicitly."
-    )
-    user_prompt = (
-        f"User question:\n{query}\n\n"
-        f"Conversation history:\n{history_text or 'None'}\n\n"
-        f"Knowledge Base context:\n{context_blob['knowledge_base']}\n\n"
-        f"Jira context:\n{context_blob['jira']}\n\n"
-        f"Confluence context:\n{context_blob['confluence']}\n"
-        f"GitHub context:\n{context_blob['github']}\n"
-    )
-
-    answer = _answer_with_provider(
-        provider=resolved_llm_provider,
-        model_id=resolved_model_id,
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-    )
-    _append_conversation_turn(actor_id, resolved_conversation_id, query, answer)
-
-    chunks = _chunk_text(answer, stream_chunk_chars) if stream else []
-
-    local_logger.info(
-        "chatbot_answered",
-        extra={
-            "extra": {
-                "assistant_mode": resolved_assistant_mode,
-                "provider": resolved_llm_provider,
-                "model_id": resolved_model_id,
-                "retrieval_mode": mode,
-                "context_source": context_source,
-                "jira_items": len(jira_items),
-                "confluence_items": len(conf_items),
-                "kb_items": len(kb_items),
-                "github_items": len(github_items),
+                "context_items_blocked": 0,
             }
-        },
-    )
+            for cache_store_key in cache_store_keys:
+                _store_cached_response(
+                    actor_id,
+                    cache_store_key,
+                    {"answer": answer, "sources": response_sources, "citations": []},
+                )
 
-    return {
-        "answer": answer,
-        "conversation_id": resolved_conversation_id,
-        "stream": {"enabled": stream, "chunk_count": len(chunks), "chunks": chunks},
-        "sources": {
+            return {
+                "answer": answer,
+                "conversation_id": resolved_conversation_id,
+                "citations": [],
+                "stream": {"enabled": stream_enabled, "chunk_count": len(chunks), "chunks": chunks},
+                "sources": response_sources,
+            }
+
+        jira_items: list[dict[str, Any]] = []
+        conf_items: list[dict[str, Any]] = []
+        kb_items: list[dict[str, Any]] = []
+        github_items: list[dict[str, Any]] = []
+        context_source = "live"
+        context_items_blocked = 0
+
+        if mode in {"kb", "hybrid"} and os.getenv("BEDROCK_KNOWLEDGE_BASE_ID", "").strip():
+            kb_client = BedrockKnowledgeBaseClient(
+                region=os.getenv("AWS_REGION", DEFAULT_REGION),
+                knowledge_base_id=os.environ["BEDROCK_KNOWLEDGE_BASE_ID"],
+                top_k=int(os.getenv("BEDROCK_KB_TOP_K", "5")),
+            )
+            # Circuit breaker: gracefully fall back to live if KB retrieval fails.
+            try:
+                kb_items = kb_client.retrieve(query)
+            except Exception:
+                local_logger.warning("kb_retrieval_failed_falling_back", extra={"extra": {"mode": mode}})
+                kb_items = []
+            if kb_items:
+                context_source = "kb"
+
+        use_live = mode == "live" or (mode == "hybrid" and not kb_items)
+        if use_live:
+            atlassian = AtlassianClient(credentials_secret_arn=os.environ["ATLASSIAN_CREDENTIALS_SECRET_ARN"])
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                jira_future = pool.submit(atlassian.search_jira, jira_jql, 5)
+                confluence_future = pool.submit(atlassian.search_confluence, confluence_cql, 5)
+                github_future = pool.submit(_load_github_context, query, local_logger)
+                jira_items = jira_future.result()
+                conf_items = confluence_future.result()
+                github_items = github_future.result()
+            context_source = "live" if mode == "live" else "hybrid_fallback"
+
+        jira_items, blocked = _sanitize_context_items("jira", jira_items, local_logger)
+        context_items_blocked += blocked
+        conf_items, blocked = _sanitize_context_items("confluence", conf_items, local_logger)
+        context_items_blocked += blocked
+        kb_items, blocked = _sanitize_context_items("knowledge_base", kb_items, local_logger)
+        context_items_blocked += blocked
+        github_items, blocked = _sanitize_context_items("github", github_items, local_logger)
+        context_items_blocked += blocked
+
+        rerank_counts = {
+            "jira_before": len(jira_items),
+            "confluence_before": len(conf_items),
+            "kb_before": len(kb_items),
+            "github_before": len(github_items),
+        }
+        jira_items = _rerank_context_items(query, "jira", jira_items)
+        conf_items = _rerank_context_items(query, "confluence", conf_items)
+        kb_items = _rerank_context_items(query, "knowledge_base", kb_items)
+        github_items = _rerank_context_items(query, "github", github_items)
+        rerank_counts.update(
+            {
+                "jira_after": len(jira_items),
+                "confluence_after": len(conf_items),
+                "kb_after": len(kb_items),
+                "github_after": len(github_items),
+            }
+        )
+
+        context_blob = {
+            "jira": _format_jira(jira_items),
+            "confluence": _format_confluence(conf_items),
+            "knowledge_base": _format_kb(kb_items),
+            "github": _format_github(github_items),
+        }
+        context_blob, context_budget = _apply_context_budget(context_blob)
+        if int(context_budget.get("total_trimmed_chars") or 0) > 0:
+            _emit_metric(
+                "ChatbotContextTrimCount",
+                1,
+                dimensions={"Route": "query", "Method": "POST"},
+            )
+
+        system_prompt = (
+            "You are an enterprise engineering assistant. Use only the provided Knowledge Base, Jira, and "
+            "Confluence and GitHub context. "
+            "If information is missing, state assumptions explicitly."
+        )
+        user_prompt = (
+            f"User question:\n{query}\n\n"
+            f"Conversation history:\n{history_text or 'None'}\n\n"
+            f"Knowledge Base context:\n{context_blob['knowledge_base']}\n\n"
+            f"Jira context:\n{context_blob['jira']}\n\n"
+            f"Confluence context:\n{context_blob['confluence']}\n"
+            f"GitHub context:\n{context_blob['github']}\n"
+        )
+
+        answer = _answer_with_provider(
+            provider=resolved_llm_provider,
+            model_id=routed_model_id,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            stream_callback=stream_callback,
+            telemetry=provider_telemetry,
+        )
+        guardrail = _guardrail_outcome(provider_telemetry)
+        _emit_guardrail_telemetry(resolved_llm_provider, guardrail)
+        citations = _build_citations(jira_items, conf_items, kb_items, github_items)
+        answer_with_citations = _append_citation_footer(answer, citations)
+        prompt_tokens = _estimate_tokens(system_prompt) + _estimate_tokens(user_prompt)
+        completion_tokens = _estimate_tokens(answer_with_citations)
+        estimated_cost_usd = _estimate_cost_usd(routed_model_id, prompt_tokens, completion_tokens)
+        _record_budget_usage(
+            actor_id=actor_id,
+            conversation_id=resolved_conversation_id,
+            model_id=routed_model_id,
+            routing_reason=str(budget.get("route_reason") or "default"),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            estimated_cost_usd=estimated_cost_usd,
+        )
+
+        budget_details = {
+            **budget,
+            "last_prompt_tokens": prompt_tokens,
+            "last_completion_tokens": completion_tokens,
+            "last_estimated_cost_usd": round(estimated_cost_usd, 8),
+        }
+        _append_conversation_turn(actor_id, resolved_conversation_id, query, answer_with_citations)
+
+        chunks = _chunk_text(answer_with_citations, stream_chunk_chars) if (stream and stream_callback is None) else []
+        response_sources = {
             "assistant_mode": resolved_assistant_mode,
             "provider": resolved_llm_provider,
-            "model_id": resolved_model_id,
+            "model_id": routed_model_id,
             "memory_enabled": _chat_memory_enabled(),
             "memory_turns": len(history),
+            "guardrail": guardrail,
+            "model_routing": {
+                "requested_model_id": resolved_model_id,
+                "effective_model_id": routed_model_id,
+                "reason": budget_details.get("route_reason"),
+                "complexity": budget_details.get("complexity"),
+            },
+            "budget": budget_details,
+            "rerank": {
+                "enabled": _rerank_enabled(),
+                "top_k_per_source": _rerank_top_k_per_source(),
+                "counts": rerank_counts,
+            },
+            "safety": {
+                "enabled": _prompt_safety_enabled(),
+                "context_items_blocked": context_items_blocked,
+            },
+            "response_cache": {
+                "enabled": cache_enabled,
+                "eligible": cache_eligible,
+                "hit": False,
+                "tier": "none",
+            },
+            "context_budget": context_budget,
             "mode": mode,
             "context_source": context_source,
             "kb_count": len(kb_items),
             "jira_count": len(jira_items),
             "confluence_count": len(conf_items),
             "github_count": len(github_items),
-        },
-    }
+            "context_items_blocked": context_items_blocked,
+        }
+        citations_out = citations[: _citation_max_items()]
+        for cache_store_key in cache_store_keys:
+            _store_cached_response(
+                actor_id,
+                cache_store_key,
+                {"answer": answer_with_citations, "sources": response_sources, "citations": citations_out},
+            )
+
+        local_logger.info(
+            "chatbot_answered",
+            extra={
+                "extra": {
+                    "assistant_mode": resolved_assistant_mode,
+                    "provider": resolved_llm_provider,
+                    "model_id": routed_model_id,
+                    "retrieval_mode": mode,
+                    "context_source": context_source,
+                    "jira_items": len(jira_items),
+                    "confluence_items": len(conf_items),
+                    "kb_items": len(kb_items),
+                    "github_items": len(github_items),
+                    "context_items_blocked": context_items_blocked,
+                    "rerank_enabled": _rerank_enabled(),
+                    "rerank_counts": rerank_counts,
+                    "citation_items": len(citations),
+                    "guardrail_intervened": bool(guardrail.get("intervened")),
+                    "guardrail_stop_reason": guardrail.get("stop_reason") or "",
+                    "route_reason": budget_details.get("route_reason") or "",
+                    "estimated_cost_usd": budget_details.get("last_estimated_cost_usd") or 0.0,
+                }
+            },
+        )
+
+        return {
+            "answer": answer_with_citations,
+            "conversation_id": resolved_conversation_id,
+            "citations": citations_out,
+            "stream": {"enabled": stream_enabled, "chunk_count": len(chunks), "chunks": chunks},
+            "sources": response_sources,
+        }
+    finally:
+        if cache_lock_acquired and cache_lock_key:
+            _release_response_cache_lock(actor_id, cache_lock_key)
 
 
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
@@ -1106,12 +2610,40 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         model_id = str(body.get("model_id") or "").strip() or None
         conversation_id = str(body.get("conversation_id") or "").strip() or None
         retrieval_mode = _normalize_retrieval_mode(body.get("retrieval_mode"))
-        chunk_chars = int(body.get("stream_chunk_chars") or _websocket_default_chunk_chars())
+        chunk_chars = max(20, min(int(body.get("stream_chunk_chars") or _websocket_default_chunk_chars()), 1000))
 
         if assistant_mode == "contextual":
             if not _validate_query_filter(jira_jql) or not _validate_query_filter(confluence_cql):
                 _ws_send(event, connection_id, {"type": "error", "error": "invalid_query_filter"})
                 return {"statusCode": 200}
+
+        chunk_index = 0
+        buffered = ""
+
+        def emit_chunk(content: str) -> None:
+            nonlocal chunk_index
+            if not content:
+                return
+            _ws_send(
+                event,
+                connection_id,
+                {
+                    "type": "chunk",
+                    "index": chunk_index,
+                    "content": content,
+                    "conversation_id": conversation_id,
+                },
+            )
+            chunk_index += 1
+
+        def on_stream_delta(delta: str) -> None:
+            nonlocal buffered
+            if not delta:
+                return
+            buffered += delta
+            while len(buffered) >= chunk_chars:
+                emit_chunk(buffered[:chunk_chars])
+                buffered = buffered[chunk_chars:]
 
         try:
             response_body = handle_query(
@@ -1125,28 +2657,29 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 model_id=model_id,
                 conversation_id=conversation_id,
                 actor_id=actor_id,
-                stream=True,
-                stream_chunk_chars=chunk_chars,
+                stream=False,
+                stream_callback=on_stream_delta,
             )
         except ValueError as exc:
-            _ws_send(event, connection_id, {"type": "error", "error": str(exc)})
+            error_code = str(exc)
+            _ws_send(
+                event,
+                connection_id,
+                {"type": "error", "error": error_code, "status_code": _error_status_code(error_code)},
+            )
             return {"statusCode": 200}
         except Exception:
             logger.exception("chatbot_websocket_internal_error")
             _ws_send(event, connection_id, {"type": "error", "error": "internal_error"})
             return {"statusCode": 200}
 
-        for idx, chunk in enumerate((response_body.get("stream") or {}).get("chunks") or []):
-            _ws_send(
-                event,
-                connection_id,
-                {
-                    "type": "chunk",
-                    "index": idx,
-                    "content": chunk,
-                    "conversation_id": response_body.get("conversation_id"),
-                },
-            )
+        if buffered:
+            emit_chunk(buffered)
+            buffered = ""
+
+        if chunk_index == 0:
+            for chunk in ((response_body.get("stream") or {}).get("chunks") or []):
+                emit_chunk(str(chunk))
 
         _ws_send(
             event,
@@ -1155,6 +2688,8 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 "type": "done",
                 "conversation_id": response_body.get("conversation_id"),
                 "sources": response_body.get("sources") or {},
+                "citations": response_body.get("citations") or [],
+                "chunk_count": chunk_index,
             },
         )
         return {"statusCode": 200}
@@ -1263,7 +2798,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             )
         except ValueError as exc:
             error_code = str(exc)
-            status_code = 429 if error_code == "rate_limit_exceeded" else 400
+            status_code = _error_status_code(error_code)
             return _respond(
                 method=method,
                 path=path,
@@ -1320,6 +2855,51 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             status_code=200,
             headers={"Content-Type": "application/json"},
             payload={"cleared": True, "deleted_items": deleted, "scope": "actor"},
+        )
+
+    if path.endswith("/chatbot/feedback"):
+        try:
+            feedback_payload = _parse_feedback_payload(body)
+            stored = _store_feedback(actor_id, feedback_payload)
+        except ValueError as exc:
+            error_code = str(exc)
+            return _respond(
+                method=method,
+                path=path,
+                started_at=started_at,
+                status_code=_error_status_code(error_code),
+                payload={"error": error_code},
+            )
+        except Exception:
+            logger.exception("chatbot_feedback_store_failed")
+            return _respond(
+                method=method,
+                path=path,
+                started_at=started_at,
+                status_code=500,
+                payload={"error": "feedback_store_failed"},
+            )
+
+        sentiment = str(feedback_payload.get("sentiment") or "neutral")
+        _emit_metric(
+            "ChatbotFeedbackCount",
+            1,
+            dimensions={"Route": "feedback", "Method": method, "Sentiment": sentiment},
+        )
+        return _respond(
+            method=method,
+            path=path,
+            started_at=started_at,
+            status_code=200,
+            headers={"Content-Type": "application/json"},
+            payload={
+                "accepted": True,
+                "stored": stored,
+                "feedback_id": feedback_payload["feedback_id"],
+                "sentiment": sentiment,
+                "rating": feedback_payload.get("rating"),
+                "conversation_id": feedback_payload.get("conversation_id"),
+            },
         )
 
     if not query:
@@ -1383,12 +2963,11 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         )
     except ValueError as exc:
         error_code = str(exc)
-        status_code = 429 if error_code == "rate_limit_exceeded" else 400
         return _respond(
             method=method,
             path=path,
             started_at=started_at,
-            status_code=status_code,
+            status_code=_error_status_code(error_code),
             payload={"error": error_code},
         )
     except Exception:

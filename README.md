@@ -101,13 +101,17 @@ Chatbot endpoint:
   - `jira_jql` (optional)
   - `confluence_cql` (optional)
   - `retrieval_mode` (optional: `live|kb|hybrid`; defaults to `hybrid`)
+- Response includes:
+  - `answer` (assistant response; contextual mode appends a compact citations footer by default)
+  - `citations` (structured source records for Jira/Confluence/KB/GitHub context)
+  - `sources` (provider, retrieval, memory, and guardrail metadata)
 
 True streaming transport (WebSocket):
 
 - Connect to `chatbot_websocket_url` output (wss endpoint)
 - Send message payloads like:
   - `{ "action": "query", "query": "...", "conversation_id": "thread-1" }`
-- Server pushes frames with `type=chunk`, then a final `type=done`
+- Server pushes provider-runtime streaming frames with `type=chunk`, then a final `type=done`
 
 Assistant mode behavior:
 
@@ -129,7 +133,38 @@ Anthropic direct configuration (optional):
 Bedrock model selection controls:
 
 - `CHATBOT_ALLOWED_MODEL_IDS` (CSV; optional allow-list for request `model_id`)
-- If unset, any model ID available to the account/region can be requested.
+- `CHATBOT_ALLOWED_LLM_PROVIDERS` (CSV allow-list; default `bedrock`)
+- `CHATBOT_ALLOWED_ANTHROPIC_MODEL_IDS` (CSV allow-list for `anthropic_direct`)
+- If model allow-lists are unset, chatbot defaults are used as the implicit allow-list.
+
+Context reranking controls:
+
+- `CHATBOT_RERANK_ENABLED=true|false` (default `true`)
+- `CHATBOT_RERANK_TOP_K_PER_SOURCE` (default `3`; top items kept per source before prompting)
+
+Prompt/context safety controls:
+
+- `CHATBOT_PROMPT_SAFETY_ENABLED=true|false` (default `true`)
+- `CHATBOT_CONTEXT_SAFETY_BLOCK_REQUEST=true|false` (default `false`; when false, unsafe retrieved items are dropped)
+- `CHATBOT_SAFETY_SCAN_CHAR_LIMIT` (default `8000`)
+- Safety detects common prompt-injection and data-exfiltration patterns in user input and retrieved context.
+- Memory/cache writes are skipped when secret-like material is detected in user/assistant text.
+- API errors:
+  - `unsafe_prompt_detected` (400)
+  - `unsafe_context_detected` (400)
+  - `data_exfiltration_attempt` (403)
+
+Dynamic routing + budget controls:
+
+- `CHATBOT_BUDGETS_ENABLED=true|false` (default `false`)
+- `CHATBOT_BUDGET_TABLE` (optional DynamoDB table; defaults to chatbot memory table when configured)
+- `CHATBOT_BUDGET_SOFT_LIMIT_USD` (default `0.50`)
+- `CHATBOT_BUDGET_HARD_LIMIT_USD` (default `1.00`)
+- `CHATBOT_BUDGET_TTL_DAYS` (default `90`)
+- `CHATBOT_ROUTER_LOW_COST_BEDROCK_MODEL_ID` / `CHATBOT_ROUTER_HIGH_QUALITY_BEDROCK_MODEL_ID`
+- `CHATBOT_ROUTER_LOW_COST_ANTHROPIC_MODEL_ID` / `CHATBOT_ROUTER_HIGH_QUALITY_ANTHROPIC_MODEL_ID`
+- `CHATBOT_MODEL_PRICING_JSON` (optional model pricing map for estimated cost accounting)
+- API error: `conversation_budget_exceeded` (429)
 
 Chatbot Bedrock guardrails (optional):
 
@@ -168,11 +203,42 @@ Conversation memory options (optional):
 - `CHATBOT_MEMORY_COMPACTION_CHARS` (default `12000`; writes rolling summary entries when exceeded)
 - `CHATBOT_USER_REQUESTS_PER_MINUTE` (default `120`)
 - `CHATBOT_CONVERSATION_REQUESTS_PER_MINUTE` (default `60`)
+- `CHATBOT_QUOTA_FAIL_OPEN=false|true` (default `false`; recommended fail-closed behavior)
+
+Response cache options (optional):
+
+- `CHATBOT_RESPONSE_CACHE_ENABLED=true|false` (default `false`)
+- `CHATBOT_RESPONSE_CACHE_TABLE=<dynamodb table name>` (optional; defaults to memory table when configured)
+- `CHATBOT_RESPONSE_CACHE_TTL_SECONDS` (default `300`)
+- `CHATBOT_RESPONSE_CACHE_MIN_QUERY_LENGTH` (default `12`; short queries skip cache lookup)
+- `CHATBOT_RESPONSE_CACHE_MAX_ANSWER_CHARS` (default `16000`; large answers are not cached)
+- `CHATBOT_RESPONSE_CACHE_LOCK_TTL_SECONDS` (default `15`)
+- `CHATBOT_RESPONSE_CACHE_LOCK_WAIT_MS` (default `150`)
+- `CHATBOT_RESPONSE_CACHE_LOCK_WAIT_ATTEMPTS` (default `6`)
+- Cache lookup is two-tiered: `exact` (conversation/history aware) then `faq` (cross-conversation semantic reuse).
+- Cache key includes semantic-normalized query text, assistant mode, retrieval mode, provider/model, and retrieval filters; exact tier also includes conversation id + history digest.
+
+Context budget controls:
+
+- `CHATBOT_CONTEXT_MAX_CHARS_PER_SOURCE` (default `3500`)
+- `CHATBOT_CONTEXT_MAX_TOTAL_CHARS` (default `12000`)
+- Context blocks are truncated before model invocation to reduce latency/cost while preserving source diversity.
 
 Memory hygiene endpoints:
 
 - `POST /chatbot/memory/clear` with `{ "conversation_id": "..." }`
 - `POST /chatbot/memory/clear-all` clears memory for the current authenticated actor scope
+
+Feedback endpoint:
+
+- `POST /chatbot/feedback`
+- JSON body:
+  - `rating` (optional `1..5`)
+  - `sentiment` (optional `positive|neutral|negative`; aliases `up/down` supported)
+  - `comment` (optional, max 2000 chars)
+  - `conversation_id` (optional)
+  - `query` / `answer` (optional snapshots for offline analysis)
+- Requires at least one of `rating` or `sentiment`.
 
 Chatbot observability options:
 
@@ -184,6 +250,16 @@ Chatbot observability options:
   - `ChatbotErrorCount`
   - `ChatbotServerErrorCount`
   - `ChatbotImageGeneratedCount`
+  - `ChatbotGuardrailOutcomeCount`
+  - `ChatbotFeedbackCount`
+- `ChatbotQuotaBackendErrorCount`
+- `ChatbotSafetyEventCount`
+- `ChatbotModelRouteCount`
+- `ChatbotCacheHitCount`
+- `ChatbotCacheMissCount`
+- `ChatbotCacheStoreCount`
+- `ChatbotContextTrimCount`
+- `ChatbotSensitiveStoreSkippedCount`
 - Runtime toggle: `CHATBOT_METRICS_ENABLED=true|false`
 
 WebSocket streaming options:
@@ -222,6 +298,7 @@ Recommended defaults by environment:
 - `dev`: `chatbot_auth_mode = "token"`
 - `nonprod`: `chatbot_auth_mode = "jwt"` (preferred) or `"github_oauth"` for engineering pilot
 - `prod`: `chatbot_auth_mode = "jwt"` for broad enterprise access; use `"github_oauth"` only for engineering-scoped deployments
+- Terraform enforces this in prod: `chatbot_auth_mode="token"` is rejected when `environment="prod"`.
 
 Teams adapter endpoint:
 

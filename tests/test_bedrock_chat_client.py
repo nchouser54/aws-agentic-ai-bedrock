@@ -10,6 +10,18 @@ class _FakeRuntime:
         return {"output": {"message": {"content": [{"text": "ok"}]}}}
 
 
+class _FakeStreamingRuntime(_FakeRuntime):
+    def converse_stream(self, **kwargs) -> dict:
+        self.last_kwargs = kwargs
+        return {
+            "stream": [
+                {"contentBlockDelta": {"delta": {"text": "hello "}}},
+                {"contentBlockDelta": {"delta": {"text": "world"}}},
+                {"messageStop": {"stopReason": "guardrail_intervened"}},
+            ]
+        }
+
+
 def test_bedrock_chat_client_without_guardrail() -> None:
     runtime = _FakeRuntime()
     client = BedrockChatClient(
@@ -64,3 +76,21 @@ def test_bedrock_chat_client_ignores_invalid_trace() -> None:
         "guardrailIdentifier": "gr-123",
         "guardrailVersion": "DRAFT",
     }
+
+
+def test_bedrock_chat_streaming_with_callback_and_telemetry() -> None:
+    runtime = _FakeStreamingRuntime()
+    client = BedrockChatClient(
+        region="us-gov-west-1",
+        model_id="anthropic.model",
+        bedrock_runtime=runtime,
+    )
+
+    deltas: list[str] = []
+    telemetry: dict = {}
+    out = client.stream_answer("system", "user", on_delta=deltas.append, telemetry=telemetry)
+
+    assert out == "hello world"
+    assert deltas == ["hello ", "world"]
+    assert telemetry["stop_reason"] == "guardrail_intervened"
+    assert telemetry["guardrail_intervened"] is True

@@ -86,6 +86,17 @@ check "chatbot_jwt_settings" {
   }
 }
 
+check "chatbot_prod_auth_mode" {
+  assert {
+    condition = (
+      !var.chatbot_enabled ||
+      lower(trimspace(var.environment)) != "prod" ||
+      var.chatbot_auth_mode != "token"
+    )
+    error_message = "When environment=prod, chatbot_auth_mode must be jwt or github_oauth (token is not allowed)."
+  }
+}
+
 check "github_kb_sync_settings" {
   assert {
     condition = (
@@ -1084,7 +1095,9 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
       CHATBOT_RETRIEVAL_MODE                         = var.chatbot_retrieval_mode
       CHATBOT_DEFAULT_ASSISTANT_MODE                 = var.chatbot_default_assistant_mode
       CHATBOT_LLM_PROVIDER                           = var.chatbot_llm_provider
+      CHATBOT_ALLOWED_LLM_PROVIDERS                  = join(",", var.chatbot_allowed_llm_providers)
       CHATBOT_ALLOWED_MODEL_IDS                      = join(",", var.chatbot_allowed_model_ids)
+      CHATBOT_ALLOWED_ANTHROPIC_MODEL_IDS            = join(",", var.chatbot_allowed_anthropic_model_ids)
       CHATBOT_ENABLE_ANTHROPIC_DIRECT                = tostring(var.chatbot_enable_anthropic_direct)
       CHATBOT_ANTHROPIC_API_KEY_SECRET_ARN           = var.chatbot_anthropic_api_key_secret_arn
       CHATBOT_ANTHROPIC_API_BASE                     = var.chatbot_anthropic_api_base
@@ -1102,6 +1115,32 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
       CHATBOT_MEMORY_COMPACTION_CHARS                = tostring(var.chatbot_memory_compaction_chars)
       CHATBOT_USER_REQUESTS_PER_MINUTE               = tostring(var.chatbot_user_requests_per_minute)
       CHATBOT_CONVERSATION_REQUESTS_PER_MINUTE       = tostring(var.chatbot_conversation_requests_per_minute)
+      CHATBOT_QUOTA_FAIL_OPEN                        = tostring(var.chatbot_quota_fail_open)
+      CHATBOT_RESPONSE_CACHE_ENABLED                 = tostring(var.chatbot_response_cache_enabled)
+      CHATBOT_RESPONSE_CACHE_TABLE                   = trimspace(var.chatbot_response_cache_table) != "" ? trimspace(var.chatbot_response_cache_table) : (local.chatbot_memory_enabled ? aws_dynamodb_table.chatbot_memory[0].name : "")
+      CHATBOT_RESPONSE_CACHE_TTL_SECONDS             = tostring(var.chatbot_response_cache_ttl_seconds)
+      CHATBOT_RESPONSE_CACHE_MIN_QUERY_LENGTH        = tostring(var.chatbot_response_cache_min_query_length)
+      CHATBOT_RESPONSE_CACHE_MAX_ANSWER_CHARS        = tostring(var.chatbot_response_cache_max_answer_chars)
+      CHATBOT_RESPONSE_CACHE_LOCK_TTL_SECONDS        = tostring(var.chatbot_response_cache_lock_ttl_seconds)
+      CHATBOT_RESPONSE_CACHE_LOCK_WAIT_MS            = tostring(var.chatbot_response_cache_lock_wait_ms)
+      CHATBOT_RESPONSE_CACHE_LOCK_WAIT_ATTEMPTS      = tostring(var.chatbot_response_cache_lock_wait_attempts)
+      CHATBOT_RERANK_ENABLED                         = tostring(var.chatbot_rerank_enabled)
+      CHATBOT_RERANK_TOP_K_PER_SOURCE                = tostring(var.chatbot_rerank_top_k_per_source)
+      CHATBOT_PROMPT_SAFETY_ENABLED                  = tostring(var.chatbot_prompt_safety_enabled)
+      CHATBOT_CONTEXT_SAFETY_BLOCK_REQUEST           = tostring(var.chatbot_context_safety_block_request)
+      CHATBOT_SAFETY_SCAN_CHAR_LIMIT                 = tostring(var.chatbot_safety_scan_char_limit)
+      CHATBOT_CONTEXT_MAX_CHARS_PER_SOURCE           = tostring(var.chatbot_context_max_chars_per_source)
+      CHATBOT_CONTEXT_MAX_TOTAL_CHARS                = tostring(var.chatbot_context_max_total_chars)
+      CHATBOT_BUDGETS_ENABLED                        = tostring(var.chatbot_budgets_enabled)
+      CHATBOT_BUDGET_TABLE                           = trimspace(var.chatbot_budget_table) != "" ? trimspace(var.chatbot_budget_table) : (local.chatbot_memory_enabled ? aws_dynamodb_table.chatbot_memory[0].name : "")
+      CHATBOT_BUDGET_SOFT_LIMIT_USD                  = tostring(var.chatbot_budget_soft_limit_usd)
+      CHATBOT_BUDGET_HARD_LIMIT_USD                  = tostring(var.chatbot_budget_hard_limit_usd)
+      CHATBOT_BUDGET_TTL_DAYS                        = tostring(var.chatbot_budget_ttl_days)
+      CHATBOT_ROUTER_LOW_COST_BEDROCK_MODEL_ID       = var.chatbot_router_low_cost_bedrock_model_id
+      CHATBOT_ROUTER_HIGH_QUALITY_BEDROCK_MODEL_ID   = var.chatbot_router_high_quality_bedrock_model_id
+      CHATBOT_ROUTER_LOW_COST_ANTHROPIC_MODEL_ID     = var.chatbot_router_low_cost_anthropic_model_id
+      CHATBOT_ROUTER_HIGH_QUALITY_ANTHROPIC_MODEL_ID = var.chatbot_router_high_quality_anthropic_model_id
+      CHATBOT_MODEL_PRICING_JSON                     = var.chatbot_model_pricing_json
       CHATBOT_WEBSOCKET_DEFAULT_CHUNK_CHARS          = tostring(var.chatbot_websocket_default_chunk_chars)
       CHATBOT_METRICS_ENABLED                        = tostring(var.chatbot_observability_enabled)
       METRICS_NAMESPACE                              = local.chatbot_metrics_namespace
@@ -1405,6 +1444,17 @@ resource "aws_apigatewayv2_route" "chatbot_memory_clear_all" {
   count              = var.chatbot_enabled ? 1 : 0
   api_id             = aws_apigatewayv2_api.webhook.id
   route_key          = "POST /chatbot/memory/clear-all"
+  target             = "integrations/${aws_apigatewayv2_integration.chatbot_lambda[0].id}"
+  authorization_type = local.chatbot_route_auth_type
+  authorizer_id = local.chatbot_auth_jwt_enabled ? aws_apigatewayv2_authorizer.chatbot_jwt[0].id : (
+    local.chatbot_auth_github_oauth_enabled ? aws_apigatewayv2_authorizer.chatbot_github_oauth[0].id : null
+  )
+}
+
+resource "aws_apigatewayv2_route" "chatbot_feedback" {
+  count              = var.chatbot_enabled ? 1 : 0
+  api_id             = aws_apigatewayv2_api.webhook.id
+  route_key          = "POST /chatbot/feedback"
   target             = "integrations/${aws_apigatewayv2_integration.chatbot_lambda[0].id}"
   authorization_type = local.chatbot_route_auth_type
   authorizer_id = local.chatbot_auth_jwt_enabled ? aws_apigatewayv2_authorizer.chatbot_jwt[0].id : (
