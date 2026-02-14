@@ -9,6 +9,7 @@ from chatbot.app import (
     _format_jira,
     _format_kb,
     _list_bedrock_models,
+    _normalize_atlassian_session_id,
     _normalize_assistant_mode,
     _normalize_conversation_id,
     _normalize_llm_provider,
@@ -88,6 +89,20 @@ def test_normalize_conversation_id_invalid() -> None:
         _normalize_conversation_id("not valid spaces")
     except ValueError as exc:
         assert str(exc) == "conversation_id_invalid"
+    else:
+        raise AssertionError("Expected ValueError")
+
+
+def test_normalize_atlassian_session_id() -> None:
+    assert _normalize_atlassian_session_id("abcDEF1234567890") == "abcDEF1234567890"
+    assert _normalize_atlassian_session_id("") is None
+
+
+def test_normalize_atlassian_session_id_invalid() -> None:
+    try:
+        _normalize_atlassian_session_id("short")
+    except ValueError as exc:
+        assert str(exc) == "atlassian_session_id_invalid"
     else:
         raise AssertionError("Expected ValueError")
 
@@ -316,6 +331,48 @@ def test_handle_query_live_mode_with_user_atlassian_override(mock_atlassian_cls,
 
     assert mock_atlassian_cls.call_args.kwargs["email_override"] == "engineer@example.com"
     assert mock_atlassian_cls.call_args.kwargs["api_token_override"] == "user-token"
+
+
+@patch("chatbot.app._load_atlassian_session_credentials", return_value=("engineer@example.com", "session-token"))
+@patch("chatbot.app.BedrockChatClient")
+@patch("chatbot.app.AtlassianClient")
+def test_handle_query_live_mode_with_atlassian_session_id(
+    mock_atlassian_cls,
+    mock_chat_cls,
+    mock_load_session,
+) -> None:
+    mock_chat = MagicMock()
+    mock_chat.answer.return_value = "Live mode answer"
+    mock_chat_cls.return_value = mock_chat
+
+    mock_atlassian = MagicMock()
+    mock_atlassian.search_jira.return_value = [{"key": "ENG-1", "fields": {"summary": "Fix"}}]
+    mock_atlassian.search_confluence.return_value = [{"title": "Runbook", "url": "https://wiki/runbook"}]
+    mock_atlassian_cls.return_value = mock_atlassian
+
+    with patch.dict(
+        "os.environ",
+        {
+            "ATLASSIAN_CREDENTIALS_SECRET_ARN": "arn:fake",
+            "CHATBOT_MODEL_ID": "anthropic.model",
+            "CHATBOT_ATLASSIAN_USER_AUTH_ENABLED": "true",
+            "CHATBOT_ATLASSIAN_SESSION_BROKER_ENABLED": "true",
+        },
+        clear=False,
+    ):
+        out = handle_query(
+            "what is broken",
+            "project=ENG",
+            "type=page",
+            "corr-live-user-session",
+            retrieval_mode="live",
+            atlassian_session_id="abcDEF1234567890",
+        )
+
+    assert out["sources"]["atlassian_auth_mode"] == "user_session"
+    assert mock_atlassian_cls.call_args.kwargs["email_override"] == "engineer@example.com"
+    assert mock_atlassian_cls.call_args.kwargs["api_token_override"] == "session-token"
+    mock_load_session.assert_called_once_with("anonymous", "abcDEF1234567890")
 
 
 @patch("chatbot.app.BedrockChatClient")
@@ -1189,6 +1246,76 @@ def test_lambda_handler_passes_atlassian_user_credentials_to_handle_query() -> N
     assert out["statusCode"] == 200
 
 
+def test_lambda_handler_passes_atlassian_session_id_to_handle_query() -> None:
+    import chatbot.app as chatbot_mod
+
+    chatbot_mod._cached_api_token = None
+    env = {
+        "CHATBOT_API_TOKEN_SECRET_ARN": "",
+        "CHATBOT_API_TOKEN": "",
+        "ATLASSIAN_CREDENTIALS_SECRET_ARN": "arn:fake",
+        "CHATBOT_MODEL_ID": "model",
+    }
+    body = {
+        "query": "test",
+        "atlassian_session_id": "abcDEF1234567890",
+    }
+
+    def _fake_handle_query(*_args, **kwargs):
+        assert kwargs["atlassian_session_id"] == "abcDEF1234567890"
+        return {"answer": "ok", "sources": {}}
+
+    with patch.dict("os.environ", env, clear=False):
+        with patch("chatbot.app.handle_query", side_effect=_fake_handle_query):
+            out = lambda_handler(_api_event(body=body), None)
+
+    assert out["statusCode"] == 200
+
+
+def test_lambda_handler_atlassian_session_route() -> None:
+    import chatbot.app as chatbot_mod
+
+    chatbot_mod._cached_api_token = None
+    with patch.dict("os.environ", {"CHATBOT_API_TOKEN_SECRET_ARN": "", "CHATBOT_API_TOKEN": ""}, clear=False):
+        with patch(
+            "chatbot.app._create_atlassian_session",
+            return_value={
+                "created": True,
+                "atlassian_session_id": "abcDEF1234567890",
+                "expires_at": 2000000000,
+                "ttl_seconds": 3600,
+            },
+        ) as create_session:
+            event = _api_event(body={"atlassian_email": "eng@example.com", "atlassian_api_token": "token"})
+            event["rawPath"] = "/chatbot/atlassian/session"
+            event["requestContext"]["http"]["path"] = "/chatbot/atlassian/session"
+            out = lambda_handler(event, None)
+
+    assert out["statusCode"] == 200
+    body = json.loads(out["body"])
+    assert body["created"] is True
+    assert body["atlassian_session_id"] == "abcDEF1234567890"
+    create_session.assert_called_once()
+
+
+def test_lambda_handler_atlassian_session_clear_route() -> None:
+    import chatbot.app as chatbot_mod
+
+    chatbot_mod._cached_api_token = None
+    with patch.dict("os.environ", {"CHATBOT_API_TOKEN_SECRET_ARN": "", "CHATBOT_API_TOKEN": ""}, clear=False):
+        with patch("chatbot.app._clear_atlassian_session", return_value=True) as clear_session:
+            event = _api_event(body={"atlassian_session_id": "abcDEF1234567890"})
+            event["rawPath"] = "/chatbot/atlassian/session/clear"
+            event["requestContext"]["http"]["path"] = "/chatbot/atlassian/session/clear"
+            out = lambda_handler(event, None)
+
+    assert out["statusCode"] == 200
+    body = json.loads(out["body"])
+    assert body["cleared"] is True
+    assert body["atlassian_session_id"] == "abcDEF1234567890"
+    clear_session.assert_called_once_with("anonymous", "abcDEF1234567890")
+
+
 def test_lambda_handler_memory_clear_route() -> None:
     import chatbot.app as chatbot_mod
 
@@ -1328,6 +1455,30 @@ def test_lambda_handler_websocket_streaming_uses_runtime_deltas() -> None:
     done_payload = ws_send.call_args_list[-1].args[2]
     assert done_payload["chunk_count"] == 1
     assert done_payload["citations"][0]["source"] == "jira"
+
+
+def test_lambda_handler_websocket_passes_atlassian_session_id_to_handle_query() -> None:
+    def _fake_handle_query(*_args, **kwargs):
+        assert kwargs["atlassian_session_id"] == "abcDEF1234567890"
+        callback = kwargs.get("stream_callback")
+        if callback:
+            callback("hello ")
+        return {
+            "answer": "hello",
+            "conversation_id": "thread-2",
+            "stream": {"enabled": False, "chunk_count": 0, "chunks": []},
+            "sources": {"provider": "bedrock"},
+            "citations": [],
+        }
+
+    with patch("chatbot.app.handle_query", side_effect=_fake_handle_query):
+        with patch("chatbot.app._ws_send"):
+            out = lambda_handler(
+                _ws_event(body={"action": "query", "query": "test", "atlassian_session_id": "abcDEF1234567890"}),
+                None,
+            )
+
+    assert out["statusCode"] == 200
 
 
 def test_lambda_handler_websocket_unsupported_route() -> None:

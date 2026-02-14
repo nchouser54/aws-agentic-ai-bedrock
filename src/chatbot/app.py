@@ -27,6 +27,7 @@ ALLOWED_RETRIEVAL_MODES = {"live", "kb", "hybrid"}
 ALLOWED_ASSISTANT_MODES = {"contextual", "general"}
 ALLOWED_LLM_PROVIDERS = {"bedrock", "anthropic_direct"}
 _VALID_CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+_VALID_ATLASSIAN_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{15,127}$")
 _VALID_FEEDBACK_SENTIMENTS = {"positive", "negative", "neutral"}
 _SAFETY_INJECTION_PATTERNS = (
     re.compile(r"ignore\s+(all\s+)?(previous|prior)\s+instructions?", re.IGNORECASE),
@@ -126,6 +127,14 @@ def _route_name(path: str) -> str:
         return "image"
     if path.endswith("/chatbot/models"):
         return "models"
+    if path.endswith("/chatbot/memory/clear"):
+        return "memory_clear"
+    if path.endswith("/chatbot/memory/clear-all"):
+        return "memory_clear_all"
+    if path.endswith("/chatbot/atlassian/session"):
+        return "atlassian_session"
+    if path.endswith("/chatbot/atlassian/session/clear"):
+        return "atlassian_session_clear"
     if path.endswith("/chatbot/feedback"):
         return "feedback"
     return "other"
@@ -179,10 +188,17 @@ def _error_status_code(error_code: str) -> int:
         "anthropic_direct_disabled",
         "data_exfiltration_attempt",
         "atlassian_user_auth_disabled",
+        "atlassian_session_broker_disabled",
     }:
         return 403
-    if normalized in {"quota_backend_unavailable", "dynamodb_unavailable"}:
+    if normalized in {
+        "quota_backend_unavailable",
+        "dynamodb_unavailable",
+        "atlassian_session_store_unavailable",
+    }:
         return 503
+    if normalized in {"atlassian_session_not_found", "atlassian_session_expired"}:
+        return 404
     return 400
 
 
@@ -404,6 +420,165 @@ def _context_max_total_chars() -> int:
 
 def _atlassian_user_auth_enabled() -> bool:
     return os.getenv("CHATBOT_ATLASSIAN_USER_AUTH_ENABLED", "false").strip().lower() == "true"
+
+
+def _atlassian_session_broker_enabled() -> bool:
+    return os.getenv("CHATBOT_ATLASSIAN_SESSION_BROKER_ENABLED", "false").strip().lower() == "true"
+
+
+def _atlassian_session_ttl_seconds() -> int:
+    try:
+        ttl = int(os.getenv("CHATBOT_ATLASSIAN_SESSION_TTL_SECONDS", "3600"))
+    except ValueError:
+        ttl = 3600
+    return max(300, min(ttl, 7 * 24 * 60 * 60))
+
+
+def _normalize_atlassian_session_id(value: str | None) -> str | None:
+    candidate = (value or "").strip()
+    if not candidate:
+        return None
+    if not _VALID_ATLASSIAN_SESSION_ID_RE.match(candidate):
+        raise ValueError("atlassian_session_id_invalid")
+    return candidate
+
+
+def _atlassian_session_storage_key(actor_id: str, session_id: str) -> str:
+    return f"atl_sess#{actor_id}#{session_id}"
+
+
+def _atlassian_session_table() -> str:
+    table = _chat_memory_table()
+    if table:
+        return table
+    raise ValueError("atlassian_session_store_unavailable")
+
+
+def _create_atlassian_session(
+    actor_id: str,
+    user_email: str | None,
+    user_api_token: str | None,
+) -> dict[str, Any]:
+    if not _atlassian_session_broker_enabled():
+        raise ValueError("atlassian_session_broker_disabled")
+
+    email, token, mode = _resolve_atlassian_request_auth(user_email, user_api_token)
+    if mode != "user_credentials" or not email or not token:
+        raise ValueError("atlassian_user_credentials_incomplete")
+
+    table = _atlassian_session_table()
+    session_id = uuid.uuid4().hex
+    now = int(time.time())
+    ttl_seconds = _atlassian_session_ttl_seconds()
+    expires_at = now + ttl_seconds
+
+    item = {
+        "conversation_id": {"S": _atlassian_session_storage_key(actor_id, session_id)},
+        "timestamp_ms": {"N": "0"},
+        "role": {"S": "atlassian_session"},
+        "content": {"S": json.dumps({"email": email, "api_token": token}, ensure_ascii=True)},
+        "expires_at": {"N": str(expires_at)},
+    }
+
+    try:
+        _dynamodb_client().put_item(TableName=table, Item=item)
+    except Exception:
+        logger.warning("atlassian_session_store_failed", extra={"extra": {"actor_id": actor_id}})
+        raise ValueError("atlassian_session_store_unavailable") from None
+
+    return {
+        "created": True,
+        "atlassian_session_id": session_id,
+        "expires_at": expires_at,
+        "ttl_seconds": ttl_seconds,
+    }
+
+
+def _load_atlassian_session_credentials(actor_id: str, session_id: str | None) -> tuple[str, str]:
+    if not _atlassian_session_broker_enabled():
+        raise ValueError("atlassian_session_broker_disabled")
+
+    resolved_session_id = _normalize_atlassian_session_id(session_id)
+    if not resolved_session_id:
+        raise ValueError("atlassian_session_id_required")
+
+    table = _atlassian_session_table()
+    partition_key = _atlassian_session_storage_key(actor_id, resolved_session_id)
+    try:
+        response = _dynamodb_client().get_item(
+            TableName=table,
+            Key={
+                "conversation_id": {"S": partition_key},
+                "timestamp_ms": {"N": "0"},
+            },
+            ConsistentRead=True,
+        )
+    except Exception:
+        logger.warning("atlassian_session_load_failed", extra={"extra": {"actor_id": actor_id}})
+        raise ValueError("atlassian_session_store_unavailable") from None
+
+    item = response.get("Item") or {}
+    if not item:
+        raise ValueError("atlassian_session_not_found")
+
+    try:
+        expires_at = int(str((item.get("expires_at") or {}).get("N") or "0"))
+    except ValueError:
+        expires_at = 0
+    if expires_at and expires_at <= int(time.time()):
+        try:
+            _clear_atlassian_session(actor_id, resolved_session_id)
+        except ValueError:
+            pass
+        raise ValueError("atlassian_session_expired")
+
+    role = str((item.get("role") or {}).get("S") or "").strip()
+    if role != "atlassian_session":
+        raise ValueError("atlassian_session_invalid")
+
+    raw_content = str((item.get("content") or {}).get("S") or "").strip()
+    if not raw_content:
+        raise ValueError("atlassian_session_invalid")
+
+    try:
+        content = json.loads(raw_content)
+    except json.JSONDecodeError:
+        raise ValueError("atlassian_session_invalid") from None
+    if not isinstance(content, dict):
+        raise ValueError("atlassian_session_invalid")
+
+    email, token, mode = _resolve_atlassian_request_auth(
+        str(content.get("email") or "").strip() or None,
+        str(content.get("api_token") or "").strip() or None,
+    )
+    if mode != "user_credentials" or not email or not token:
+        raise ValueError("atlassian_session_invalid")
+
+    return email, token
+
+
+def _clear_atlassian_session(actor_id: str, session_id: str | None) -> bool:
+    if not _atlassian_session_broker_enabled():
+        raise ValueError("atlassian_session_broker_disabled")
+
+    resolved_session_id = _normalize_atlassian_session_id(session_id)
+    if not resolved_session_id:
+        raise ValueError("atlassian_session_id_required")
+
+    table = _atlassian_session_table()
+    partition_key = _atlassian_session_storage_key(actor_id, resolved_session_id)
+    try:
+        _dynamodb_client().delete_item(
+            TableName=table,
+            Key={
+                "conversation_id": {"S": partition_key},
+                "timestamp_ms": {"N": "0"},
+            },
+        )
+    except Exception:
+        logger.warning("atlassian_session_clear_failed", extra={"extra": {"actor_id": actor_id}})
+        raise ValueError("atlassian_session_store_unavailable") from None
+    return True
 
 
 def _resolve_atlassian_request_auth(
@@ -2152,6 +2327,7 @@ def handle_query(
     stream: bool = False,
     stream_chunk_chars: int = 120,
     stream_callback: Callable[[str], None] | None = None,
+    atlassian_session_id: str | None = None,
     atlassian_user_email: str | None = None,
     atlassian_user_api_token: str | None = None,
 ) -> dict[str, Any]:
@@ -2174,14 +2350,22 @@ def handle_query(
     atlassian_api_token_override: str | None = None
     atlassian_auth_mode = "none" if resolved_assistant_mode == "general" else "service_account"
     if resolved_assistant_mode == "contextual":
-        (
-            atlassian_email_override,
-            atlassian_api_token_override,
-            atlassian_auth_mode,
-        ) = _resolve_atlassian_request_auth(
-            atlassian_user_email,
-            atlassian_user_api_token,
-        )
+        resolved_atlassian_session_id = _normalize_atlassian_session_id(atlassian_session_id)
+        if resolved_atlassian_session_id:
+            atlassian_email_override, atlassian_api_token_override = _load_atlassian_session_credentials(
+                actor_id,
+                resolved_atlassian_session_id,
+            )
+            atlassian_auth_mode = "user_session"
+        else:
+            (
+                atlassian_email_override,
+                atlassian_api_token_override,
+                atlassian_auth_mode,
+            ) = _resolve_atlassian_request_auth(
+                atlassian_user_email,
+                atlassian_user_api_token,
+            )
 
     cache_enabled = _response_cache_enabled()
     cache_eligible = cache_enabled and len(query.strip()) >= _response_cache_min_query_length()
@@ -2698,6 +2882,11 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             or _header_value(headers, "x-atlassian-api-token")
             or None
         )
+        atlassian_session_id = (
+            str(body.get("atlassian_session_id") or "").strip()
+            or _header_value(headers, "x-atlassian-session-id")
+            or None
+        )
         retrieval_mode = _normalize_retrieval_mode(body.get("retrieval_mode"))
         chunk_chars = max(20, min(int(body.get("stream_chunk_chars") or _websocket_default_chunk_chars()), 1000))
 
@@ -2748,6 +2937,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 actor_id=actor_id,
                 stream=False,
                 stream_callback=on_stream_delta,
+                atlassian_session_id=atlassian_session_id,
                 atlassian_user_email=atlassian_user_email,
                 atlassian_user_api_token=atlassian_user_api_token,
             )
@@ -2994,6 +3184,71 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             },
         )
 
+    if path.endswith("/chatbot/atlassian/session"):
+        atlassian_user_email = (
+            str(body.get("atlassian_email") or "").strip()
+            or _header_value(request_headers, "x-atlassian-email")
+            or None
+        )
+        atlassian_user_api_token = (
+            str(body.get("atlassian_api_token") or "").strip()
+            or _header_value(request_headers, "x-atlassian-api-token")
+            or None
+        )
+        try:
+            session_payload = _create_atlassian_session(
+                actor_id=actor_id,
+                user_email=atlassian_user_email,
+                user_api_token=atlassian_user_api_token,
+            )
+        except ValueError as exc:
+            error_code = str(exc)
+            return _respond(
+                method=method,
+                path=path,
+                started_at=started_at,
+                status_code=_error_status_code(error_code),
+                payload={"error": error_code},
+            )
+        return _respond(
+            method=method,
+            path=path,
+            started_at=started_at,
+            status_code=200,
+            headers={"Content-Type": "application/json"},
+            payload=session_payload,
+        )
+
+    if path.endswith("/chatbot/atlassian/session/clear"):
+        atlassian_session_id = (
+            str(body.get("atlassian_session_id") or "").strip()
+            or _header_value(request_headers, "x-atlassian-session-id")
+            or None
+        )
+        try:
+            _clear_atlassian_session(actor_id, atlassian_session_id)
+            normalized_session_id = _normalize_atlassian_session_id(atlassian_session_id)
+        except ValueError as exc:
+            error_code = str(exc)
+            return _respond(
+                method=method,
+                path=path,
+                started_at=started_at,
+                status_code=_error_status_code(error_code),
+                payload={"error": error_code},
+            )
+        return _respond(
+            method=method,
+            path=path,
+            started_at=started_at,
+            status_code=200,
+            headers={"Content-Type": "application/json"},
+            payload={
+                "cleared": True,
+                "atlassian_session_id": normalized_session_id,
+            },
+        )
+
     if not query:
         return _respond(
             method=method,
@@ -3028,6 +3283,11 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         or _header_value(request_headers, "x-atlassian-api-token")
         or None
     )
+    atlassian_session_id = (
+        str(body.get("atlassian_session_id") or "").strip()
+        or _header_value(request_headers, "x-atlassian-session-id")
+        or None
+    )
     retrieval_mode = _normalize_retrieval_mode(body.get("retrieval_mode"))
     stream = bool(body.get("stream") is True)
     stream_chunk_chars = int(body.get("stream_chunk_chars") or 120)
@@ -3060,6 +3320,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             actor_id=actor_id,
             stream=stream,
             stream_chunk_chars=stream_chunk_chars,
+            atlassian_session_id=atlassian_session_id,
             atlassian_user_email=atlassian_user_email,
             atlassian_user_api_token=atlassian_user_api_token,
         )

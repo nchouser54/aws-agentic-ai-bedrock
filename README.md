@@ -101,6 +101,7 @@ Chatbot endpoint:
   - `jira_jql` (optional)
   - `confluence_cql` (optional)
   - `retrieval_mode` (optional: `live|kb|hybrid`; defaults to `hybrid`)
+  - `atlassian_session_id` (optional; brokered short-lived Atlassian credential session)
   - `atlassian_email` + `atlassian_api_token` (optional pair; only used when `CHATBOT_ATLASSIAN_USER_AUTH_ENABLED=true`)
 - Response includes:
   - `answer` (assistant response; contextual mode appends a compact citations footer by default)
@@ -211,6 +212,16 @@ Atlassian auth mode:
 - Default behavior uses shared service-account credentials from `ATLASSIAN_CREDENTIALS_SECRET_ARN`.
 - Optional per-user override: set `CHATBOT_ATLASSIAN_USER_AUTH_ENABLED=true`, then send request-scoped `atlassian_email` + `atlassian_api_token` (or headers `X-Atlassian-Email` + `X-Atlassian-Api-Token`).
 - If per-user override is enabled and only one credential is provided, the request is rejected.
+- Optional credential broker: set `CHATBOT_ATLASSIAN_SESSION_BROKER_ENABLED=true`, then create short-lived sessions via:
+  - `POST /chatbot/atlassian/session` with `atlassian_email` + `atlassian_api_token`
+  - `POST /chatbot/atlassian/session/clear` with `atlassian_session_id`
+- Broker still requires `CHATBOT_ATLASSIAN_USER_AUTH_ENABLED=true` because sessions encapsulate per-user Atlassian credentials.
+- Broker storage uses the chatbot DynamoDB table configured by `CHATBOT_MEMORY_TABLE` (Terraform provisions it when broker mode is enabled).
+- Broker TTL: `CHATBOT_ATLASSIAN_SESSION_TTL_SECONDS` (default `3600`, minimum `300`)
+- Query precedence in contextual mode:
+  - If `atlassian_session_id` is provided, chatbot loads server-side credentials from that session.
+  - Otherwise, it falls back to request-scoped `atlassian_email` + `atlassian_api_token`.
+  - Otherwise, it uses shared service-account credentials.
 
 Response cache options (optional):
 
@@ -235,6 +246,12 @@ Memory hygiene endpoints:
 
 - `POST /chatbot/memory/clear` with `{ "conversation_id": "..." }`
 - `POST /chatbot/memory/clear-all` clears memory for the current authenticated actor scope
+
+Atlassian session broker endpoints (optional):
+
+- `POST /chatbot/atlassian/session` with `{ "atlassian_email": "...", "atlassian_api_token": "..." }`
+  - Returns `atlassian_session_id`, `expires_at`, and `ttl_seconds`
+- `POST /chatbot/atlassian/session/clear` with `{ "atlassian_session_id": "..." }`
 
 Feedback endpoint:
 

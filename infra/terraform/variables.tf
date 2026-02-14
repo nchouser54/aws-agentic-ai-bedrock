@@ -262,6 +262,23 @@ variable "chatbot_atlassian_user_auth_enabled" {
   default     = false
 }
 
+variable "chatbot_atlassian_session_broker_enabled" {
+  description = "Enable short-lived brokered Atlassian sessions so clients can reuse a session ID instead of sending API tokens on every query"
+  type        = bool
+  default     = false
+}
+
+variable "chatbot_atlassian_session_ttl_seconds" {
+  description = "TTL (seconds) for brokered Atlassian sessions stored server-side"
+  type        = number
+  default     = 3600
+
+  validation {
+    condition     = var.chatbot_atlassian_session_ttl_seconds >= 300
+    error_message = "Must be at least 300."
+  }
+}
+
 variable "chatbot_memory_max_turns" {
   description = "Maximum number of recent memory turns included in each chatbot prompt"
   type        = number

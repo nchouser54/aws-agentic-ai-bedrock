@@ -2,7 +2,7 @@ locals {
   name_prefix                       = "${var.project_name}-${var.environment}"
   chatbot_auth_jwt_enabled          = var.chatbot_enabled && var.chatbot_auth_mode == "jwt"
   chatbot_auth_github_oauth_enabled = var.chatbot_enabled && var.chatbot_auth_mode == "github_oauth"
-  chatbot_memory_enabled            = var.chatbot_enabled && var.chatbot_memory_enabled
+  chatbot_memory_enabled            = var.chatbot_enabled && (var.chatbot_memory_enabled || var.chatbot_atlassian_session_broker_enabled)
   chatbot_websocket_enabled         = var.chatbot_enabled && var.chatbot_websocket_enabled
   webapp_hosting_enabled            = var.webapp_hosting_enabled
   webapp_hosting_mode               = trimspace(var.webapp_hosting_mode)
@@ -1148,6 +1148,8 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
       BEDROCK_KB_TOP_K                               = tostring(var.bedrock_kb_top_k)
       ATLASSIAN_CREDENTIALS_SECRET_ARN               = aws_secretsmanager_secret.atlassian_credentials.arn
       CHATBOT_ATLASSIAN_USER_AUTH_ENABLED            = tostring(var.chatbot_atlassian_user_auth_enabled)
+      CHATBOT_ATLASSIAN_SESSION_BROKER_ENABLED       = tostring(var.chatbot_atlassian_session_broker_enabled)
+      CHATBOT_ATLASSIAN_SESSION_TTL_SECONDS          = tostring(var.chatbot_atlassian_session_ttl_seconds)
       CHATBOT_API_TOKEN_SECRET_ARN                   = var.chatbot_enabled ? aws_secretsmanager_secret.chatbot_api_token[0].arn : ""
       GITHUB_CHAT_LIVE_ENABLED                       = tostring(var.chatbot_github_live_enabled)
       GITHUB_CHAT_REPOS                              = join(",", var.chatbot_github_live_repos)
@@ -1456,6 +1458,28 @@ resource "aws_apigatewayv2_route" "chatbot_feedback" {
   count              = var.chatbot_enabled ? 1 : 0
   api_id             = aws_apigatewayv2_api.webhook.id
   route_key          = "POST /chatbot/feedback"
+  target             = "integrations/${aws_apigatewayv2_integration.chatbot_lambda[0].id}"
+  authorization_type = local.chatbot_route_auth_type
+  authorizer_id = local.chatbot_auth_jwt_enabled ? aws_apigatewayv2_authorizer.chatbot_jwt[0].id : (
+    local.chatbot_auth_github_oauth_enabled ? aws_apigatewayv2_authorizer.chatbot_github_oauth[0].id : null
+  )
+}
+
+resource "aws_apigatewayv2_route" "chatbot_atlassian_session" {
+  count              = var.chatbot_enabled ? 1 : 0
+  api_id             = aws_apigatewayv2_api.webhook.id
+  route_key          = "POST /chatbot/atlassian/session"
+  target             = "integrations/${aws_apigatewayv2_integration.chatbot_lambda[0].id}"
+  authorization_type = local.chatbot_route_auth_type
+  authorizer_id = local.chatbot_auth_jwt_enabled ? aws_apigatewayv2_authorizer.chatbot_jwt[0].id : (
+    local.chatbot_auth_github_oauth_enabled ? aws_apigatewayv2_authorizer.chatbot_github_oauth[0].id : null
+  )
+}
+
+resource "aws_apigatewayv2_route" "chatbot_atlassian_session_clear" {
+  count              = var.chatbot_enabled ? 1 : 0
+  api_id             = aws_apigatewayv2_api.webhook.id
+  route_key          = "POST /chatbot/atlassian/session/clear"
   target             = "integrations/${aws_apigatewayv2_integration.chatbot_lambda[0].id}"
   authorization_type = local.chatbot_route_auth_type
   authorizer_id = local.chatbot_auth_jwt_enabled ? aws_apigatewayv2_authorizer.chatbot_jwt[0].id : (
