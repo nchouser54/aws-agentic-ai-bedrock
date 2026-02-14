@@ -494,6 +494,20 @@ def _actor_id(event: dict[str, Any]) -> str:
                 return f"jwt:{val}"
 
     if isinstance(authorizer, dict):
+        lambda_ctx = authorizer.get("lambda") or {}
+        if isinstance(lambda_ctx, dict):
+            github_login = str(lambda_ctx.get("github_login") or "").strip().lower()
+            if github_login:
+                return f"github:{github_login}"
+            for key in ("sub", "preferred_username", "email"):
+                val = str(lambda_ctx.get(key) or "").strip()
+                if val:
+                    return f"authorizer:{val}"
+
+        github_login = str(authorizer.get("github_login") or "").strip().lower()
+        if github_login:
+            return f"github:{github_login}"
+
         principal = str(authorizer.get("principalId") or "").strip()
         if principal:
             return f"authorizer:{principal}"

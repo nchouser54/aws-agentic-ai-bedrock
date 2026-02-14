@@ -2,6 +2,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from chatbot.app import (
+    _actor_id,
     _append_conversation_turn,
     _chunk_text,
     _format_confluence,
@@ -89,6 +90,33 @@ def test_normalize_conversation_id_invalid() -> None:
         assert str(exc) == "conversation_id_invalid"
     else:
         raise AssertionError("Expected ValueError")
+
+
+def test_actor_id_uses_github_oauth_lambda_context() -> None:
+    event = {
+        "requestContext": {
+            "authorizer": {
+                "lambda": {
+                    "github_login": "NoahHouser",
+                    "auth_provider": "github_oauth",
+                }
+            }
+        }
+    }
+    assert _actor_id(event) == "github:noahhouser"
+
+
+def test_actor_id_prefers_jwt_claims_over_authorizer_context() -> None:
+    event = {
+        "requestContext": {
+            "authorizer": {
+                "jwt": {"claims": {"sub": "user-123"}},
+                "lambda": {"github_login": "someone-else"},
+                "principalId": "legacy-principal",
+            }
+        }
+    }
+    assert _actor_id(event) == "jwt:user-123"
 
 
 def test_chunk_text() -> None:
