@@ -461,10 +461,16 @@ Additional MCP server options are available:
 Install + run:
 
 - `make install-mcp`
+- `make mcp-dev-check`
+- `make mcp-ec2-bootstrap` (one-command EC2 bootstrap for Podman + Kubernetes + EKS + repo MCP)
 - `export GITHUB_APP_IDS_SECRET_ARN=<secret-arn>`
 - `export GITHUB_APP_PRIVATE_KEY_SECRET_ARN=<secret-arn>`
 - `export GITHUB_API_BASE=https://api.github.com` (or your GHES API base)
 - `make mcp-github-server`
+
+Dev stack runbook (Podman + Kubernetes + EKS + repo MCP):
+
+- `docs/mcp-dev-stack.md`
 
 Atlassian MCP env var:
 

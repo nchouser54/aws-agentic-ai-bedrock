@@ -1,4 +1,4 @@
-.PHONY: install install-mcp mcp-github-server mcp-atlassian-server mcp-github-release-server mcp-unified-server mcp-list lint test check terraform-fmt-check terraform-validate verify-toolchain promptfoo-eval-pr promptfoo-eval-chatbot
+.PHONY: install install-mcp mcp-github-server mcp-atlassian-server mcp-github-release-server mcp-unified-server mcp-list mcp-dev-check mcp-ec2-bootstrap lint test check terraform-fmt-check terraform-validate verify-toolchain promptfoo-eval-pr promptfoo-eval-chatbot
 
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 TERRAFORM ?= terraform
@@ -28,6 +28,24 @@ mcp-list:
 	@echo "  - make mcp-github-release-server # tags/releases/compare tools"
 	@echo "  - make mcp-atlassian-server      # Jira/Confluence tools"
 	@echo "  - make mcp-unified-server        # GitHub + Atlassian context tools"
+	@echo "  - make mcp-dev-check             # verify MCP dev-stack prerequisites"
+
+mcp-dev-check:
+	@echo "Checking MCP dev-stack prerequisites..."
+	@command -v $(PYTHON) >/dev/null && echo "  [ok] python: $(PYTHON)" || (echo "  [missing] python ($(PYTHON))"; exit 1)
+	@command -v npx >/dev/null && echo "  [ok] npx" || (echo "  [missing] npx (install Node.js)"; exit 1)
+	@command -v uvx >/dev/null && echo "  [ok] uvx" || (echo "  [missing] uvx (install uv)"; exit 1)
+	@command -v aws >/dev/null && echo "  [ok] aws cli" || (echo "  [missing] aws cli"; exit 1)
+	@command -v kubectl >/dev/null && echo "  [ok] kubectl" || (echo "  [missing] kubectl"; exit 1)
+	@command -v podman >/dev/null && echo "  [ok] podman" || (echo "  [missing] podman"; exit 1)
+	@echo "MCP tool binaries (optional until installed):"
+	@command -v mcp-kubernetes >/dev/null && echo "  [ok] mcp-kubernetes" || echo "  [missing] mcp-kubernetes"
+	@echo "Repo MCP server entrypoint check:"
+	@test -f src/mcp_server/unified_context_server.py && echo "  [ok] src/mcp_server/unified_context_server.py" || (echo "  [missing] unified_context_server.py"; exit 1)
+	@echo "Done. See docs/mcp-dev-stack.md for config and call examples."
+
+mcp-ec2-bootstrap:
+	@bash scripts/setup_ec2_mcp_stack.sh
 
 lint:
 	$(PYTHON) -m ruff check src tests scripts
