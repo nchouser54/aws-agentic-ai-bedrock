@@ -50,7 +50,17 @@ output "github_kb_sync_function_name" {
 
 output "kb_sync_documents_bucket" {
   description = "S3 bucket storing normalized Confluence documents for KB ingestion"
-  value       = var.kb_sync_enabled || var.github_kb_sync_enabled ? aws_s3_bucket.kb_sync_documents[0].bucket : ""
+  value       = local.kb_sync_assets_enabled ? aws_s3_bucket.kb_sync_documents[0].bucket : ""
+}
+
+output "bedrock_kb_effective" {
+  description = "Effective Bedrock Knowledge Base IDs in use (managed or existing)"
+  value = {
+    managed_creation_enabled = local.manage_bedrock_kb_in_terraform
+    knowledge_base_id        = local.effective_bedrock_knowledge_base_id
+    kb_data_source_id        = local.effective_bedrock_kb_data_source_id
+    github_kb_data_source_id = local.effective_github_kb_data_source_id
+  }
 }
 
 output "release_notes_url" {

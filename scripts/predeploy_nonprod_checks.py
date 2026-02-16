@@ -18,6 +18,28 @@ def _detect_infra_cli() -> str | None:
 
 
 def _parse_tfvars(path: Path) -> dict[str, str]:
+    def _strip_inline_comment(value: str) -> str:
+        in_quote = False
+        escaped = False
+        out: list[str] = []
+        for ch in value:
+            if escaped:
+                out.append(ch)
+                escaped = False
+                continue
+            if ch == "\\":
+                out.append(ch)
+                escaped = True
+                continue
+            if ch == '"':
+                in_quote = not in_quote
+                out.append(ch)
+                continue
+            if ch == "#" and not in_quote:
+                break
+            out.append(ch)
+        return "".join(out).strip()
+
     data: dict[str, str] = {}
     for raw_line in path.read_text().splitlines():
         line = raw_line.strip()
@@ -26,7 +48,8 @@ def _parse_tfvars(path: Path) -> dict[str, str]:
         if "=" not in line:
             continue
         key, value = line.split("=", 1)
-        data[key.strip()] = value.strip().strip('"')
+        cleaned_value = _strip_inline_comment(value)
+        data[key.strip()] = cleaned_value.strip().strip('"')
     return data
 
 
@@ -108,24 +131,56 @@ def main() -> int:
 
     tfvars = _parse_tfvars(tfvars_path)
 
-    required_values = ["bedrock_knowledge_base_id", "bedrock_kb_data_source_id"]
     placeholder_markers = {"<SET_KB_ID>", "<SET_KB_DATA_SOURCE_ID>", "<set-me>", ""}
 
-    for key in required_values:
-        val = tfvars.get(key, "")
-        if val in placeholder_markers:
-            failures.append(f"{key} is not set (current: {val or '<empty>'})")
+    retrieval_mode = tfvars.get("chatbot_retrieval_mode", "hybrid").strip().lower()
+    create_bedrock_kb_resources = tfvars.get("create_bedrock_kb_resources", "false").lower() == "true"
+    kb_id = tfvars.get("bedrock_knowledge_base_id", "")
+    kb_data_source_id = tfvars.get("bedrock_kb_data_source_id", "")
+    managed_kb_role_arn = tfvars.get("managed_bedrock_kb_role_arn", "")
+    managed_kb_embedding_model_arn = tfvars.get("managed_bedrock_kb_embedding_model_arn", "")
+    managed_kb_opensearch_collection_arn = tfvars.get("managed_bedrock_kb_opensearch_collection_arn", "")
+    managed_kb_opensearch_vector_index_name = tfvars.get("managed_bedrock_kb_opensearch_vector_index_name", "")
+
+    if create_bedrock_kb_resources:
+        missing_managed_inputs: list[str] = []
+        if managed_kb_role_arn in placeholder_markers:
+            missing_managed_inputs.append("managed_bedrock_kb_role_arn")
+        if managed_kb_embedding_model_arn in placeholder_markers:
+            missing_managed_inputs.append("managed_bedrock_kb_embedding_model_arn")
+        if managed_kb_opensearch_collection_arn in placeholder_markers:
+            missing_managed_inputs.append("managed_bedrock_kb_opensearch_collection_arn")
+        if managed_kb_opensearch_vector_index_name in placeholder_markers:
+            missing_managed_inputs.append("managed_bedrock_kb_opensearch_vector_index_name")
+
+        if missing_managed_inputs:
+            failures.append(
+                "create_bedrock_kb_resources=true is missing required values: " + ", ".join(missing_managed_inputs)
+            )
+
+    if retrieval_mode == "kb" and not create_bedrock_kb_resources and kb_id in placeholder_markers:
+        failures.append("chatbot_retrieval_mode=kb requires bedrock_knowledge_base_id to be set")
+    elif retrieval_mode == "hybrid" and not create_bedrock_kb_resources and kb_id in placeholder_markers:
+        warnings.append(
+            "chatbot_retrieval_mode=hybrid without bedrock_knowledge_base_id will run in live fallback mode until KB ID is set"
+        )
 
     if tfvars.get("environment") != "nonprod":
         warnings.append(f"environment is '{tfvars.get('environment', '<missing>')}', expected 'nonprod'")
 
-    if tfvars.get("chatbot_retrieval_mode") != "hybrid":
+    if retrieval_mode != "hybrid":
         warnings.append(
             f"chatbot_retrieval_mode is '{tfvars.get('chatbot_retrieval_mode', '<missing>')}', recommended 'hybrid'"
         )
 
-    if tfvars.get("kb_sync_enabled", "").lower() != "true":
+    kb_sync_enabled = tfvars.get("kb_sync_enabled", "").lower() == "true"
+    if not kb_sync_enabled:
         warnings.append("kb_sync_enabled is not true (scheduled sync disabled)")
+    else:
+        if not create_bedrock_kb_resources and kb_id in placeholder_markers:
+            failures.append("kb_sync_enabled=true requires bedrock_knowledge_base_id")
+        if not create_bedrock_kb_resources and kb_data_source_id in placeholder_markers:
+            failures.append("kb_sync_enabled=true requires bedrock_kb_data_source_id")
 
     github_kb_enabled = tfvars.get("github_kb_sync_enabled", "").lower() == "true"
     if github_kb_enabled:
@@ -150,7 +205,7 @@ def main() -> int:
         for msg in failures:
             print(f"[FAIL] {msg}")
     else:
-        print("[OK] required KB values are set")
+        print("[OK] mode-specific KB requirements are satisfied")
 
     for msg in warnings:
         print(f"[WARN] {msg}")

@@ -678,6 +678,60 @@ variable "bedrock_knowledge_base_id" {
   default     = ""
 }
 
+variable "create_bedrock_kb_resources" {
+  description = "When true, Terraform creates Bedrock Knowledge Base + default S3 data source and uses those IDs automatically. When false, provide existing bedrock_knowledge_base_id / bedrock_kb_data_source_id as needed."
+  type        = bool
+  default     = false
+}
+
+variable "managed_bedrock_kb_role_arn" {
+  description = "IAM role ARN for Bedrock Knowledge Base service when create_bedrock_kb_resources=true"
+  type        = string
+  default     = ""
+}
+
+variable "managed_bedrock_kb_embedding_model_arn" {
+  description = "Embedding model ARN for Terraform-managed Bedrock Knowledge Base"
+  type        = string
+  default     = "arn:aws-us-gov:bedrock:us-gov-west-1::foundation-model/amazon.titan-embed-text-v2:0"
+}
+
+variable "managed_bedrock_kb_opensearch_collection_arn" {
+  description = "OpenSearch Serverless collection ARN used by Terraform-managed Bedrock Knowledge Base"
+  type        = string
+  default     = ""
+}
+
+variable "managed_bedrock_kb_opensearch_vector_index_name" {
+  description = "OpenSearch Serverless vector index name for Terraform-managed Bedrock Knowledge Base"
+  type        = string
+  default     = "bedrock-kb-default-index"
+}
+
+variable "managed_bedrock_kb_vector_field" {
+  description = "OpenSearch field name storing embeddings vectors"
+  type        = string
+  default     = "bedrock-knowledge-base-default-vector"
+}
+
+variable "managed_bedrock_kb_text_field" {
+  description = "OpenSearch field name storing source text chunks"
+  type        = string
+  default     = "AMAZON_BEDROCK_TEXT_CHUNK"
+}
+
+variable "managed_bedrock_kb_metadata_field" {
+  description = "OpenSearch field name storing source metadata"
+  type        = string
+  default     = "AMAZON_BEDROCK_METADATA"
+}
+
+variable "managed_bedrock_kb_data_source_name" {
+  description = "Name for Terraform-managed Bedrock Knowledge Base S3 data source"
+  type        = string
+  default     = "primary-s3"
+}
+
 variable "bedrock_kb_top_k" {
   description = "Number of Knowledge Base retrieval results for chatbot queries"
   type        = number

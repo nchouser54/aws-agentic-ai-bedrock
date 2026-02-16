@@ -31,7 +31,8 @@ locals {
   }
   chatbot_metrics_namespace = trimspace(var.chatbot_metrics_namespace) != "" ? trimspace(var.chatbot_metrics_namespace) : "${var.project_name}/${var.environment}"
   chatbot_route_auth_type   = local.chatbot_auth_jwt_enabled ? "JWT" : local.chatbot_auth_github_oauth_enabled ? "CUSTOM" : "NONE"
-  kb_sync_any_enabled       = var.kb_sync_enabled || var.github_kb_sync_enabled
+  kb_sync_assets_enabled    = var.kb_sync_enabled || var.github_kb_sync_enabled || var.create_bedrock_kb_resources
+  kb_sync_lambda_enabled    = var.kb_sync_enabled || var.github_kb_sync_enabled
   webapp_default_config = {
     chatbotUrl         = trimspace(var.webapp_default_chatbot_url) != "" ? trimspace(var.webapp_default_chatbot_url) : "${aws_apigatewayv2_api.webhook.api_endpoint}/chatbot/query"
     authMode           = var.webapp_default_auth_mode
@@ -60,6 +61,11 @@ locals {
   atlassian_credentials_secret_arn = local.manage_secrets_in_terraform ? aws_secretsmanager_secret.atlassian_credentials[0].arn : trimspace(var.existing_atlassian_credentials_secret_arn)
   chatbot_api_token_secret_arn    = local.manage_secrets_in_terraform ? (var.chatbot_enabled ? aws_secretsmanager_secret.chatbot_api_token[0].arn : "") : trimspace(var.existing_chatbot_api_token_secret_arn)
   teams_adapter_token_secret_arn  = local.manage_secrets_in_terraform ? (var.chatbot_enabled && var.teams_adapter_enabled ? aws_secretsmanager_secret.teams_adapter_token[0].arn : "") : trimspace(var.existing_teams_adapter_token_secret_arn)
+
+  manage_bedrock_kb_in_terraform = var.create_bedrock_kb_resources
+  effective_bedrock_knowledge_base_id = local.manage_bedrock_kb_in_terraform ? aws_bedrockagent_knowledge_base.managed[0].id : trimspace(var.bedrock_knowledge_base_id)
+  effective_bedrock_kb_data_source_id = local.manage_bedrock_kb_in_terraform ? aws_bedrockagent_data_source.managed[0].id : trimspace(var.bedrock_kb_data_source_id)
+  effective_github_kb_data_source_id  = trimspace(var.github_kb_data_source_id) != "" ? trimspace(var.github_kb_data_source_id) : local.effective_bedrock_kb_data_source_id
 }
 
 data "aws_caller_identity" "current" {}
@@ -113,12 +119,53 @@ check "github_kb_sync_settings" {
       (
         length(var.github_kb_repos) > 0 &&
         (
+          local.manage_bedrock_kb_in_terraform ||
           length(trimspace(var.github_kb_data_source_id)) > 0 ||
           length(trimspace(var.bedrock_kb_data_source_id)) > 0
         )
       )
     )
     error_message = "When github_kb_sync_enabled is true, set github_kb_repos and at least one data source id (github_kb_data_source_id or bedrock_kb_data_source_id)."
+  }
+}
+
+check "managed_bedrock_kb_settings" {
+  assert {
+    condition = (
+      !local.manage_bedrock_kb_in_terraform ||
+      (
+        length(trimspace(var.managed_bedrock_kb_role_arn)) > 0 &&
+        length(trimspace(var.managed_bedrock_kb_embedding_model_arn)) > 0 &&
+        length(trimspace(var.managed_bedrock_kb_opensearch_collection_arn)) > 0 &&
+        length(trimspace(var.managed_bedrock_kb_opensearch_vector_index_name)) > 0
+      )
+    )
+    error_message = "When create_bedrock_kb_resources=true, set managed_bedrock_kb_role_arn, managed_bedrock_kb_embedding_model_arn, managed_bedrock_kb_opensearch_collection_arn, and managed_bedrock_kb_opensearch_vector_index_name."
+  }
+}
+
+check "existing_bedrock_kb_settings" {
+  assert {
+    condition = (
+      local.manage_bedrock_kb_in_terraform ||
+      var.chatbot_retrieval_mode != "kb" ||
+      length(trimspace(var.bedrock_knowledge_base_id)) > 0
+    )
+    error_message = "When chatbot_retrieval_mode=kb and create_bedrock_kb_resources=false, set bedrock_knowledge_base_id."
+  }
+}
+
+check "kb_sync_data_source_settings" {
+  assert {
+    condition = (
+      !var.kb_sync_enabled ||
+      local.manage_bedrock_kb_in_terraform ||
+      (
+        length(trimspace(var.bedrock_knowledge_base_id)) > 0 &&
+        length(trimspace(var.bedrock_kb_data_source_id)) > 0
+      )
+    )
+    error_message = "When kb_sync_enabled=true and create_bedrock_kb_resources=false, set both bedrock_knowledge_base_id and bedrock_kb_data_source_id."
   }
 }
 
@@ -414,7 +461,7 @@ resource "aws_dynamodb_table" "chatbot_memory" {
 }
 
 resource "aws_s3_bucket" "kb_sync_documents" {
-  count  = local.kb_sync_any_enabled ? 1 : 0
+  count  = local.kb_sync_assets_enabled ? 1 : 0
   bucket = "${local.name_prefix}-kb-sync-docs"
 }
 
@@ -598,7 +645,7 @@ resource "aws_instance" "webapp" {
 
             const headers = { 'Content-Type': 'application/json' };
             if (authMode === 'token' && authValue) headers['X-Api-Token'] = authValue;
-            if (authMode === 'bearer' && authValue) headers['Authorization'] = `Bearer ${authValue}`;
+            if (authMode === 'bearer' && authValue) headers['Authorization'] = `Bearer $${authValue}`;
 
             const body = { query };
             if (jiraJql) body.jira_jql = jiraJql;
@@ -718,7 +765,7 @@ resource "aws_lb_listener" "webapp_https" {
 }
 
 resource "aws_dynamodb_table" "kb_sync_state" {
-  count        = local.kb_sync_any_enabled ? 1 : 0
+  count        = local.kb_sync_lambda_enabled ? 1 : 0
   name         = "${local.name_prefix}-kb-sync-state"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "sync_key"
@@ -735,7 +782,7 @@ resource "aws_dynamodb_table" "kb_sync_state" {
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "kb_sync_documents" {
-  count  = local.kb_sync_any_enabled ? 1 : 0
+  count  = local.kb_sync_assets_enabled ? 1 : 0
   bucket = aws_s3_bucket.kb_sync_documents[0].id
 
   rule {
@@ -747,7 +794,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "kb_sync_documents
 }
 
 resource "aws_s3_bucket_public_access_block" "kb_sync_documents" {
-  count                   = local.kb_sync_any_enabled ? 1 : 0
+  count                   = local.kb_sync_assets_enabled ? 1 : 0
   bucket                  = aws_s3_bucket.kb_sync_documents[0].id
   block_public_acls       = true
   block_public_policy     = true
@@ -756,7 +803,7 @@ resource "aws_s3_bucket_public_access_block" "kb_sync_documents" {
 }
 
 resource "aws_s3_bucket_versioning" "kb_sync_documents" {
-  count  = local.kb_sync_any_enabled ? 1 : 0
+  count  = local.kb_sync_assets_enabled ? 1 : 0
   bucket = aws_s3_bucket.kb_sync_documents[0].id
 
   versioning_configuration {
@@ -765,7 +812,7 @@ resource "aws_s3_bucket_versioning" "kb_sync_documents" {
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "kb_sync_documents" {
-  count  = local.kb_sync_any_enabled ? 1 : 0
+  count  = local.kb_sync_assets_enabled ? 1 : 0
   bucket = aws_s3_bucket.kb_sync_documents[0].id
 
   rule {
@@ -857,7 +904,7 @@ resource "aws_iam_role" "chatbot_github_oauth_authorizer_lambda" {
 }
 
 resource "aws_iam_role" "kb_sync_lambda" {
-  count = local.kb_sync_any_enabled ? 1 : 0
+  count = local.kb_sync_lambda_enabled ? 1 : 0
   name  = "${local.name_prefix}-kb-sync-lambda-role"
 
   assume_role_policy = jsonencode({
@@ -1064,7 +1111,7 @@ resource "aws_iam_policy" "chatbot_github_oauth_authorizer_policy" {
 }
 
 resource "aws_iam_policy" "kb_sync_policy" {
-  count = local.kb_sync_any_enabled ? 1 : 0
+  count = local.kb_sync_lambda_enabled ? 1 : 0
   name  = "${local.name_prefix}-kb-sync-policy"
 
   policy = jsonencode({
@@ -1147,7 +1194,7 @@ resource "aws_iam_role_policy_attachment" "chatbot_github_oauth_authorizer_polic
 }
 
 resource "aws_iam_role_policy_attachment" "kb_sync_policy" {
-  count      = local.kb_sync_any_enabled ? 1 : 0
+  count      = local.kb_sync_lambda_enabled ? 1 : 0
   role       = aws_iam_role.kb_sync_lambda[0].name
   policy_arn = aws_iam_policy.kb_sync_policy[0].arn
 }
@@ -1180,9 +1227,57 @@ resource "aws_iam_role_policy_attachment" "xray_chatbot_authorizer" {
 }
 
 resource "aws_iam_role_policy_attachment" "xray_kb_sync" {
-  count      = var.lambda_tracing_enabled && local.kb_sync_any_enabled ? 1 : 0
+  count      = var.lambda_tracing_enabled && local.kb_sync_lambda_enabled ? 1 : 0
   role       = aws_iam_role.kb_sync_lambda[0].name
   policy_arn = data.aws_iam_policy.xray_write[0].arn
+}
+
+resource "aws_bedrockagent_knowledge_base" "managed" {
+  count    = local.manage_bedrock_kb_in_terraform ? 1 : 0
+  name     = "${local.name_prefix}-kb"
+  role_arn = var.managed_bedrock_kb_role_arn
+
+  knowledge_base_configuration {
+    type = "VECTOR"
+    vector_knowledge_base_configuration {
+      embedding_model_arn = var.managed_bedrock_kb_embedding_model_arn
+    }
+  }
+
+  storage_configuration {
+    type = "OPENSEARCH_SERVERLESS"
+    opensearch_serverless_configuration {
+      collection_arn    = var.managed_bedrock_kb_opensearch_collection_arn
+      vector_index_name = var.managed_bedrock_kb_opensearch_vector_index_name
+
+      field_mapping {
+        vector_field   = var.managed_bedrock_kb_vector_field
+        text_field     = var.managed_bedrock_kb_text_field
+        metadata_field = var.managed_bedrock_kb_metadata_field
+      }
+    }
+  }
+
+  depends_on = [aws_s3_bucket.kb_sync_documents]
+}
+
+resource "aws_bedrockagent_data_source" "managed" {
+  count             = local.manage_bedrock_kb_in_terraform ? 1 : 0
+  knowledge_base_id = aws_bedrockagent_knowledge_base.managed[0].id
+  name              = "${local.name_prefix}-${var.managed_bedrock_kb_data_source_name}"
+
+  data_source_configuration {
+    type = "S3"
+    s3_configuration {
+      bucket_arn = aws_s3_bucket.kb_sync_documents[0].arn
+      inclusion_prefixes = compact([
+        trimspace(var.kb_sync_s3_prefix),
+        var.github_kb_sync_enabled ? trimspace(var.github_kb_sync_s3_prefix) : "",
+      ])
+    }
+  }
+
+  depends_on = [aws_s3_bucket.kb_sync_documents, aws_bedrockagent_knowledge_base.managed]
 }
 
 resource "aws_lambda_function" "webhook_receiver" {
@@ -1339,7 +1434,7 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
       CHATBOT_WEBSOCKET_DEFAULT_CHUNK_CHARS          = tostring(var.chatbot_websocket_default_chunk_chars)
       CHATBOT_METRICS_ENABLED                        = tostring(var.chatbot_observability_enabled)
       METRICS_NAMESPACE                              = local.chatbot_metrics_namespace
-      BEDROCK_KNOWLEDGE_BASE_ID                      = var.bedrock_knowledge_base_id
+      BEDROCK_KNOWLEDGE_BASE_ID                      = local.effective_bedrock_knowledge_base_id
       BEDROCK_KB_TOP_K                               = tostring(var.bedrock_kb_top_k)
       ATLASSIAN_CREDENTIALS_SECRET_ARN               = local.atlassian_credentials_secret_arn
       CHATBOT_ATLASSIAN_USER_AUTH_ENABLED            = tostring(var.chatbot_atlassian_user_auth_enabled)
@@ -1409,7 +1504,7 @@ resource "aws_lambda_function" "teams_chatbot_adapter" {
       CHATBOT_GUARDRAIL_VERSION        = var.chatbot_guardrail_version
       CHATBOT_GUARDRAIL_TRACE          = var.chatbot_guardrail_trace
       CHATBOT_RETRIEVAL_MODE           = var.chatbot_retrieval_mode
-      BEDROCK_KNOWLEDGE_BASE_ID        = var.bedrock_knowledge_base_id
+      BEDROCK_KNOWLEDGE_BASE_ID        = local.effective_bedrock_knowledge_base_id
       BEDROCK_KB_TOP_K                 = tostring(var.bedrock_kb_top_k)
       ATLASSIAN_CREDENTIALS_SECRET_ARN = local.atlassian_credentials_secret_arn
       TEAMS_ADAPTER_TOKEN_SECRET_ARN   = var.chatbot_enabled && var.teams_adapter_enabled ? local.teams_adapter_token_secret_arn : ""
@@ -1436,8 +1531,8 @@ resource "aws_lambda_function" "confluence_kb_sync" {
     variables = {
       AWS_REGION                       = data.aws_region.current.name
       ATLASSIAN_CREDENTIALS_SECRET_ARN = local.atlassian_credentials_secret_arn
-      BEDROCK_KNOWLEDGE_BASE_ID        = var.bedrock_knowledge_base_id
-      BEDROCK_KB_DATA_SOURCE_ID        = var.bedrock_kb_data_source_id
+      BEDROCK_KNOWLEDGE_BASE_ID        = local.effective_bedrock_knowledge_base_id
+      BEDROCK_KB_DATA_SOURCE_ID        = local.effective_bedrock_kb_data_source_id
       KB_SYNC_BUCKET                   = aws_s3_bucket.kb_sync_documents[0].bucket
       KB_SYNC_PREFIX                   = var.kb_sync_s3_prefix
       CONFLUENCE_SYNC_CQL              = var.confluence_sync_cql
@@ -1468,9 +1563,9 @@ resource "aws_lambda_function" "github_kb_sync" {
       GITHUB_API_BASE                   = var.github_api_base
       GITHUB_APP_PRIVATE_KEY_SECRET_ARN = local.github_app_private_key_secret_arn
       GITHUB_APP_IDS_SECRET_ARN         = local.github_app_ids_secret_arn
-      BEDROCK_KNOWLEDGE_BASE_ID         = var.bedrock_knowledge_base_id
-      BEDROCK_KB_DATA_SOURCE_ID         = var.bedrock_kb_data_source_id
-      GITHUB_KB_DATA_SOURCE_ID          = var.github_kb_data_source_id
+      BEDROCK_KNOWLEDGE_BASE_ID         = local.effective_bedrock_knowledge_base_id
+      BEDROCK_KB_DATA_SOURCE_ID         = local.effective_bedrock_kb_data_source_id
+      GITHUB_KB_DATA_SOURCE_ID          = local.effective_github_kb_data_source_id
       KB_SYNC_BUCKET                    = aws_s3_bucket.kb_sync_documents[0].bucket
       GITHUB_KB_SYNC_PREFIX             = var.github_kb_sync_s3_prefix
       GITHUB_KB_REPOS                   = join(",", var.github_kb_repos)
