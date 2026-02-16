@@ -96,7 +96,7 @@ output "webapp_bucket_name" {
 output "webapp_url" {
   description = "Public URL for the hosted static chatbot web UI (S3 website or EC2 Elastic IP)"
   value = !var.webapp_hosting_enabled ? "" : (
-    var.webapp_hosting_mode == "s3" ? "http://${aws_s3_bucket.webapp[0].website_endpoint}" : (
+    var.webapp_hosting_mode == "s3" ? "http://${aws_s3_bucket_website_configuration.webapp[0].website_endpoint}" : (
       var.webapp_private_only ? "http://${aws_instance.webapp[0].private_ip}" : "http://${aws_eip.webapp[0].public_ip}"
     )
   )

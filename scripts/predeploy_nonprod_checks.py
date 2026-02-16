@@ -133,6 +133,10 @@ def main() -> int:
 
     placeholder_markers = {"<SET_KB_ID>", "<SET_KB_DATA_SOURCE_ID>", "<set-me>", ""}
 
+    create_secrets_manager_secrets = tfvars.get("create_secrets_manager_secrets", "false").lower() == "true"
+    chatbot_auth_mode = tfvars.get("chatbot_auth_mode", "token").strip().lower()
+    webapp_default_auth_mode = tfvars.get("webapp_default_auth_mode", "token").strip().lower()
+    environment = tfvars.get("environment", "").strip().lower()
     retrieval_mode = tfvars.get("chatbot_retrieval_mode", "hybrid").strip().lower()
     create_bedrock_kb_resources = tfvars.get("create_bedrock_kb_resources", "false").lower() == "true"
     kb_id = tfvars.get("bedrock_knowledge_base_id", "")
@@ -141,6 +145,18 @@ def main() -> int:
     managed_kb_embedding_model_arn = tfvars.get("managed_bedrock_kb_embedding_model_arn", "")
     managed_kb_opensearch_collection_arn = tfvars.get("managed_bedrock_kb_opensearch_collection_arn", "")
     managed_kb_opensearch_vector_index_name = tfvars.get("managed_bedrock_kb_opensearch_vector_index_name", "")
+
+    if environment == "prod" and chatbot_auth_mode == "token":
+        failures.append("environment=prod with chatbot_auth_mode=token is not allowed (use jwt or github_oauth)")
+
+    if chatbot_auth_mode == "token" and webapp_default_auth_mode != "token":
+        warnings.append(
+            "chatbot_auth_mode=token but webapp_default_auth_mode is not token; this often causes 401/403 in the web UI"
+        )
+    if chatbot_auth_mode in {"jwt", "github_oauth"} and webapp_default_auth_mode not in {"bearer", "none"}:
+        warnings.append(
+            "chatbot_auth_mode uses bearer auth but webapp_default_auth_mode is not bearer/none; bearer is usually required for browser calls"
+        )
 
     if create_bedrock_kb_resources:
         missing_managed_inputs: list[str] = []
@@ -164,6 +180,28 @@ def main() -> int:
         warnings.append(
             "chatbot_retrieval_mode=hybrid without bedrock_knowledge_base_id will run in live fallback mode until KB ID is set"
         )
+
+    if not create_secrets_manager_secrets:
+        required_existing_secret_arns = [
+            "existing_github_webhook_secret_arn",
+            "existing_github_app_private_key_secret_arn",
+            "existing_github_app_ids_secret_arn",
+            "existing_atlassian_credentials_secret_arn",
+        ]
+        for key in required_existing_secret_arns:
+            if tfvars.get(key, "") in placeholder_markers:
+                failures.append(f"create_secrets_manager_secrets=false requires {key}")
+
+        if chatbot_auth_mode == "token" and tfvars.get("existing_chatbot_api_token_secret_arn", "") in placeholder_markers:
+            failures.append(
+                "chatbot_auth_mode=token requires existing_chatbot_api_token_secret_arn when create_secrets_manager_secrets=false"
+            )
+
+        teams_adapter_enabled = tfvars.get("teams_adapter_enabled", "").lower() == "true"
+        if teams_adapter_enabled and tfvars.get("existing_teams_adapter_token_secret_arn", "") in placeholder_markers:
+            failures.append(
+                "teams_adapter_enabled=true requires existing_teams_adapter_token_secret_arn when create_secrets_manager_secrets=false"
+            )
 
     if tfvars.get("environment") != "nonprod":
         warnings.append(f"environment is '{tfvars.get('environment', '<missing>')}', expected 'nonprod'")

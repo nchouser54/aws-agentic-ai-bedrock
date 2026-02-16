@@ -932,7 +932,7 @@ resource "aws_iam_policy" "webhook_policy" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:*"
       },
       {
         Effect = "Allow"
@@ -969,7 +969,7 @@ resource "aws_iam_policy" "worker_policy" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:*"
       },
       {
         Effect = "Allow"
@@ -1038,7 +1038,7 @@ resource "aws_iam_policy" "chatbot_policy" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:*"
       },
       {
         Effect = "Allow"
@@ -1074,7 +1074,7 @@ resource "aws_iam_policy" "chatbot_policy" {
         Action = [
           "execute-api:ManageConnections"
         ]
-        Resource = "arn:${data.aws_partition.current.partition}:execute-api:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:${aws_apigatewayv2_api.chatbot_ws[0].id}/${var.chatbot_websocket_stage}/POST/@connections/*"
+        Resource = "arn:${data.aws_partition.current.partition}:execute-api:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${aws_apigatewayv2_api.chatbot_ws[0].id}/${var.chatbot_websocket_stage}/POST/@connections/*"
       }
       ] : [], local.chatbot_memory_enabled ? [
       {
@@ -1104,7 +1104,7 @@ resource "aws_iam_policy" "chatbot_github_oauth_authorizer_policy" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:*"
       }
     ]
   })
@@ -1124,7 +1124,7 @@ resource "aws_iam_policy" "kb_sync_policy" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:*"
       },
       {
         Effect = "Allow"
@@ -1317,7 +1317,7 @@ resource "aws_lambda_function" "pr_review_worker" {
 
   environment {
     variables = {
-      AWS_REGION                        = data.aws_region.current.name
+      AWS_REGION                        = data.aws_region.current.region
       BEDROCK_AGENT_ID                  = var.bedrock_agent_id
       BEDROCK_AGENT_ALIAS_ID            = var.bedrock_agent_alias_id
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
@@ -1370,7 +1370,7 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
 
   environment {
     variables = {
-      AWS_REGION                                     = data.aws_region.current.name
+      AWS_REGION                                     = data.aws_region.current.region
       CHATBOT_MODEL_ID                               = var.chatbot_model_id
       BEDROCK_MODEL_ID                               = var.bedrock_model_id
       BEDROCK_GUARDRAIL_ID                           = var.bedrock_guardrail_id
@@ -1470,7 +1470,7 @@ resource "aws_lambda_function" "chatbot_github_oauth_authorizer" {
 
   environment {
     variables = {
-      AWS_REGION                = data.aws_region.current.name
+      AWS_REGION                = data.aws_region.current.region
       GITHUB_API_BASE           = var.github_api_base
       GITHUB_OAUTH_ALLOWED_ORGS = join(",", var.github_oauth_allowed_orgs)
     }
@@ -1494,7 +1494,7 @@ resource "aws_lambda_function" "teams_chatbot_adapter" {
 
   environment {
     variables = {
-      AWS_REGION                       = data.aws_region.current.name
+      AWS_REGION                       = data.aws_region.current.region
       CHATBOT_MODEL_ID                 = var.chatbot_model_id
       BEDROCK_MODEL_ID                 = var.bedrock_model_id
       BEDROCK_GUARDRAIL_ID             = var.bedrock_guardrail_id
@@ -1529,7 +1529,7 @@ resource "aws_lambda_function" "confluence_kb_sync" {
 
   environment {
     variables = {
-      AWS_REGION                       = data.aws_region.current.name
+      AWS_REGION                       = data.aws_region.current.region
       ATLASSIAN_CREDENTIALS_SECRET_ARN = local.atlassian_credentials_secret_arn
       BEDROCK_KNOWLEDGE_BASE_ID        = local.effective_bedrock_knowledge_base_id
       BEDROCK_KB_DATA_SOURCE_ID        = local.effective_bedrock_kb_data_source_id
@@ -1559,7 +1559,7 @@ resource "aws_lambda_function" "github_kb_sync" {
 
   environment {
     variables = {
-      AWS_REGION                        = data.aws_region.current.name
+      AWS_REGION                        = data.aws_region.current.region
       GITHUB_API_BASE                   = var.github_api_base
       GITHUB_APP_PRIVATE_KEY_SECRET_ARN = local.github_app_private_key_secret_arn
       GITHUB_APP_IDS_SECRET_ARN         = local.github_app_ids_secret_arn
@@ -1674,7 +1674,7 @@ resource "aws_apigatewayv2_authorizer" "chatbot_github_oauth" {
   api_id                            = aws_apigatewayv2_api.webhook.id
   name                              = "${local.name_prefix}-chatbot-github-oauth"
   authorizer_type                   = "REQUEST"
-  authorizer_uri                    = "arn:${data.aws_partition.current.partition}:apigateway:${data.aws_region.current.name}:lambda:path/2015-03-31/functions/${aws_lambda_function.chatbot_github_oauth_authorizer[0].arn}/invocations"
+  authorizer_uri                    = "arn:${data.aws_partition.current.partition}:apigateway:${data.aws_region.current.region}:lambda:path/2015-03-31/functions/${aws_lambda_function.chatbot_github_oauth_authorizer[0].arn}/invocations"
   authorizer_payload_format_version = "2.0"
   enable_simple_responses           = true
   identity_sources                  = ["$request.header.Authorization"]
@@ -1944,7 +1944,7 @@ resource "aws_iam_policy" "release_notes_policy" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:*"
       },
       {
         Effect = "Allow"
@@ -1994,7 +1994,7 @@ resource "aws_lambda_function" "release_notes" {
 
   environment {
     variables = {
-      AWS_REGION                        = data.aws_region.current.name
+      AWS_REGION                        = data.aws_region.current.region
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
       RELEASE_NOTES_MODEL_ID            = var.release_notes_model_id
       GITHUB_API_BASE                   = var.github_api_base
@@ -2073,7 +2073,7 @@ resource "aws_iam_policy" "sprint_report_policy" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:*"
       },
       {
         Effect = "Allow"
@@ -2123,7 +2123,7 @@ resource "aws_lambda_function" "sprint_report" {
 
   environment {
     variables = {
-      AWS_REGION                        = data.aws_region.current.name
+      AWS_REGION                        = data.aws_region.current.region
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
       SPRINT_REPORT_MODEL_ID            = var.sprint_report_model_id
       GITHUB_API_BASE                   = var.github_api_base
@@ -2248,7 +2248,7 @@ resource "aws_iam_policy" "test_gen_policy" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:*"
       },
       {
         Effect = "Allow"
@@ -2307,7 +2307,7 @@ resource "aws_lambda_function" "test_gen" {
 
   environment {
     variables = {
-      AWS_REGION                        = data.aws_region.current.name
+      AWS_REGION                        = data.aws_region.current.region
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
       TEST_GEN_MODEL_ID                 = var.test_gen_model_id
       TEST_GEN_DELIVERY_MODE            = var.test_gen_delivery_mode
@@ -2417,7 +2417,7 @@ resource "aws_iam_policy" "pr_description_policy" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:*"
       },
       {
         Effect = "Allow"
@@ -2477,7 +2477,7 @@ resource "aws_lambda_function" "pr_description" {
 
   environment {
     variables = {
-      AWS_REGION                        = data.aws_region.current.name
+      AWS_REGION                        = data.aws_region.current.region
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
       PR_DESCRIPTION_MODEL_ID           = var.pr_description_model_id
       GITHUB_API_BASE                   = var.github_api_base
@@ -2683,7 +2683,7 @@ resource "aws_cloudwatch_dashboard" "chatbot_observability" {
           title   = "Chatbot Lambda Duration/Errors"
           view    = "timeSeries"
           stacked = false
-          region  = data.aws_region.current.name
+          region  = data.aws_region.current.region
           metrics = [
             ["AWS/Lambda", "Duration", "FunctionName", aws_lambda_function.jira_confluence_chatbot[0].function_name, { stat = "p95", label = "Duration p95" }],
             ["AWS/Lambda", "Errors", "FunctionName", aws_lambda_function.jira_confluence_chatbot[0].function_name, { stat = "Sum", label = "Lambda Errors" }],
@@ -2700,7 +2700,7 @@ resource "aws_cloudwatch_dashboard" "chatbot_observability" {
           title   = "Chatbot Request Count by Route"
           view    = "timeSeries"
           stacked = false
-          region  = data.aws_region.current.name
+          region  = data.aws_region.current.region
           metrics = [
             [local.chatbot_metrics_namespace, "ChatbotRequestCount", "Route", "query", "Method", "POST", { stat = "Sum", label = "Query Requests" }],
             [local.chatbot_metrics_namespace, "ChatbotRequestCount", "Route", "image", "Method", "POST", { stat = "Sum", label = "Image Requests" }],
@@ -2718,7 +2718,7 @@ resource "aws_cloudwatch_dashboard" "chatbot_observability" {
           title   = "Chatbot Latency (ms)"
           view    = "timeSeries"
           stacked = false
-          region  = data.aws_region.current.name
+          region  = data.aws_region.current.region
           metrics = [
             [local.chatbot_metrics_namespace, "ChatbotLatencyMs", "Route", "query", "Method", "POST", { stat = "p95", label = "Query p95" }],
             [local.chatbot_metrics_namespace, "ChatbotLatencyMs", "Route", "image", "Method", "POST", { stat = "p95", label = "Image p95" }],
@@ -2735,7 +2735,7 @@ resource "aws_cloudwatch_dashboard" "chatbot_observability" {
           title   = "Chatbot Server Error Counts"
           view    = "timeSeries"
           stacked = false
-          region  = data.aws_region.current.name
+          region  = data.aws_region.current.region
           metrics = [
             [local.chatbot_metrics_namespace, "ChatbotServerErrorCount", "Route", "query", "Method", "POST", { stat = "Sum", label = "Query 5xx" }],
             [local.chatbot_metrics_namespace, "ChatbotServerErrorCount", "Route", "image", "Method", "POST", { stat = "Sum", label = "Image 5xx" }],
