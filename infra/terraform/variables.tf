@@ -690,6 +690,18 @@ variable "managed_bedrock_kb_role_arn" {
   default     = ""
 }
 
+variable "create_managed_bedrock_kb_role" {
+  description = "When true, Terraform creates the IAM role used by managed Bedrock Knowledge Base resources"
+  type        = bool
+  default     = false
+}
+
+variable "managed_bedrock_kb_role_name" {
+  description = "Name for Terraform-managed Bedrock Knowledge Base IAM role"
+  type        = string
+  default     = "bedrock-kb-service-role"
+}
+
 variable "managed_bedrock_kb_embedding_model_arn" {
   description = "Embedding model ARN for Terraform-managed Bedrock Knowledge Base"
   type        = string
@@ -700,6 +712,24 @@ variable "managed_bedrock_kb_opensearch_collection_arn" {
   description = "OpenSearch Serverless collection ARN used by Terraform-managed Bedrock Knowledge Base"
   type        = string
   default     = ""
+}
+
+variable "create_managed_bedrock_kb_opensearch_collection" {
+  description = "When true, Terraform creates an OpenSearch Serverless VECTORSEARCH collection for managed Bedrock Knowledge Base"
+  type        = bool
+  default     = false
+}
+
+variable "managed_bedrock_kb_opensearch_collection_name" {
+  description = "Name for Terraform-managed OpenSearch Serverless collection used by Bedrock Knowledge Base"
+  type        = string
+  default     = "bedrock-kb"
+}
+
+variable "managed_bedrock_kb_opensearch_allow_public" {
+  description = "Whether Terraform-managed OpenSearch Serverless collection should allow public network access"
+  type        = bool
+  default     = false
 }
 
 variable "managed_bedrock_kb_opensearch_vector_index_name" {

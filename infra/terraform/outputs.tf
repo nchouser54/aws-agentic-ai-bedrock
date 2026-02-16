@@ -57,6 +57,8 @@ output "bedrock_kb_effective" {
   description = "Effective Bedrock Knowledge Base IDs in use (managed or existing)"
   value = {
     managed_creation_enabled = local.manage_bedrock_kb_in_terraform
+    managed_role_arn         = local.effective_managed_bedrock_kb_role_arn
+    managed_collection_arn   = local.effective_managed_bedrock_kb_opensearch_collection_arn
     knowledge_base_id        = local.effective_bedrock_knowledge_base_id
     kb_data_source_id        = local.effective_bedrock_kb_data_source_id
     github_kb_data_source_id = local.effective_github_kb_data_source_id

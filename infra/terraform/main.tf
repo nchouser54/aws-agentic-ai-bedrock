@@ -63,6 +63,10 @@ locals {
   teams_adapter_token_secret_arn  = local.manage_secrets_in_terraform ? (var.chatbot_enabled && var.teams_adapter_enabled ? aws_secretsmanager_secret.teams_adapter_token[0].arn : "") : trimspace(var.existing_teams_adapter_token_secret_arn)
 
   manage_bedrock_kb_in_terraform = var.create_bedrock_kb_resources
+  manage_bedrock_kb_role_in_terraform = var.create_managed_bedrock_kb_role
+  manage_bedrock_kb_collection_in_terraform = var.create_managed_bedrock_kb_opensearch_collection
+  effective_managed_bedrock_kb_role_arn = local.manage_bedrock_kb_role_in_terraform ? aws_iam_role.managed_bedrock_kb[0].arn : trimspace(var.managed_bedrock_kb_role_arn)
+  effective_managed_bedrock_kb_opensearch_collection_arn = local.manage_bedrock_kb_collection_in_terraform ? aws_opensearchserverless_collection.managed_bedrock_kb[0].arn : trimspace(var.managed_bedrock_kb_opensearch_collection_arn)
   effective_bedrock_knowledge_base_id = local.manage_bedrock_kb_in_terraform ? aws_bedrockagent_knowledge_base.managed[0].id : trimspace(var.bedrock_knowledge_base_id)
   effective_bedrock_kb_data_source_id = local.manage_bedrock_kb_in_terraform ? aws_bedrockagent_data_source.managed[0].id : trimspace(var.bedrock_kb_data_source_id)
   effective_github_kb_data_source_id  = trimspace(var.github_kb_data_source_id) != "" ? trimspace(var.github_kb_data_source_id) : local.effective_bedrock_kb_data_source_id
@@ -134,13 +138,24 @@ check "managed_bedrock_kb_settings" {
     condition = (
       !local.manage_bedrock_kb_in_terraform ||
       (
-        length(trimspace(var.managed_bedrock_kb_role_arn)) > 0 &&
+        length(trimspace(local.effective_managed_bedrock_kb_role_arn)) > 0 &&
         length(trimspace(var.managed_bedrock_kb_embedding_model_arn)) > 0 &&
-        length(trimspace(var.managed_bedrock_kb_opensearch_collection_arn)) > 0 &&
+        length(trimspace(local.effective_managed_bedrock_kb_opensearch_collection_arn)) > 0 &&
         length(trimspace(var.managed_bedrock_kb_opensearch_vector_index_name)) > 0
       )
     )
-    error_message = "When create_bedrock_kb_resources=true, set managed_bedrock_kb_role_arn, managed_bedrock_kb_embedding_model_arn, managed_bedrock_kb_opensearch_collection_arn, and managed_bedrock_kb_opensearch_vector_index_name."
+    error_message = "When create_bedrock_kb_resources=true, provide role/collection inputs directly or enable create_managed_bedrock_kb_role and create_managed_bedrock_kb_opensearch_collection."
+  }
+}
+
+check "managed_bedrock_kb_collection_public_prod" {
+  assert {
+    condition = (
+      !local.manage_bedrock_kb_collection_in_terraform ||
+      lower(trimspace(var.environment)) != "prod" ||
+      !var.managed_bedrock_kb_opensearch_allow_public
+    )
+    error_message = "In prod, managed_bedrock_kb_opensearch_allow_public must be false when creating OpenSearch collection in Terraform."
   }
 }
 
@@ -1232,10 +1247,158 @@ resource "aws_iam_role_policy_attachment" "xray_kb_sync" {
   policy_arn = data.aws_iam_policy.xray_write[0].arn
 }
 
+resource "aws_iam_role" "managed_bedrock_kb" {
+  count = local.manage_bedrock_kb_role_in_terraform ? 1 : 0
+  name  = "${local.name_prefix}-${var.managed_bedrock_kb_role_name}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "bedrock.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_policy" "managed_bedrock_kb" {
+  count = local.manage_bedrock_kb_role_in_terraform ? 1 : 0
+  name  = "${local.name_prefix}-managed-bedrock-kb-policy"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel"
+        ]
+        Resource = var.managed_bedrock_kb_embedding_model_arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "aoss:APIAccessAll"
+        ]
+        Resource = local.effective_managed_bedrock_kb_opensearch_collection_arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket"
+        ]
+        Resource = aws_s3_bucket.kb_sync_documents[0].arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject"
+        ]
+        Resource = "${aws_s3_bucket.kb_sync_documents[0].arn}/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:GenerateDataKey"
+        ]
+        Resource = aws_kms_key.app.arn
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "managed_bedrock_kb" {
+  count      = local.manage_bedrock_kb_role_in_terraform ? 1 : 0
+  role       = aws_iam_role.managed_bedrock_kb[0].name
+  policy_arn = aws_iam_policy.managed_bedrock_kb[0].arn
+}
+
+resource "aws_opensearchserverless_security_policy" "managed_bedrock_kb_encryption" {
+  count = local.manage_bedrock_kb_collection_in_terraform ? 1 : 0
+  name  = "${local.name_prefix}-kb-enc"
+  type  = "encryption"
+
+  policy = jsonencode({
+    Rules = [
+      {
+        ResourceType = "collection"
+        Resource     = ["collection/${var.managed_bedrock_kb_opensearch_collection_name}"]
+      }
+    ]
+    AWSOwnedKey = true
+  })
+}
+
+resource "aws_opensearchserverless_security_policy" "managed_bedrock_kb_network" {
+  count = local.manage_bedrock_kb_collection_in_terraform ? 1 : 0
+  name  = "${local.name_prefix}-kb-net"
+  type  = "network"
+
+  policy = jsonencode([
+    {
+      Description = "Network policy for managed Bedrock KB OpenSearch collection"
+      Rules = [
+        {
+          ResourceType = "collection"
+          Resource     = ["collection/${var.managed_bedrock_kb_opensearch_collection_name}"]
+        },
+        {
+          ResourceType = "dashboard"
+          Resource     = ["collection/${var.managed_bedrock_kb_opensearch_collection_name}"]
+        }
+      ]
+      AllowFromPublic = var.managed_bedrock_kb_opensearch_allow_public
+    }
+  ])
+}
+
+resource "aws_opensearchserverless_collection" "managed_bedrock_kb" {
+  count = local.manage_bedrock_kb_collection_in_terraform ? 1 : 0
+  name  = var.managed_bedrock_kb_opensearch_collection_name
+  type  = "VECTORSEARCH"
+
+  depends_on = [
+    aws_opensearchserverless_security_policy.managed_bedrock_kb_encryption,
+    aws_opensearchserverless_security_policy.managed_bedrock_kb_network,
+  ]
+}
+
+resource "aws_opensearchserverless_access_policy" "managed_bedrock_kb" {
+  count = local.manage_bedrock_kb_collection_in_terraform ? 1 : 0
+  name  = "${local.name_prefix}-kb-data"
+  type  = "data"
+
+  policy = jsonencode([
+    {
+      Description = "Data access for managed Bedrock KB collection"
+      Rules = [
+        {
+          ResourceType = "collection"
+          Resource     = ["collection/${var.managed_bedrock_kb_opensearch_collection_name}"]
+          Permission   = ["aoss:*"]
+        },
+        {
+          ResourceType = "index"
+          Resource     = ["index/${var.managed_bedrock_kb_opensearch_collection_name}/*"]
+          Permission   = ["aoss:*"]
+        }
+      ]
+      Principal = compact([
+        local.effective_managed_bedrock_kb_role_arn,
+      ])
+    }
+  ])
+
+  depends_on = [aws_opensearchserverless_collection.managed_bedrock_kb]
+}
+
 resource "aws_bedrockagent_knowledge_base" "managed" {
   count    = local.manage_bedrock_kb_in_terraform ? 1 : 0
   name     = "${local.name_prefix}-kb"
-  role_arn = var.managed_bedrock_kb_role_arn
+  role_arn = local.effective_managed_bedrock_kb_role_arn
 
   knowledge_base_configuration {
     type = "VECTOR"
@@ -1247,7 +1410,7 @@ resource "aws_bedrockagent_knowledge_base" "managed" {
   storage_configuration {
     type = "OPENSEARCH_SERVERLESS"
     opensearch_serverless_configuration {
-      collection_arn    = var.managed_bedrock_kb_opensearch_collection_arn
+      collection_arn    = local.effective_managed_bedrock_kb_opensearch_collection_arn
       vector_index_name = var.managed_bedrock_kb_opensearch_vector_index_name
 
       field_mapping {
@@ -1258,7 +1421,11 @@ resource "aws_bedrockagent_knowledge_base" "managed" {
     }
   }
 
-  depends_on = [aws_s3_bucket.kb_sync_documents]
+  depends_on = [
+    aws_s3_bucket.kb_sync_documents,
+    aws_opensearchserverless_access_policy.managed_bedrock_kb,
+    aws_iam_role_policy_attachment.managed_bedrock_kb,
+  ]
 }
 
 resource "aws_bedrockagent_data_source" "managed" {

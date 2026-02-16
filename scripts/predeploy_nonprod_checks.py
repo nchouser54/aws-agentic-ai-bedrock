@@ -139,12 +139,20 @@ def main() -> int:
     environment = tfvars.get("environment", "").strip().lower()
     retrieval_mode = tfvars.get("chatbot_retrieval_mode", "hybrid").strip().lower()
     create_bedrock_kb_resources = tfvars.get("create_bedrock_kb_resources", "false").lower() == "true"
+    create_managed_bedrock_kb_role = tfvars.get("create_managed_bedrock_kb_role", "false").lower() == "true"
+    create_managed_bedrock_kb_opensearch_collection = (
+        tfvars.get("create_managed_bedrock_kb_opensearch_collection", "false").lower() == "true"
+    )
+    managed_bedrock_kb_opensearch_allow_public = (
+        tfvars.get("managed_bedrock_kb_opensearch_allow_public", "false").lower() == "true"
+    )
     kb_id = tfvars.get("bedrock_knowledge_base_id", "")
     kb_data_source_id = tfvars.get("bedrock_kb_data_source_id", "")
     managed_kb_role_arn = tfvars.get("managed_bedrock_kb_role_arn", "")
     managed_kb_embedding_model_arn = tfvars.get("managed_bedrock_kb_embedding_model_arn", "")
     managed_kb_opensearch_collection_arn = tfvars.get("managed_bedrock_kb_opensearch_collection_arn", "")
     managed_kb_opensearch_vector_index_name = tfvars.get("managed_bedrock_kb_opensearch_vector_index_name", "")
+    managed_kb_opensearch_collection_name = tfvars.get("managed_bedrock_kb_opensearch_collection_name", "")
 
     if environment == "prod" and chatbot_auth_mode == "token":
         failures.append("environment=prod with chatbot_auth_mode=token is not allowed (use jwt or github_oauth)")
@@ -160,12 +168,20 @@ def main() -> int:
 
     if create_bedrock_kb_resources:
         missing_managed_inputs: list[str] = []
-        if managed_kb_role_arn in placeholder_markers:
+        if not create_managed_bedrock_kb_role and managed_kb_role_arn in placeholder_markers:
             missing_managed_inputs.append("managed_bedrock_kb_role_arn")
         if managed_kb_embedding_model_arn in placeholder_markers:
             missing_managed_inputs.append("managed_bedrock_kb_embedding_model_arn")
-        if managed_kb_opensearch_collection_arn in placeholder_markers:
+        if (
+            not create_managed_bedrock_kb_opensearch_collection
+            and managed_kb_opensearch_collection_arn in placeholder_markers
+        ):
             missing_managed_inputs.append("managed_bedrock_kb_opensearch_collection_arn")
+        if (
+            create_managed_bedrock_kb_opensearch_collection
+            and managed_kb_opensearch_collection_name in placeholder_markers
+        ):
+            missing_managed_inputs.append("managed_bedrock_kb_opensearch_collection_name")
         if managed_kb_opensearch_vector_index_name in placeholder_markers:
             missing_managed_inputs.append("managed_bedrock_kb_opensearch_vector_index_name")
 
@@ -173,6 +189,11 @@ def main() -> int:
             failures.append(
                 "create_bedrock_kb_resources=true is missing required values: " + ", ".join(missing_managed_inputs)
             )
+
+    if environment == "prod" and create_managed_bedrock_kb_opensearch_collection and managed_bedrock_kb_opensearch_allow_public:
+        failures.append(
+            "In prod, managed_bedrock_kb_opensearch_allow_public must be false when create_managed_bedrock_kb_opensearch_collection=true"
+        )
 
     if retrieval_mode == "kb" and not create_bedrock_kb_resources and kb_id in placeholder_markers:
         failures.append("chatbot_retrieval_mode=kb requires bedrock_knowledge_base_id to be set")
