@@ -15,7 +15,7 @@ Use this checklist for initial production/nonprod rollout with strict private-ne
 ## 0) Pre-flight access and tooling
 
 - [ ] AWS account access verified in `us-gov-west-1`
-- [ ] Terraform CLI available and authenticated
+- [ ] OpenTofu or Terraform CLI available and authenticated
 - [ ] Python venv available for repo checks
 - [ ] Repo cloned and branch confirmed
 - [ ] `make check` run successfully before deployment
@@ -56,12 +56,12 @@ Evidence:
 - [ ] Target model(s) enabled in account/region
 - [ ] KB ID/data source IDs ready (if using kb/hybrid modes)
 
-## 3) Deploy backend platform (Terraform)
+## 3) Deploy backend platform (OpenTofu/Terraform)
 
 - [ ] `infra/terraform/terraform.tfvars` prepared
-- [ ] `terraform init` complete
-- [ ] `terraform plan` reviewed and approved
-- [ ] `terraform apply` complete without errors
+- [ ] `tofu init` (or `terraform init`) complete
+- [ ] `tofu plan` (or `terraform plan`) reviewed and approved
+- [ ] `tofu apply` (or `terraform apply`) complete without errors
 
 Post-apply outputs captured:
 
@@ -143,7 +143,7 @@ Validation commands/evidence:
 
 ## 11) Rollback readiness
 
-- [ ] Rollback command set prepared (`terraform apply` previous config / `cloudformation delete-stack` as applicable)
+- [ ] Rollback command set prepared (`tofu apply`/`terraform apply` previous config or `tofu destroy`/`terraform destroy`, plus `cloudformation delete-stack` as applicable)
 - [ ] Last known-good config reference recorded
 - [ ] Owner and escalation path confirmed
 

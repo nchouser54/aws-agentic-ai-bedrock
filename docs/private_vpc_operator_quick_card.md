@@ -10,6 +10,13 @@ webapp_hosting_enabled = true
 webapp_hosting_mode    = "ec2_eip"
 webapp_private_only    = true
 
+# Existing Secrets Manager ARNs only (no Terraform secret creation)
+create_secrets_manager_secrets         = false
+existing_github_webhook_secret_arn         = "<GITHUB_WEBHOOK_SECRET_ARN>"
+existing_github_app_private_key_secret_arn = "<GITHUB_APP_PRIVATE_KEY_SECRET_ARN>"
+existing_github_app_ids_secret_arn         = "<GITHUB_APP_IDS_SECRET_ARN>"
+existing_atlassian_credentials_secret_arn  = "<ATLASSIAN_CREDENTIALS_SECRET_ARN>"
+
 # REQUIRED: private subnet for EC2 webapp host
 webapp_ec2_subnet_id = "subnet-REPLACE"
 
@@ -60,6 +67,7 @@ terraform output -raw webapp_https_url
 - `webapp_tls_static_ips` is empty
 - `webapp_url` is private
 - `webapp_https_url` is set only when `webapp_tls_enabled=true`
+- For firewall access: allow client -> internal LB on `443`, and LB -> `webapp_private_ip` on `80`
 
 ## 5) Which runbook to follow next
 

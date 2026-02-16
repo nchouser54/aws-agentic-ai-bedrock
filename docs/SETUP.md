@@ -168,7 +168,24 @@ terraform plan
 terraform apply
 ```
 
-After first deploy, **populate secrets** in AWS Secrets Manager (replace the placeholder values):
+Use **existing Secrets Manager secrets only** (default `create_secrets_manager_secrets=false`) and set ARN variables in `terraform.tfvars`:
+
+| Variable | Contents |
+| --- | --- |
+| `existing_github_webhook_secret_arn` | GitHub App webhook secret string |
+| `existing_github_app_private_key_secret_arn` | Full GitHub App private key PEM |
+| `existing_github_app_ids_secret_arn` | JSON: `{"app_id": "12345", "installation_id": "67890"}` |
+| `existing_atlassian_credentials_secret_arn` | See [Secrets Manager Reference](#secrets-manager-reference) |
+
+If `chatbot_auth_mode="token"`, also set:
+
+- `existing_chatbot_api_token_secret_arn`
+
+If `teams_adapter_enabled=true`, also set:
+
+- `existing_teams_adapter_token_secret_arn`
+
+Legacy placeholder-secret creation is available only when `create_secrets_manager_secrets=true`:
 
 | Secret | Contents |
 | --- | --- |
@@ -244,7 +261,7 @@ terraform output webhook_url
 | `chatbot_enabled` | Enable/disable chatbot | `true` |
 | `chatbot_model_id` | Bedrock model for chatbot | `anthropic.claude-3-sonnet-20240229-v1:0` |
 | `chatbot_retrieval_mode` | `live`, `kb`, or `hybrid` | `hybrid` |
-| `chatbot_api_token` | Optional auth token (empty = no auth) | `""` |
+| `existing_chatbot_api_token_secret_arn` | Required when `chatbot_auth_mode="token"` | `""` |
 | `bedrock_knowledge_base_id` | Required if mode is `kb` or `hybrid` | `""` |
 | `bedrock_kb_top_k` | Number of KB retrieval results | `5` |
 
@@ -261,11 +278,16 @@ terraform output webhook_url
 # Get chatbot URL from Terraform output
 terraform output chatbot_url
 
-# Test with curl (add -H "X-Api-Token: <token>" if chatbot_api_token is set)
+# Test with curl (add -H "X-Api-Token: <token>" when chatbot_auth_mode="token")
 curl -X POST <chatbot_url> \
   -H "Content-Type: application/json" \
   -d '{"query": "What are the open blockers?", "jira_jql": "project=PLAT AND statusCategory!=Done", "retrieval_mode": "live"}'
 ```
+
+Auth-mode alignment note:
+
+- `chatbot_auth_mode="token"` => clients must send `X-Api-Token` (web UI auth mode `token`).
+- `chatbot_auth_mode="jwt"` or `"github_oauth"` => clients should use bearer auth (web UI auth mode `bearer`).
 
 ---
 
@@ -735,6 +757,23 @@ Find these in your GitHub App settings.
 - **Data Center:** Verify PAT is still valid and the service account has project access
 - **Cloud:** Verify the API token at <https://id.atlassian.com/manage-profile/security/api-tokens>
 - Check that `platform` field in the secret matches your deployment (`cloud` vs `datacenter`)
+
+### Chatbot: 401/403 from private web UI
+
+- If using `chatbot_auth_mode="token"`, ensure `existing_chatbot_api_token_secret_arn` is set and the client sends `X-Api-Token`.
+- Ensure `webapp_default_auth_mode` matches your backend auth mode (`token` for token mode, `bearer` for jwt/github_oauth).
+
+### Chatbot: 503 errors
+
+- `quota_backend_unavailable` / `dynamodb_unavailable`: DynamoDB quota or memory backend unavailable.
+- `atlassian_session_store_unavailable`: Atlassian session broker enabled but table access/path missing.
+- In private VPC, ensure Lambda has IAM + network path (NAT or VPC endpoints) for Secrets Manager, DynamoDB, Bedrock, and CloudWatch Logs.
+
+### Private webapp through firewall on 443
+
+- Expose HTTPS listener on **443** at your internal LB/NLB.
+- Forward backend traffic to `webapp_private_ip:80` (or `webapp_instance_id:80` for instance target groups).
+- Confirm SG/NACL allow LB-to-instance port `80` and client-to-LB port `443`.
 
 ### Jira/Confluence: 404 Not Found
 

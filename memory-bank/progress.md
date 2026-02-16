@@ -56,6 +56,11 @@
 - [x] Add CloudFormation template for existing VPC + internal NLB TLS (`infra/cloudformation/private-webapp-internal-nlb-tls-existing-vpc.yaml`)
 - [x] Add CloudFormation internal TLS quickstart and doc links (`docs/cloudformation_private_vpc_internal_nlb_tls_quickstart.md`)
 - [x] Add Day-1 rollout/signoff checklist (`docs/day1_deployment_checklist.md`)
+- [x] Default Terraform to existing Secrets Manager ARNs (`create_secrets_manager_secrets=false`) and add required ARN validations
+- [x] Update Terraform outputs/examples/templates for existing secret ARNs and token-secret requirements
+- [x] Update private VPC runbooks/quick card with 443 firewall flow and EC2 private IP backend guidance
+- [x] Add chatbot 401/403/503 troubleshooting guidance and auth-mode alignment notes in README/SETUP
+- [x] Align web UI default auth mode to `token` to reduce token-vs-bearer misconfiguration in private deployments
 
 ## Doing
 

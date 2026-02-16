@@ -51,13 +51,24 @@ Install the app on desired repositories/org repos.
 
 ## Required AWS Secrets Manager secrets
 
-Terraform creates placeholders:
+This project defaults to **existing secret ARNs only** (`create_secrets_manager_secrets=false`).
 
-- `github_webhook_secret`
-- `github_app_private_key_pem`
-- `github_app_ids` (JSON: `{"app_id":"...","installation_id":"..."}`)
+Set these Terraform variables:
 
-After deployment, replace placeholder values with real values.
+- `existing_github_webhook_secret_arn`
+- `existing_github_app_private_key_secret_arn`
+- `existing_github_app_ids_secret_arn` (JSON value: `{"app_id":"...","installation_id":"..."}`)
+- `existing_atlassian_credentials_secret_arn`
+
+When `chatbot_auth_mode="token"`, also set:
+
+- `existing_chatbot_api_token_secret_arn`
+
+When `teams_adapter_enabled=true`, also set:
+
+- `existing_teams_adapter_token_secret_arn`
+
+Legacy behavior is still available by setting `create_secrets_manager_secrets=true`.
 
 ## Environment/config
 
@@ -810,6 +821,19 @@ Recommended rollout:
 Example request body:
 
 - `{"query":"Summarize top blockers for release","jira_jql":"project=PLAT AND statusCategory!=Done","confluence_cql":"type=page AND space=ENG"}`
+
+If you receive `401`/`403` errors from the chatbot endpoint, verify auth-mode alignment:
+
+- `chatbot_auth_mode="token"` => client must send `X-Api-Token` (web UI auth mode `token`).
+- `chatbot_auth_mode="jwt"` or `"github_oauth"` => client should use bearer auth (web UI auth mode `bearer`).
+
+For private-VPC webapp access through enterprise firewalls, expose **443 at the internal LB** and forward to `webapp_private_ip:80` (or `webapp_instance_id:80` for instance-type target groups).
+
+### Chatbot 503 errors
+
+- `quota_backend_unavailable` / `dynamodb_unavailable`: Lambda cannot reach or access DynamoDB for quota/memory controls.
+- `atlassian_session_store_unavailable`: session broker is enabled but DynamoDB table access/path is missing.
+- Verify VPC egress/endpoints and IAM permissions for Secrets Manager, DynamoDB, Bedrock, and CloudWatch Logs.
 
 ### Bedrock Knowledge Base retrieval modes
 

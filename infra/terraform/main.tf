@@ -48,9 +48,18 @@ locals {
 
 locals {
   webapp_tls_subnet_map = local.webapp_tls_enabled ? { for idx, subnet_id in var.webapp_tls_subnet_ids : tostring(idx) => subnet_id } : {}
+  webapp_tls_private_ip_map = local.webapp_tls_enabled && local.webapp_private_only && length(var.webapp_tls_private_ips) > 0 ? { for idx, ip in var.webapp_tls_private_ips : tostring(idx) => ip } : {}
   lambda_tracing_mode   = var.lambda_tracing_enabled ? "Active" : "PassThrough"
   worker_concurrency    = var.lambda_reserved_concurrency_worker >= 0 ? var.lambda_reserved_concurrency_worker : null
   chatbot_concurrency   = var.lambda_reserved_concurrency_chatbot >= 0 ? var.lambda_reserved_concurrency_chatbot : null
+
+  manage_secrets_in_terraform     = var.create_secrets_manager_secrets
+  github_webhook_secret_arn       = local.manage_secrets_in_terraform ? aws_secretsmanager_secret.github_webhook_secret[0].arn : trimspace(var.existing_github_webhook_secret_arn)
+  github_app_private_key_secret_arn = local.manage_secrets_in_terraform ? aws_secretsmanager_secret.github_app_private_key_pem[0].arn : trimspace(var.existing_github_app_private_key_secret_arn)
+  github_app_ids_secret_arn       = local.manage_secrets_in_terraform ? aws_secretsmanager_secret.github_app_ids[0].arn : trimspace(var.existing_github_app_ids_secret_arn)
+  atlassian_credentials_secret_arn = local.manage_secrets_in_terraform ? aws_secretsmanager_secret.atlassian_credentials[0].arn : trimspace(var.existing_atlassian_credentials_secret_arn)
+  chatbot_api_token_secret_arn    = local.manage_secrets_in_terraform ? (var.chatbot_enabled ? aws_secretsmanager_secret.chatbot_api_token[0].arn : "") : trimspace(var.existing_chatbot_api_token_secret_arn)
+  teams_adapter_token_secret_arn  = local.manage_secrets_in_terraform ? (var.chatbot_enabled && var.teams_adapter_enabled ? aws_secretsmanager_secret.teams_adapter_token[0].arn : "") : trimspace(var.existing_teams_adapter_token_secret_arn)
 }
 
 data "aws_caller_identity" "current" {}
@@ -166,6 +175,28 @@ check "webapp_tls_settings" {
   }
 }
 
+check "webapp_ec2_private_ip_settings" {
+  assert {
+    condition = (
+      length(trimspace(var.webapp_ec2_private_ip)) == 0 ||
+      local.webapp_private_only
+    )
+    error_message = "webapp_ec2_private_ip requires webapp_private_only=true (private deployment)."
+  }
+}
+
+check "webapp_tls_private_ips_settings" {
+  assert {
+    condition = (
+      !local.webapp_tls_enabled ||
+      !local.webapp_private_only ||
+      length(var.webapp_tls_private_ips) == 0 ||
+      length(var.webapp_tls_private_ips) == length(var.webapp_tls_subnet_ids)
+    )
+    error_message = "When using webapp_tls_private_ips in private-only TLS mode, provide one private IP per webapp_tls_subnet_ids entry (same order)."
+  }
+}
+
 check "webapp_s3_not_private_only" {
   assert {
     condition = (
@@ -173,6 +204,45 @@ check "webapp_s3_not_private_only" {
       trimspace(var.webapp_hosting_mode) != "s3"
     )
     error_message = "webapp_private_only is incompatible with webapp_hosting_mode=s3. S3 website hosting uses a public endpoint. Use webapp_hosting_mode=ec2_eip for private deployments."
+  }
+}
+
+check "existing_core_secret_arns" {
+  assert {
+    condition = (
+      local.manage_secrets_in_terraform ||
+      (
+        length(trimspace(var.existing_github_webhook_secret_arn)) > 0 &&
+        length(trimspace(var.existing_github_app_private_key_secret_arn)) > 0 &&
+        length(trimspace(var.existing_github_app_ids_secret_arn)) > 0 &&
+        length(trimspace(var.existing_atlassian_credentials_secret_arn)) > 0
+      )
+    )
+    error_message = "When create_secrets_manager_secrets=false, set existing_github_webhook_secret_arn, existing_github_app_private_key_secret_arn, existing_github_app_ids_secret_arn, and existing_atlassian_credentials_secret_arn."
+  }
+}
+
+check "existing_chatbot_token_secret" {
+  assert {
+    condition = (
+      local.manage_secrets_in_terraform ||
+      !var.chatbot_enabled ||
+      var.chatbot_auth_mode != "token" ||
+      length(trimspace(var.existing_chatbot_api_token_secret_arn)) > 0
+    )
+    error_message = "When create_secrets_manager_secrets=false and chatbot_auth_mode=token, set existing_chatbot_api_token_secret_arn."
+  }
+}
+
+check "existing_teams_token_secret" {
+  assert {
+    condition = (
+      local.manage_secrets_in_terraform ||
+      !var.chatbot_enabled ||
+      !var.teams_adapter_enabled ||
+      length(trimspace(var.existing_teams_adapter_token_secret_arn)) > 0
+    )
+    error_message = "When create_secrets_manager_secrets=false and teams_adapter_enabled=true, set existing_teams_adapter_token_secret_arn."
   }
 }
 
@@ -188,6 +258,7 @@ resource "aws_kms_alias" "app" {
 }
 
 resource "aws_secretsmanager_secret" "github_webhook_secret" {
+  count                   = local.manage_secrets_in_terraform ? 1 : 0
   name                    = "${local.name_prefix}/github_webhook_secret"
   description             = "GitHub webhook signing secret"
   kms_key_id              = aws_kms_key.app.arn
@@ -195,11 +266,13 @@ resource "aws_secretsmanager_secret" "github_webhook_secret" {
 }
 
 resource "aws_secretsmanager_secret_version" "github_webhook_secret" {
-  secret_id     = aws_secretsmanager_secret.github_webhook_secret.id
+  count         = local.manage_secrets_in_terraform ? 1 : 0
+  secret_id     = aws_secretsmanager_secret.github_webhook_secret[0].id
   secret_string = "REPLACE_ME_WITH_GITHUB_WEBHOOK_SECRET"
 }
 
 resource "aws_secretsmanager_secret" "github_app_private_key_pem" {
+  count                   = local.manage_secrets_in_terraform ? 1 : 0
   name                    = "${local.name_prefix}/github_app_private_key_pem"
   description             = "GitHub App private key PEM"
   kms_key_id              = aws_kms_key.app.arn
@@ -207,11 +280,13 @@ resource "aws_secretsmanager_secret" "github_app_private_key_pem" {
 }
 
 resource "aws_secretsmanager_secret_version" "github_app_private_key_pem" {
-  secret_id     = aws_secretsmanager_secret.github_app_private_key_pem.id
+  count         = local.manage_secrets_in_terraform ? 1 : 0
+  secret_id     = aws_secretsmanager_secret.github_app_private_key_pem[0].id
   secret_string = "-----BEGIN PRIVATE KEY-----\nREPLACE_ME\n-----END PRIVATE KEY-----"
 }
 
 resource "aws_secretsmanager_secret" "github_app_ids" {
+  count                   = local.manage_secrets_in_terraform ? 1 : 0
   name                    = "${local.name_prefix}/github_app_ids"
   description             = "GitHub App IDs JSON: { app_id, installation_id }"
   kms_key_id              = aws_kms_key.app.arn
@@ -219,11 +294,13 @@ resource "aws_secretsmanager_secret" "github_app_ids" {
 }
 
 resource "aws_secretsmanager_secret_version" "github_app_ids" {
-  secret_id     = aws_secretsmanager_secret.github_app_ids.id
+  count         = local.manage_secrets_in_terraform ? 1 : 0
+  secret_id     = aws_secretsmanager_secret.github_app_ids[0].id
   secret_string = jsonencode({ app_id = "REPLACE_ME", installation_id = "REPLACE_ME" })
 }
 
 resource "aws_secretsmanager_secret" "atlassian_credentials" {
+  count                   = local.manage_secrets_in_terraform ? 1 : 0
   name                    = "${local.name_prefix}/atlassian_credentials"
   description             = "Atlassian API credentials JSON"
   kms_key_id              = aws_kms_key.app.arn
@@ -231,7 +308,8 @@ resource "aws_secretsmanager_secret" "atlassian_credentials" {
 }
 
 resource "aws_secretsmanager_secret_version" "atlassian_credentials" {
-  secret_id = aws_secretsmanager_secret.atlassian_credentials.id
+  count     = local.manage_secrets_in_terraform ? 1 : 0
+  secret_id = aws_secretsmanager_secret.atlassian_credentials[0].id
   secret_string = jsonencode({
     jira_base_url       = "https://jira.example.com"
     confluence_base_url = "https://confluence.example.com"
@@ -242,7 +320,7 @@ resource "aws_secretsmanager_secret_version" "atlassian_credentials" {
 }
 
 resource "aws_secretsmanager_secret" "chatbot_api_token" {
-  count                   = var.chatbot_enabled ? 1 : 0
+  count                   = local.manage_secrets_in_terraform && var.chatbot_enabled ? 1 : 0
   name                    = "${local.name_prefix}/chatbot_api_token"
   description             = "Shared API token for chatbot endpoint authentication"
   kms_key_id              = aws_kms_key.app.arn
@@ -250,13 +328,13 @@ resource "aws_secretsmanager_secret" "chatbot_api_token" {
 }
 
 resource "aws_secretsmanager_secret_version" "chatbot_api_token" {
-  count         = var.chatbot_enabled ? 1 : 0
+  count         = local.manage_secrets_in_terraform && var.chatbot_enabled ? 1 : 0
   secret_id     = aws_secretsmanager_secret.chatbot_api_token[0].id
   secret_string = var.chatbot_api_token
 }
 
 resource "aws_secretsmanager_secret" "teams_adapter_token" {
-  count                   = var.chatbot_enabled && var.teams_adapter_enabled ? 1 : 0
+  count                   = local.manage_secrets_in_terraform && var.chatbot_enabled && var.teams_adapter_enabled ? 1 : 0
   name                    = "${local.name_prefix}/teams_adapter_token"
   description             = "Microsoft Teams adapter auth token"
   kms_key_id              = aws_kms_key.app.arn
@@ -264,7 +342,7 @@ resource "aws_secretsmanager_secret" "teams_adapter_token" {
 }
 
 resource "aws_secretsmanager_secret_version" "teams_adapter_token" {
-  count         = var.chatbot_enabled && var.teams_adapter_enabled ? 1 : 0
+  count         = local.manage_secrets_in_terraform && var.chatbot_enabled && var.teams_adapter_enabled ? 1 : 0
   secret_id     = aws_secretsmanager_secret.teams_adapter_token[0].id
   secret_string = var.teams_adapter_token
 }
@@ -435,6 +513,7 @@ resource "aws_instance" "webapp" {
   ami                         = trimspace(var.webapp_ec2_ami_id) != "" ? trimspace(var.webapp_ec2_ami_id) : data.aws_ssm_parameter.webapp_ami[0].value
   instance_type               = var.webapp_ec2_instance_type
   subnet_id                   = var.webapp_ec2_subnet_id
+  private_ip                  = trimspace(var.webapp_ec2_private_ip) != "" ? trimspace(var.webapp_ec2_private_ip) : null
   key_name                    = trimspace(var.webapp_ec2_key_name) != "" ? trimspace(var.webapp_ec2_key_name) : null
   vpc_security_group_ids      = [aws_security_group.webapp_ec2[0].id]
   associate_public_ip_address = !local.webapp_private_only
@@ -445,12 +524,115 @@ resource "aws_instance" "webapp" {
     yum update -y
     amazon-linux-extras install nginx1 -y || yum install -y nginx
     mkdir -p /usr/share/nginx/html
-    echo '${base64encode(file("${path.module}/../../webapp/index.html"))}' | base64 -d > /usr/share/nginx/html/index.html
-    echo '${base64encode(format("window.WEBAPP_DEFAULTS = %s;\n", jsonencode(local.webapp_default_config)))}' | base64 -d > /usr/share/nginx/html/config.js
-    echo '${base64encode(file("${path.module}/../../webapp/app.js"))}' | base64 -d > /usr/share/nginx/html/app.js
-    echo '${base64encode(file("${path.module}/../../webapp/styles.css"))}' | base64 -d > /usr/share/nginx/html/styles.css
+    cat > /usr/share/nginx/html/index.html <<'HTML'
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Private Chatbot UI</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 24px; max-width: 980px; }
+          .row { display: flex; gap: 8px; margin-bottom: 10px; }
+          input, select, textarea, button { padding: 8px; font-size: 14px; }
+          input, select, textarea { flex: 1; }
+          textarea { min-height: 120px; }
+          .out { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 12px; white-space: pre-wrap; }
+          .muted { color: #57606a; font-size: 12px; }
+        </style>
+      </head>
+      <body>
+        <h2>Private Chatbot UI</h2>
+        <p class="muted">Compact EC2 UI (optimized to stay under EC2 user-data size limits).</p>
+
+        <div class="row">
+          <label for="chatbotUrl">Chatbot URL</label>
+          <input id="chatbotUrl" type="text" />
+        </div>
+        <div class="row">
+          <label for="authMode">Auth Mode</label>
+          <select id="authMode">
+            <option value="token">token (X-Api-Token)</option>
+            <option value="bearer">bearer (Authorization)</option>
+            <option value="none">none</option>
+          </select>
+          <input id="authValue" type="password" placeholder="token or bearer value" />
+        </div>
+        <div class="row">
+          <input id="jiraJql" type="text" placeholder="Optional JQL" />
+          <input id="confluenceCql" type="text" placeholder="Optional CQL" />
+        </div>
+        <div class="row">
+          <textarea id="query" placeholder="Ask your Jira/Confluence question..."></textarea>
+        </div>
+        <div class="row">
+          <button id="sendBtn" type="button">Send</button>
+        </div>
+
+        <h3>Answer</h3>
+        <div id="answer" class="out">No response yet.</div>
+
+        <h3>Raw Response</h3>
+        <div id="raw" class="out">{}</div>
+
+        <script src="config.js"></script>
+        <script>
+          const defaults = (window.WEBAPP_DEFAULTS || {});
+          const el = (id) => document.getElementById(id);
+
+          el('chatbotUrl').value = defaults.chatbotUrl || '';
+          el('authMode').value = defaults.authMode || 'token';
+
+          async function sendQuery() {
+            const url = el('chatbotUrl').value.trim();
+            const authMode = el('authMode').value;
+            const authValue = el('authValue').value.trim();
+            const query = el('query').value.trim();
+            const jiraJql = el('jiraJql').value.trim();
+            const confluenceCql = el('confluenceCql').value.trim();
+
+            if (!url || !query) {
+              alert('Chatbot URL and query are required.');
+              return;
+            }
+
+            const headers = { 'Content-Type': 'application/json' };
+            if (authMode === 'token' && authValue) headers['X-Api-Token'] = authValue;
+            if (authMode === 'bearer' && authValue) headers['Authorization'] = `Bearer ${authValue}`;
+
+            const body = { query };
+            if (jiraJql) body.jira_jql = jiraJql;
+            if (confluenceCql) body.confluence_cql = confluenceCql;
+
+            el('answer').textContent = 'Loading...';
+            el('raw').textContent = '{}';
+
+            try {
+              const resp = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+              const payload = await resp.json().catch(() => ({}));
+              if (!resp.ok) {
+                el('answer').textContent = 'HTTP ' + String(resp.status) + ': ' + String(payload.error || 'request_failed');
+              } else {
+                el('answer').textContent = payload.answer || '(no answer field)';
+              }
+              el('raw').textContent = JSON.stringify(payload, null, 2);
+            } catch (err) {
+              el('answer').textContent = 'Request failed: ' + String(err);
+            }
+          }
+
+          el('sendBtn').addEventListener('click', sendQuery);
+        </script>
+      </body>
+    </html>
+    HTML
+
+    cat > /usr/share/nginx/html/config.js <<'JS'
+    window.WEBAPP_DEFAULTS = ${jsonencode(local.webapp_default_config)};
+    JS
+
     chown -R nginx:nginx /usr/share/nginx/html
-    chmod 0644 /usr/share/nginx/html/index.html /usr/share/nginx/html/config.js /usr/share/nginx/html/app.js /usr/share/nginx/html/styles.css
+    chmod 0644 /usr/share/nginx/html/index.html /usr/share/nginx/html/config.js
     systemctl enable nginx
     systemctl restart nginx
   EOT
@@ -480,7 +662,15 @@ resource "aws_lb" "webapp" {
   name               = "${local.name_prefix}-webapp-nlb"
   load_balancer_type = "network"
   internal           = local.webapp_private_only
-  subnets            = local.webapp_private_only ? var.webapp_tls_subnet_ids : null
+  subnets            = local.webapp_private_only && length(local.webapp_tls_private_ip_map) == 0 ? var.webapp_tls_subnet_ids : null
+
+  dynamic "subnet_mapping" {
+    for_each = local.webapp_private_only ? local.webapp_tls_private_ip_map : {}
+    content {
+      subnet_id            = var.webapp_tls_subnet_ids[tonumber(subnet_mapping.key)]
+      private_ipv4_address = subnet_mapping.value
+    }
+  }
 
   dynamic "subnet_mapping" {
     for_each = local.webapp_private_only ? {} : local.webapp_tls_subnet_map
@@ -708,7 +898,7 @@ resource "aws_iam_policy" "webhook_policy" {
       {
         Effect   = "Allow"
         Action   = ["secretsmanager:GetSecretValue"]
-        Resource = aws_secretsmanager_secret.github_webhook_secret.arn
+        Resource = local.github_webhook_secret_arn
       },
       {
         Effect   = "Allow"
@@ -760,9 +950,9 @@ resource "aws_iam_policy" "worker_policy" {
         Effect = "Allow"
         Action = ["secretsmanager:GetSecretValue"]
         Resource = [
-          aws_secretsmanager_secret.github_app_private_key_pem.arn,
-          aws_secretsmanager_secret.github_app_ids.arn,
-          aws_secretsmanager_secret.atlassian_credentials.arn
+          local.github_app_private_key_secret_arn,
+          local.github_app_ids_secret_arn,
+          local.atlassian_credentials_secret_arn
         ]
       },
       {
@@ -807,11 +997,11 @@ resource "aws_iam_policy" "chatbot_policy" {
         Effect = "Allow"
         Action = ["secretsmanager:GetSecretValue"]
         Resource = compact([
-          aws_secretsmanager_secret.atlassian_credentials.arn,
-          var.chatbot_enabled ? aws_secretsmanager_secret.chatbot_api_token[0].arn : "",
-          var.chatbot_enabled && var.teams_adapter_enabled ? aws_secretsmanager_secret.teams_adapter_token[0].arn : "",
-          var.chatbot_enabled && var.chatbot_github_live_enabled ? aws_secretsmanager_secret.github_app_private_key_pem.arn : "",
-          var.chatbot_enabled && var.chatbot_github_live_enabled ? aws_secretsmanager_secret.github_app_ids.arn : "",
+          local.atlassian_credentials_secret_arn,
+          var.chatbot_enabled ? local.chatbot_api_token_secret_arn : "",
+          var.chatbot_enabled && var.teams_adapter_enabled ? local.teams_adapter_token_secret_arn : "",
+          var.chatbot_enabled && var.chatbot_github_live_enabled ? local.github_app_private_key_secret_arn : "",
+          var.chatbot_enabled && var.chatbot_github_live_enabled ? local.github_app_ids_secret_arn : "",
           var.chatbot_enabled && var.chatbot_enable_anthropic_direct && length(trimspace(var.chatbot_anthropic_api_key_secret_arn)) > 0 ? var.chatbot_anthropic_api_key_secret_arn : "",
         ])
       },
@@ -893,9 +1083,9 @@ resource "aws_iam_policy" "kb_sync_policy" {
         Effect = "Allow"
         Action = ["secretsmanager:GetSecretValue"]
         Resource = compact([
-          var.kb_sync_enabled ? aws_secretsmanager_secret.atlassian_credentials.arn : "",
-          var.github_kb_sync_enabled ? aws_secretsmanager_secret.github_app_private_key_pem.arn : "",
-          var.github_kb_sync_enabled ? aws_secretsmanager_secret.github_app_ids.arn : "",
+          var.kb_sync_enabled ? local.atlassian_credentials_secret_arn : "",
+          var.github_kb_sync_enabled ? local.github_app_private_key_secret_arn : "",
+          var.github_kb_sync_enabled ? local.github_app_ids_secret_arn : "",
         ])
       },
       {
@@ -1008,7 +1198,7 @@ resource "aws_lambda_function" "webhook_receiver" {
   environment {
     variables = {
       QUEUE_URL                = aws_sqs_queue.pr_review_queue.id
-      WEBHOOK_SECRET_ARN       = aws_secretsmanager_secret.github_webhook_secret.arn
+      WEBHOOK_SECRET_ARN       = local.github_webhook_secret_arn
       GITHUB_ALLOWED_REPOS     = join(",", var.github_allowed_repos)
       PR_DESCRIPTION_QUEUE_URL = var.pr_description_enabled ? aws_sqs_queue.pr_description_queue[0].id : ""
     }
@@ -1042,14 +1232,14 @@ resource "aws_lambda_function" "pr_review_worker" {
       GITHUB_API_BASE                   = var.github_api_base
       DRY_RUN                           = tostring(var.dry_run)
       IDEMPOTENCY_TABLE                 = aws_dynamodb_table.idempotency.name
-      GITHUB_APP_PRIVATE_KEY_SECRET_ARN = aws_secretsmanager_secret.github_app_private_key_pem.arn
-      GITHUB_APP_IDS_SECRET_ARN         = aws_secretsmanager_secret.github_app_ids.arn
+      GITHUB_APP_PRIVATE_KEY_SECRET_ARN = local.github_app_private_key_secret_arn
+      GITHUB_APP_IDS_SECRET_ARN         = local.github_app_ids_secret_arn
       METRICS_NAMESPACE                 = "${var.project_name}/${var.environment}"
       AUTO_PR_ENABLED                   = tostring(var.auto_pr_enabled)
       AUTO_PR_MAX_FILES                 = tostring(var.auto_pr_max_files)
       AUTO_PR_BRANCH_PREFIX             = var.auto_pr_branch_prefix
       REVIEW_COMMENT_MODE               = var.review_comment_mode
-      ATLASSIAN_CREDENTIALS_SECRET_ARN  = aws_secretsmanager_secret.atlassian_credentials.arn
+      ATLASSIAN_CREDENTIALS_SECRET_ARN  = local.atlassian_credentials_secret_arn
       TEST_GEN_QUEUE_URL                = var.test_gen_enabled ? aws_sqs_queue.test_gen_queue[0].id : ""
     }
   }
@@ -1151,17 +1341,17 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
       METRICS_NAMESPACE                              = local.chatbot_metrics_namespace
       BEDROCK_KNOWLEDGE_BASE_ID                      = var.bedrock_knowledge_base_id
       BEDROCK_KB_TOP_K                               = tostring(var.bedrock_kb_top_k)
-      ATLASSIAN_CREDENTIALS_SECRET_ARN               = aws_secretsmanager_secret.atlassian_credentials.arn
+      ATLASSIAN_CREDENTIALS_SECRET_ARN               = local.atlassian_credentials_secret_arn
       CHATBOT_ATLASSIAN_USER_AUTH_ENABLED            = tostring(var.chatbot_atlassian_user_auth_enabled)
       CHATBOT_ATLASSIAN_SESSION_BROKER_ENABLED       = tostring(var.chatbot_atlassian_session_broker_enabled)
       CHATBOT_ATLASSIAN_SESSION_TTL_SECONDS          = tostring(var.chatbot_atlassian_session_ttl_seconds)
-      CHATBOT_API_TOKEN_SECRET_ARN                   = var.chatbot_enabled ? aws_secretsmanager_secret.chatbot_api_token[0].arn : ""
+      CHATBOT_API_TOKEN_SECRET_ARN                   = var.chatbot_enabled ? local.chatbot_api_token_secret_arn : ""
       GITHUB_CHAT_LIVE_ENABLED                       = tostring(var.chatbot_github_live_enabled)
       GITHUB_CHAT_REPOS                              = join(",", var.chatbot_github_live_repos)
       GITHUB_CHAT_MAX_RESULTS                        = tostring(var.chatbot_github_live_max_results)
       GITHUB_API_BASE                                = var.github_api_base
-      GITHUB_APP_PRIVATE_KEY_SECRET_ARN              = var.chatbot_github_live_enabled ? aws_secretsmanager_secret.github_app_private_key_pem.arn : ""
-      GITHUB_APP_IDS_SECRET_ARN                      = var.chatbot_github_live_enabled ? aws_secretsmanager_secret.github_app_ids.arn : ""
+      GITHUB_APP_PRIVATE_KEY_SECRET_ARN              = var.chatbot_github_live_enabled ? local.github_app_private_key_secret_arn : ""
+      GITHUB_APP_IDS_SECRET_ARN                      = var.chatbot_github_live_enabled ? local.github_app_ids_secret_arn : ""
     }
   }
 
@@ -1221,8 +1411,8 @@ resource "aws_lambda_function" "teams_chatbot_adapter" {
       CHATBOT_RETRIEVAL_MODE           = var.chatbot_retrieval_mode
       BEDROCK_KNOWLEDGE_BASE_ID        = var.bedrock_knowledge_base_id
       BEDROCK_KB_TOP_K                 = tostring(var.bedrock_kb_top_k)
-      ATLASSIAN_CREDENTIALS_SECRET_ARN = aws_secretsmanager_secret.atlassian_credentials.arn
-      TEAMS_ADAPTER_TOKEN_SECRET_ARN   = var.chatbot_enabled && var.teams_adapter_enabled ? aws_secretsmanager_secret.teams_adapter_token[0].arn : ""
+      ATLASSIAN_CREDENTIALS_SECRET_ARN = local.atlassian_credentials_secret_arn
+      TEAMS_ADAPTER_TOKEN_SECRET_ARN   = var.chatbot_enabled && var.teams_adapter_enabled ? local.teams_adapter_token_secret_arn : ""
     }
   }
 
@@ -1245,7 +1435,7 @@ resource "aws_lambda_function" "confluence_kb_sync" {
   environment {
     variables = {
       AWS_REGION                       = data.aws_region.current.name
-      ATLASSIAN_CREDENTIALS_SECRET_ARN = aws_secretsmanager_secret.atlassian_credentials.arn
+      ATLASSIAN_CREDENTIALS_SECRET_ARN = local.atlassian_credentials_secret_arn
       BEDROCK_KNOWLEDGE_BASE_ID        = var.bedrock_knowledge_base_id
       BEDROCK_KB_DATA_SOURCE_ID        = var.bedrock_kb_data_source_id
       KB_SYNC_BUCKET                   = aws_s3_bucket.kb_sync_documents[0].bucket
@@ -1276,8 +1466,8 @@ resource "aws_lambda_function" "github_kb_sync" {
     variables = {
       AWS_REGION                        = data.aws_region.current.name
       GITHUB_API_BASE                   = var.github_api_base
-      GITHUB_APP_PRIVATE_KEY_SECRET_ARN = aws_secretsmanager_secret.github_app_private_key_pem.arn
-      GITHUB_APP_IDS_SECRET_ARN         = aws_secretsmanager_secret.github_app_ids.arn
+      GITHUB_APP_PRIVATE_KEY_SECRET_ARN = local.github_app_private_key_secret_arn
+      GITHUB_APP_IDS_SECRET_ARN         = local.github_app_ids_secret_arn
       BEDROCK_KNOWLEDGE_BASE_ID         = var.bedrock_knowledge_base_id
       BEDROCK_KB_DATA_SOURCE_ID         = var.bedrock_kb_data_source_id
       GITHUB_KB_DATA_SOURCE_ID          = var.github_kb_data_source_id
@@ -1665,9 +1855,9 @@ resource "aws_iam_policy" "release_notes_policy" {
         Effect = "Allow"
         Action = ["secretsmanager:GetSecretValue"]
         Resource = [
-          aws_secretsmanager_secret.github_app_private_key_pem.arn,
-          aws_secretsmanager_secret.github_app_ids.arn,
-          aws_secretsmanager_secret.atlassian_credentials.arn
+          local.github_app_private_key_secret_arn,
+          local.github_app_ids_secret_arn,
+          local.atlassian_credentials_secret_arn
         ]
       },
       {
@@ -1713,9 +1903,9 @@ resource "aws_lambda_function" "release_notes" {
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
       RELEASE_NOTES_MODEL_ID            = var.release_notes_model_id
       GITHUB_API_BASE                   = var.github_api_base
-      GITHUB_APP_PRIVATE_KEY_SECRET_ARN = aws_secretsmanager_secret.github_app_private_key_pem.arn
-      GITHUB_APP_IDS_SECRET_ARN         = aws_secretsmanager_secret.github_app_ids.arn
-      ATLASSIAN_CREDENTIALS_SECRET_ARN  = aws_secretsmanager_secret.atlassian_credentials.arn
+      GITHUB_APP_PRIVATE_KEY_SECRET_ARN = local.github_app_private_key_secret_arn
+      GITHUB_APP_IDS_SECRET_ARN         = local.github_app_ids_secret_arn
+      ATLASSIAN_CREDENTIALS_SECRET_ARN  = local.atlassian_credentials_secret_arn
       DRY_RUN                           = tostring(var.dry_run)
     }
   }
@@ -1794,9 +1984,9 @@ resource "aws_iam_policy" "sprint_report_policy" {
         Effect = "Allow"
         Action = ["secretsmanager:GetSecretValue"]
         Resource = [
-          aws_secretsmanager_secret.github_app_private_key_pem.arn,
-          aws_secretsmanager_secret.github_app_ids.arn,
-          aws_secretsmanager_secret.atlassian_credentials.arn
+          local.github_app_private_key_secret_arn,
+          local.github_app_ids_secret_arn,
+          local.atlassian_credentials_secret_arn
         ]
       },
       {
@@ -1842,9 +2032,9 @@ resource "aws_lambda_function" "sprint_report" {
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
       SPRINT_REPORT_MODEL_ID            = var.sprint_report_model_id
       GITHUB_API_BASE                   = var.github_api_base
-      GITHUB_APP_PRIVATE_KEY_SECRET_ARN = aws_secretsmanager_secret.github_app_private_key_pem.arn
-      GITHUB_APP_IDS_SECRET_ARN         = aws_secretsmanager_secret.github_app_ids.arn
-      ATLASSIAN_CREDENTIALS_SECRET_ARN  = aws_secretsmanager_secret.atlassian_credentials.arn
+      GITHUB_APP_PRIVATE_KEY_SECRET_ARN = local.github_app_private_key_secret_arn
+      GITHUB_APP_IDS_SECRET_ARN         = local.github_app_ids_secret_arn
+      ATLASSIAN_CREDENTIALS_SECRET_ARN  = local.atlassian_credentials_secret_arn
       SPRINT_REPORT_REPO                = var.sprint_report_repo
       SPRINT_REPORT_JIRA_PROJECT        = var.sprint_report_jira_project
       SPRINT_REPORT_JQL                 = var.sprint_report_jql
@@ -1979,8 +2169,8 @@ resource "aws_iam_policy" "test_gen_policy" {
         Effect = "Allow"
         Action = ["secretsmanager:GetSecretValue"]
         Resource = [
-          aws_secretsmanager_secret.github_app_private_key_pem.arn,
-          aws_secretsmanager_secret.github_app_ids.arn,
+          local.github_app_private_key_secret_arn,
+          local.github_app_ids_secret_arn,
         ]
       },
       {
@@ -2028,8 +2218,8 @@ resource "aws_lambda_function" "test_gen" {
       TEST_GEN_DELIVERY_MODE            = var.test_gen_delivery_mode
       TEST_GEN_MAX_FILES                = tostring(var.test_gen_max_files)
       GITHUB_API_BASE                   = var.github_api_base
-      GITHUB_APP_PRIVATE_KEY_SECRET_ARN = aws_secretsmanager_secret.github_app_private_key_pem.arn
-      GITHUB_APP_IDS_SECRET_ARN         = aws_secretsmanager_secret.github_app_ids.arn
+      GITHUB_APP_PRIVATE_KEY_SECRET_ARN = local.github_app_private_key_secret_arn
+      GITHUB_APP_IDS_SECRET_ARN         = local.github_app_ids_secret_arn
       DRY_RUN                           = tostring(var.dry_run)
     }
   }
@@ -2148,9 +2338,9 @@ resource "aws_iam_policy" "pr_description_policy" {
         Effect = "Allow"
         Action = ["secretsmanager:GetSecretValue"]
         Resource = [
-          aws_secretsmanager_secret.github_app_private_key_pem.arn,
-          aws_secretsmanager_secret.github_app_ids.arn,
-          aws_secretsmanager_secret.atlassian_credentials.arn
+          local.github_app_private_key_secret_arn,
+          local.github_app_ids_secret_arn,
+          local.atlassian_credentials_secret_arn
         ]
       },
       {
@@ -2196,9 +2386,9 @@ resource "aws_lambda_function" "pr_description" {
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
       PR_DESCRIPTION_MODEL_ID           = var.pr_description_model_id
       GITHUB_API_BASE                   = var.github_api_base
-      GITHUB_APP_PRIVATE_KEY_SECRET_ARN = aws_secretsmanager_secret.github_app_private_key_pem.arn
-      GITHUB_APP_IDS_SECRET_ARN         = aws_secretsmanager_secret.github_app_ids.arn
-      ATLASSIAN_CREDENTIALS_SECRET_ARN  = aws_secretsmanager_secret.atlassian_credentials.arn
+      GITHUB_APP_PRIVATE_KEY_SECRET_ARN = local.github_app_private_key_secret_arn
+      GITHUB_APP_IDS_SECRET_ARN         = local.github_app_ids_secret_arn
+      ATLASSIAN_CREDENTIALS_SECRET_ARN  = local.atlassian_credentials_secret_arn
       DRY_RUN                           = tostring(var.dry_run)
     }
   }

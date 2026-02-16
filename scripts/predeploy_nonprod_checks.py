@@ -7,6 +7,16 @@ import subprocess
 from pathlib import Path
 
 
+def _detect_infra_cli() -> str | None:
+    for cli in ("tofu", "terraform"):
+        try:
+            subprocess.check_output([cli, "version"], text=True)
+            return cli
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
 def _parse_tfvars(path: Path) -> dict[str, str]:
     data: dict[str, str] = {}
     for raw_line in path.read_text().splitlines():
@@ -20,15 +30,15 @@ def _parse_tfvars(path: Path) -> dict[str, str]:
     return data
 
 
-def _terraform_version_ok(min_major: int, min_minor: int) -> tuple[bool, str]:
+def _infra_cli_version_ok(cli: str, min_major: int, min_minor: int) -> tuple[bool, str]:
     try:
-        output = subprocess.check_output(["terraform", "version"], text=True)
+        output = subprocess.check_output([cli, "version"], text=True)
     except Exception as exc:  # noqa: BLE001
-        return False, f"terraform not available ({exc})"
+        return False, f"{cli} not available ({exc})"
 
-    match = re.search(r"Terraform v(\d+)\.(\d+)\.(\d+)", output)
+    match = re.search(r"(?:Terraform|OpenTofu) v(\d+)\.(\d+)\.(\d+)", output)
     if not match:
-        return False, "unable to parse terraform version"
+        return False, f"unable to parse {cli} version"
 
     major, minor, patch = map(int, match.groups())
     if (major, minor) < (min_major, min_minor):
@@ -52,7 +62,7 @@ def _read_required_terraform_version(versions_path: Path) -> tuple[int, int] | N
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Pre-deploy checks for non-prod Terraform rollout")
+    parser = argparse.ArgumentParser(description="Pre-deploy checks for non-prod OpenTofu/Terraform rollout")
     parser.add_argument(
         "--tfvars",
         default="infra/terraform/terraform.nonprod.tfvars.example",
@@ -66,6 +76,15 @@ def main() -> int:
     failures: list[str] = []
     warnings: list[str] = []
 
+    infra_cli = _detect_infra_cli()
+    if infra_cli is None:
+        failures.append("neither tofu nor terraform is available in PATH")
+        for msg in failures:
+            print(f"[FAIL] {msg}")
+        return 1
+
+    cli_name = infra_cli
+
     if not tfvars_path.exists():
         failures.append(f"tfvars file missing: {tfvars_path}")
     if not versions_path.exists():
@@ -74,13 +93,13 @@ def main() -> int:
     required_tf = _read_required_terraform_version(versions_path)
     min_major, min_minor = required_tf if required_tf is not None else (1, 6)
 
-    ok, tf_msg = _terraform_version_ok(min_major, min_minor)
+    ok, tf_msg = _infra_cli_version_ok(cli_name, min_major, min_minor)
     if not ok:
         failures.append(
-            f"terraform version check failed: {tf_msg} (required by versions.tf: >= {min_major}.{min_minor}.0)"
+            f"{cli_name} version check failed: {tf_msg} (required by versions.tf: >= {min_major}.{min_minor}.0)"
         )
     else:
-        print(f"[OK] terraform version: {tf_msg}")
+        print(f"[OK] {cli_name} version: {tf_msg}")
 
     if failures:
         for msg in failures:
@@ -140,7 +159,7 @@ def main() -> int:
         print("\nResult: NOT READY for apply")
         return 2
 
-    print("\nResult: READY for terraform plan/apply")
+    print(f"\nResult: READY for {cli_name} plan/apply")
     return 0
 
 

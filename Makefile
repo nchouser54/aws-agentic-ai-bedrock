@@ -1,7 +1,7 @@
 .PHONY: install install-mcp mcp-github-server mcp-atlassian-server mcp-github-release-server mcp-unified-server mcp-list mcp-dev-check mcp-ec2-bootstrap lint test check terraform-fmt-check terraform-validate verify-toolchain promptfoo-eval-pr promptfoo-eval-chatbot
 
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
-TERRAFORM ?= terraform
+TERRAFORM ?= $(shell if command -v tofu >/dev/null 2>&1; then echo tofu; elif command -v terraform >/dev/null 2>&1; then echo terraform; else echo terraform; fi)
 
 install:
 	$(PYTHON) -m pip install -r requirements.txt

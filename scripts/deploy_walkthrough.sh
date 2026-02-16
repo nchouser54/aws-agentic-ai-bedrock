@@ -73,6 +73,13 @@ ask_yes_no() {
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TF_DIR="${REPO_ROOT}/infra/terraform"
 
+INFRA_CLI=""
+if command -v tofu &>/dev/null; then
+  INFRA_CLI="tofu"
+elif command -v terraform &>/dev/null; then
+  INFRA_CLI="terraform"
+fi
+
 echo ""
 echo -e "${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BOLD}║     AI PR Reviewer — Deployment Walkthrough                 ║${NC}"
@@ -95,11 +102,11 @@ step "Check required tools"
 
 errors=0
 
-if command -v terraform &>/dev/null; then
-  tf_version=$(terraform version -json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['terraform_version'])" 2>/dev/null || terraform version | head -1)
-  ok "Terraform installed: ${tf_version}"
+if [ -n "$INFRA_CLI" ]; then
+  tf_version=$($INFRA_CLI version -json 2>/dev/null | python3 -c "import json,sys; data=json.load(sys.stdin); print(data.get('terraform_version') or data.get('tofu_version') or 'unknown')" 2>/dev/null || $INFRA_CLI version | head -1)
+  ok "IaC CLI installed (${INFRA_CLI}): ${tf_version}"
 else
-  fail "Terraform not found. Install: https://developer.hashicorp.com/terraform/install"
+  fail "Neither OpenTofu ('tofu') nor Terraform is installed. Install one and re-run."
   errors=$((errors + 1))
 fi
 
@@ -179,7 +186,7 @@ step "Gather deployment values"
 echo ""
 echo "  You need the following values. Write them down or have them ready:"
 echo ""
-echo -e "  ${BOLD}REQUIRED — Backend (Terraform):${NC}"
+echo -e "  ${BOLD}REQUIRED — Backend (IaC):${NC}"
 echo "  ┌──────────────────────────────────────────────────────────────────┐"
 echo "  │  1. GitHub API base URL                                         │"
 echo "  │     github.com → https://api.github.com                         │"
@@ -205,7 +212,7 @@ echo "  │  11. ACM certificate ARN (if TLS enabled)                        │
 echo "  │  12. Allowed CIDRs (your internal network ranges)                │"
 echo "  └──────────────────────────────────────────────────────────────────┘"
 echo ""
-info "Don't have all values yet? That's OK — Terraform will prompt for required ones."
+info "Don't have all values yet? That's OK — your IaC CLI will prompt for required ones."
 
 pause
 
@@ -213,7 +220,7 @@ pause
 # PHASE 3: Prepare tfvars
 # ===========================================================================
 
-step "Prepare Terraform variables file"
+step "Prepare IaC variables file"
 
 TFVARS="${TF_DIR}/terraform.tfvars"
 
@@ -253,39 +260,39 @@ info "All variables documented in: infra/terraform/variables.tf"
 pause
 
 # ===========================================================================
-# PHASE 4: Terraform deploy
+# PHASE 4: IaC deploy
 # ===========================================================================
 
-step "Terraform init"
+step "Initialize IaC"
 
-info "Running: terraform init"
+info "Running: ${INFRA_CLI} init"
 cd "$TF_DIR"
 
-if terraform init -input=false; then
-  ok "Terraform initialized successfully."
+if $INFRA_CLI init -input=false; then
+  ok "Initialization completed successfully."
 else
-  fail "Terraform init failed. Check backend configuration and provider credentials."
+  fail "Initialization failed. Check backend configuration and provider credentials."
   exit 1
 fi
 
 pause
 
 # ---------------------------------------------------------------------------
-step "Terraform plan"
+step "Plan infrastructure changes"
 
-info "Running: terraform plan -out=tfplan"
+info "Running: ${INFRA_CLI} plan -out=tfplan"
 
-if terraform plan -out=tfplan; then
+if $INFRA_CLI plan -out=tfplan; then
   ok "Plan complete. Review the changes above carefully."
   echo ""
   echo -e "  ${BOLD}REVIEW CHECKLIST:${NC}"
   echo "  • Number of resources to add/change/destroy looks reasonable"
   echo "  • No unexpected destroys"
   echo "  • Lambda functions use the correct model IDs"
-  echo "  • Secrets Manager secrets will be created"
+  echo "  • Existing secret ARNs in tfvars point to real values"
   echo "  • SQS queues and DynamoDB tables will be created"
 else
-  fail "Terraform plan failed. Fix the errors above."
+  fail "Plan failed. Fix the errors above."
   exit 1
 fi
 
@@ -296,66 +303,50 @@ if ! ask_yes_no "Does the plan look correct? Ready to apply?"; then
 fi
 
 # ---------------------------------------------------------------------------
-step "Terraform apply"
+step "Apply infrastructure changes"
 
-info "Running: terraform apply tfplan"
+info "Running: ${INFRA_CLI} apply tfplan"
 
-if terraform apply tfplan; then
-  ok "Terraform apply completed successfully!"
+if $INFRA_CLI apply tfplan; then
+  ok "Apply completed successfully!"
 else
-  fail "Terraform apply failed. Check errors above."
-  fail "Resources may be partially created. Run 'terraform plan' to see current state."
+  fail "Apply failed. Check errors above."
+  fail "Resources may be partially created. Run '${INFRA_CLI} plan' to see current state."
   exit 1
 fi
 
 echo ""
 echo -e "  ${BOLD}CAPTURE THESE OUTPUTS:${NC}"
 echo ""
-terraform output -json | python3 -c "
+$INFRA_CLI output -json | python3 -c "
 import json, sys
 outputs = json.load(sys.stdin)
 for k, v in sorted(outputs.items()):
     val = v.get('value', '')
     if val:
         print(f'    {k} = {val}')
-" 2>/dev/null || terraform output
+" 2>/dev/null || $INFRA_CLI output
 
 pause
 
 # ===========================================================================
-# PHASE 5: Populate secrets
+# PHASE 5: Verify secrets
 # ===========================================================================
 
-step "Populate AWS Secrets Manager values"
+step "Verify AWS Secrets Manager values"
 
 echo ""
-echo -e "  ${BOLD}You must now set the actual secret values.${NC}"
-echo "  Terraform created empty placeholder secrets. Fill them with real values."
+echo -e "  ${BOLD}Confirm the existing Secrets Manager values are populated.${NC}"
+echo "  Default deployment mode uses existing secret ARNs from terraform.tfvars."
 echo ""
-echo "  Run these commands (replace <VALUE> with real values):"
+echo "  Inspect effective secret ARNs from IaC outputs:"
 echo ""
-echo -e "  ${CYAN}# 1. GitHub webhook secret${NC}"
-echo '  aws secretsmanager put-secret-value \'
-echo '    --secret-id "$(terraform output -raw github_webhook_secret_arn)" \'
-echo '    --secret-string "<YOUR_WEBHOOK_SECRET>"'
+echo -e "  ${CYAN}${INFRA_CLI} output -json | python3 -c 'import json,sys; print(json.load(sys.stdin)["secret_arns"]["value"])'${NC}"
 echo ""
-echo -e "  ${CYAN}# 2. GitHub App private key PEM${NC}"
-echo '  aws secretsmanager put-secret-value \'
-echo '    --secret-id "$(terraform output -raw github_app_private_key_secret_arn)" \'
-echo '    --secret-string "$(cat /path/to/your-app.private-key.pem)"'
-echo ""
-echo -e "  ${CYAN}# 3. GitHub App IDs (JSON)${NC}"
-echo '  aws secretsmanager put-secret-value \'
-echo '    --secret-id "$(terraform output -raw github_app_ids_secret_arn)" \'
-echo '    --secret-string '"'"'{"app_id":"<APP_ID>","installation_id":"<INSTALL_ID>"}'"'"''
-echo ""
-echo -e "  ${CYAN}# 4. Atlassian credentials (if chatbot/KB sync enabled)${NC}"
-echo '  aws secretsmanager put-secret-value \'
-echo '    --secret-id "$(terraform output -raw atlassian_credentials_secret_arn)" \'
-echo '    --secret-string '"'"'{"base_url":"https://yourorg.atlassian.net","email":"svc@co.com","api_token":"<TOKEN>"}'"'"''
+echo "  If any payload is missing, update that secret ARN directly in Secrets Manager."
 echo ""
 
-info "Run the commands above in another terminal, then come back here."
+info "After confirming secret payloads, continue."
 
 pause
 
@@ -365,7 +356,7 @@ pause
 
 step "Configure GitHub App webhook"
 
-WEBHOOK_URL=$(cd "$TF_DIR" && terraform output -raw webhook_url 2>/dev/null || echo "<run terraform output to get>")
+WEBHOOK_URL=$(cd "$TF_DIR" && $INFRA_CLI output -raw webhook_url 2>/dev/null || echo "<run ${INFRA_CLI} output -raw webhook_url>")
 
 echo ""
 echo "  Go to your GitHub App settings → Webhooks and set:"
@@ -390,12 +381,12 @@ echo -e "  ${BOLD}Test 1: Webhook receiver${NC}"
 echo "  Create or update a PR in a repo with the GitHub App installed."
 echo "  Then check CloudWatch Logs:"
 echo ""
-echo -e "  ${CYAN}aws logs tail /aws/lambda/\$(terraform output -raw webhook_function_name) --since 5m${NC}"
+echo -e "  ${CYAN}aws logs describe-log-groups --log-group-name-prefix '/aws/lambda/ai-pr-reviewer' --query 'logGroups[].logGroupName' --output table${NC}"
 echo ""
 echo -e "  ${BOLD}Test 2: Worker processing${NC}"
 echo "  After the webhook fires, the worker should pick up the SQS message:"
 echo ""
-echo -e "  ${CYAN}aws logs tail /aws/lambda/\$(terraform output -raw worker_function_name) --since 5m${NC}"
+echo -e "  ${CYAN}aws logs tail /aws/lambda/ai-pr-reviewer-worker --since 5m${NC}"
 echo ""
 
 if ask_yes_no "Is dry_run=true? (Expected for first deployment)"; then
@@ -420,7 +411,7 @@ if ask_yes_no "Do you want to deploy the private web UI?"; then
   echo ""
   echo "    A) Terraform EC2 with internal NLB + TLS (already in your tfvars)"
   echo "       → Set webapp_hosting_enabled=true, webapp_private_only=true"
-  echo "       → Re-run terraform plan/apply"
+  echo "       → Re-run ${INFRA_CLI} plan/apply"
   echo ""
   echo "    B) CloudFormation — EC2 only (existing VPC)"
   echo "       → Follow: docs/cloudformation_private_vpc_quickstart.md"
@@ -497,12 +488,12 @@ echo ""
 echo "  Next steps:"
 echo "    1. Monitor CloudWatch Logs for the first few PR reviews"
 echo "    2. When confident, set dry_run = false in terraform.tfvars"
-echo "    3. Re-run: terraform plan && terraform apply"
+echo "    3. Re-run: ${INFRA_CLI} plan && ${INFRA_CLI} apply"
 echo ""
 echo "  Key docs:"
 echo "    • Full Day-1 checklist:        docs/day1_deployment_checklist.md"
 echo "    • Private VPC webapp runbook:   docs/private_vpc_webapp_runbook.md"
 echo "    • Operator quick card:          docs/private_vpc_operator_quick_card.md"
 echo ""
-echo -e "  ${BOLD}Rollback:${NC} terraform destroy -auto-approve  (or targeted: terraform apply with previous tfvars)"
+echo -e "  ${BOLD}Rollback:${NC} ${INFRA_CLI} destroy -auto-approve  (or targeted: ${INFRA_CLI} apply with previous tfvars)"
 echo ""

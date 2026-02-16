@@ -61,6 +61,7 @@ Map private DNS to the internal NLB name, for example:
 - EC2 has no public IP
 - NLB is internal
 - Endpoint reachable only over private network path (VPN/DX/TGW/etc.)
+- For firewall rules: allow client traffic to internal NLB on `443`; backend remains EC2 private IP on `80`
 
 ## 6) Optional: update stack (copy/paste)
 

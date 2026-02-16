@@ -22,6 +22,16 @@ github_api_base = "<GITHUB_API_URL>"      # https://api.github.com or https://<G
 github_allowed_repos = [
   # "my-org/my-repo"                     # leave empty to allow all installed repos
 ]
+
+# Existing Secrets Manager ARNs only (no Terraform secret creation)
+create_secrets_manager_secrets = false
+existing_github_webhook_secret_arn         = "<GITHUB_WEBHOOK_SECRET_ARN>"
+existing_github_app_private_key_secret_arn = "<GITHUB_APP_PRIVATE_KEY_SECRET_ARN>"
+existing_github_app_ids_secret_arn         = "<GITHUB_APP_IDS_SECRET_ARN>"
+existing_atlassian_credentials_secret_arn  = "<ATLASSIAN_CREDENTIALS_SECRET_ARN>"
+existing_chatbot_api_token_secret_arn      = "" # set if chatbot_auth_mode="token"
+existing_teams_adapter_token_secret_arn    = "" # set if teams_adapter_enabled=true
+
 chatbot_auth_mode         = "github_oauth"
 github_oauth_allowed_orgs = ["<YOUR_ORG>"]
 
@@ -109,6 +119,8 @@ webapp_ec2_instance_type = "t3.small"
 # webapp_tls_enabled             = true
 # webapp_tls_acm_certificate_arn = "<ACM_CERT_ARN>"
 # webapp_tls_subnet_ids          = ["<SUBNET_A>", "<SUBNET_B>"]
+# NOTE: with internal TLS enabled, users hit HTTPS/443 on the internal NLB.
+# The NLB forwards to webapp_private_ip:80 on the EC2 backend.
 
 # ── Observability ────────────────────────────────────────────────────────
 # lambda_tracing_enabled              = true   # X-Ray (default: true)

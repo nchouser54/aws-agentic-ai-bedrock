@@ -24,6 +24,13 @@ webapp_hosting_enabled = true
 webapp_hosting_mode    = "ec2_eip"
 webapp_private_only    = true
 
+# Existing Secrets Manager ARNs only (no Terraform secret creation)
+create_secrets_manager_secrets         = false
+existing_github_webhook_secret_arn         = "<GITHUB_WEBHOOK_SECRET_ARN>"
+existing_github_app_private_key_secret_arn = "<GITHUB_APP_PRIVATE_KEY_SECRET_ARN>"
+existing_github_app_ids_secret_arn         = "<GITHUB_APP_IDS_SECRET_ARN>"
+existing_atlassian_credentials_secret_arn  = "<ATLASSIAN_CREDENTIALS_SECRET_ARN>"
+
 # Private subnet for webapp host
 webapp_ec2_subnet_id     = "subnet-PRIVATE-WEBAPP"
 webapp_ec2_instance_type = "t3.micro"
@@ -78,7 +85,8 @@ Expected behavior:
 Give these values to your LB/platform team:
 
 - Target type recommendation: `instance` (use `webapp_instance_id`) or `ip` (use `webapp_private_ip`)
-- Backend port: `80`
+- Frontend listener port: `443` (internal HTTPS)
+- Backend target port: `80`
 - Health check path: `/`
 
 If they use target-type `instance`, provide:
@@ -116,6 +124,12 @@ Create/update private DNS to point to your existing internal LB hostname, for ex
 - Confirm private DNS record exists and resolves internally
 - Confirm user network has path to internal LB (VPN/DX/TGW)
 - Confirm enterprise LB listener/routing policy includes webapp rule
+
+### UI can load but chatbot call fails (401/403/503)
+
+- For `chatbot_auth_mode="token"`, ensure callers send `X-Api-Token` and `existing_chatbot_api_token_secret_arn` is set.
+- For `chatbot_auth_mode="jwt"`/`"github_oauth"`, ensure callers send bearer token and `webapp_default_auth_mode` is `bearer`.
+- Verify `existing_atlassian_credentials_secret_arn` secret has valid Jira/Confluence URL + token values.
 
 ### Need module-managed internal TLS instead of existing LB
 

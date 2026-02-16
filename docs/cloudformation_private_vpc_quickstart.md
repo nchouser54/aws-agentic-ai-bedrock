@@ -55,6 +55,8 @@ aws cloudformation describe-stacks \
 - Security group ingress is internal CIDRs only
 - No public load balancer created by this stack
 
+If integrating with an existing internal enterprise LB, use output `WebappPrivateIp` (or `WebappInstanceId`) as backend target on port `80`, and expose port `443` on the LB listener.
+
 ## 5) Optional: update stack (copy/paste)
 
 ```bash

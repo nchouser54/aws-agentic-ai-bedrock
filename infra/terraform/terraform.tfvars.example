@@ -131,7 +131,17 @@ github_kb_max_files_per_repo = 200
 teams_adapter_enabled = false
 teams_adapter_token   = ""
 
-# API authentication (leave empty to disable auth)
+# Secrets Manager mode
+# Recommended: use existing secrets only (no Terraform secret creation)
+create_secrets_manager_secrets = false
+existing_github_webhook_secret_arn         = "arn:aws-us-gov:secretsmanager:us-gov-west-1:123456789012:secret:ai-pr-reviewer/prod/github_webhook_secret"
+existing_github_app_private_key_secret_arn = "arn:aws-us-gov:secretsmanager:us-gov-west-1:123456789012:secret:ai-pr-reviewer/prod/github_app_private_key_pem"
+existing_github_app_ids_secret_arn         = "arn:aws-us-gov:secretsmanager:us-gov-west-1:123456789012:secret:ai-pr-reviewer/prod/github_app_ids"
+existing_atlassian_credentials_secret_arn  = "arn:aws-us-gov:secretsmanager:us-gov-west-1:123456789012:secret:ai-pr-reviewer/prod/atlassian_credentials"
+existing_chatbot_api_token_secret_arn      = "" # required when chatbot_auth_mode="token"
+existing_teams_adapter_token_secret_arn    = "" # required when teams_adapter_enabled=true
+
+# Optional: only used if create_secrets_manager_secrets=true
 chatbot_api_token = ""
 
 # Chatbot route login/auth mode:

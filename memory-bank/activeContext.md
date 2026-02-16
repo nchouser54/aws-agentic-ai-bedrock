@@ -26,7 +26,10 @@
 - Support strict private-only webapp hosting with no public IP or public EIP allocation.
 - Provide CloudFormation deploy option for private webapp into existing VPC/subnet (no VPC creation).
 - Provide CloudFormation deploy option for existing VPC + internal NLB TLS private endpoint.
+- Enforce existing Secrets Manager ARNs as default Terraform mode (no secret creation) for private-VPC rollouts.
+- Align private-VPC docs with 443 firewall path (client -> internal LB 443, LB -> EC2 private IP 80).
+- Reduce chatbot 401/403 setup drift by defaulting web UI auth mode to token unless explicitly using bearer auth flows.
 
 ## Current Blockers
 
-- None currently; validate Bedrock KB IDs/data source IDs and enterprise hosted GitHub OAuth app client configuration in target environment before deploy.
+- None currently; validate secret ARN values and internal LB listener/target mapping in target environment before deploy.

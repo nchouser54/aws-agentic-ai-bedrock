@@ -793,15 +793,57 @@ variable "teams_adapter_enabled" {
   default     = false
 }
 
+variable "create_secrets_manager_secrets" {
+  description = "When true, Terraform creates Secrets Manager secrets with placeholder values. When false (recommended), Terraform uses existing secret ARNs only."
+  type        = bool
+  default     = false
+}
+
+variable "existing_github_webhook_secret_arn" {
+  description = "Existing Secrets Manager ARN containing GitHub webhook signing secret"
+  type        = string
+  default     = ""
+}
+
+variable "existing_github_app_private_key_secret_arn" {
+  description = "Existing Secrets Manager ARN containing GitHub App private key PEM"
+  type        = string
+  default     = ""
+}
+
+variable "existing_github_app_ids_secret_arn" {
+  description = "Existing Secrets Manager ARN containing GitHub App IDs JSON ({ app_id, installation_id })"
+  type        = string
+  default     = ""
+}
+
+variable "existing_atlassian_credentials_secret_arn" {
+  description = "Existing Secrets Manager ARN containing Atlassian credentials JSON"
+  type        = string
+  default     = ""
+}
+
+variable "existing_chatbot_api_token_secret_arn" {
+  description = "Existing Secrets Manager ARN containing chatbot X-Api-Token value (required when chatbot_auth_mode=token)"
+  type        = string
+  default     = ""
+}
+
+variable "existing_teams_adapter_token_secret_arn" {
+  description = "Existing Secrets Manager ARN containing Teams adapter token value (required when teams_adapter_enabled=true)"
+  type        = string
+  default     = ""
+}
+
 variable "teams_adapter_token" {
-  description = "Optional shared token required in X-Teams-Adapter-Token header"
+  description = "Optional shared token used only when create_secrets_manager_secrets=true to seed a managed teams token secret"
   type        = string
   default     = ""
   sensitive   = true
 }
 
 variable "chatbot_api_token" {
-  description = "Optional shared API token required in X-Api-Token header for the chatbot endpoint"
+  description = "Optional shared token used only when create_secrets_manager_secrets=true to seed a managed chatbot token secret"
   type        = string
   default     = ""
   sensitive   = true
@@ -845,7 +887,7 @@ variable "webapp_default_chatbot_url" {
 variable "webapp_default_auth_mode" {
   description = "Default auth mode pre-filled in EC2-hosted web UI (token, bearer, or none)."
   type        = string
-  default     = "bearer"
+  default     = "token"
 
   validation {
     condition     = contains(["token", "bearer", "none"], var.webapp_default_auth_mode)
@@ -1039,6 +1081,12 @@ variable "webapp_ec2_subnet_id" {
   default     = ""
 }
 
+variable "webapp_ec2_private_ip" {
+  description = "Optional fixed private IPv4 address for EC2 webapp instance (recommended for stable internal backend targeting)"
+  type        = string
+  default     = ""
+}
+
 variable "webapp_ec2_instance_type" {
   description = "EC2 instance type for static webapp hosting when webapp_hosting_mode=ec2_eip"
   type        = string
@@ -1083,6 +1131,12 @@ variable "webapp_tls_acm_certificate_arn" {
 
 variable "webapp_tls_subnet_ids" {
   description = "Public subnet IDs for NLB static-IP subnet mappings when webapp_tls_enabled=true"
+  type        = list(string)
+  default     = []
+}
+
+variable "webapp_tls_private_ips" {
+  description = "Optional fixed private IPv4 addresses for INTERNAL NLB subnet mappings when webapp_private_only=true and webapp_tls_enabled=true. Must align 1:1 with webapp_tls_subnet_ids order."
   type        = list(string)
   default     = []
 }

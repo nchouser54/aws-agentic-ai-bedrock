@@ -14,12 +14,12 @@ output "idempotency_table_name" {
 }
 
 output "secret_arns" {
-  description = "Secret ARNs to populate after deploy"
+  description = "Effective secret ARNs in use (managed by Terraform or existing)"
   value = {
-    github_webhook_secret  = aws_secretsmanager_secret.github_webhook_secret.arn
-    github_app_private_key = aws_secretsmanager_secret.github_app_private_key_pem.arn
-    github_app_ids         = aws_secretsmanager_secret.github_app_ids.arn
-    atlassian_credentials  = aws_secretsmanager_secret.atlassian_credentials.arn
+    github_webhook_secret  = local.github_webhook_secret_arn
+    github_app_private_key = local.github_app_private_key_secret_arn
+    github_app_ids         = local.github_app_ids_secret_arn
+    atlassian_credentials  = local.atlassian_credentials_secret_arn
   }
 }
 
@@ -115,6 +115,16 @@ output "webapp_instance_id" {
 output "webapp_private_ip" {
   description = "Private IP address of the EC2-hosted static chatbot web UI in ec2_eip mode"
   value       = var.webapp_hosting_enabled && var.webapp_hosting_mode == "ec2_eip" ? aws_instance.webapp[0].private_ip : ""
+}
+
+output "webapp_configured_private_ip" {
+  description = "Configured fixed private IP for EC2 webapp instance (empty when auto-assigned)"
+  value       = var.webapp_hosting_enabled && var.webapp_hosting_mode == "ec2_eip" ? trimspace(var.webapp_ec2_private_ip) : ""
+}
+
+output "webapp_https_private_ips" {
+  description = "Configured internal NLB private IPs for HTTPS/443 access (when webapp_private_only=true and webapp_tls_private_ips provided)"
+  value       = var.webapp_hosting_enabled && var.webapp_hosting_mode == "ec2_eip" && var.webapp_private_only && var.webapp_tls_enabled ? var.webapp_tls_private_ips : []
 }
 
 output "webapp_tls_static_ips" {
