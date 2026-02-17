@@ -93,8 +93,12 @@ worker_lambda_architecture = "arm64"
 worker_lambda_memory_size = 768
 chatbot_lambda_architecture = "arm64"
 chatbot_lambda_memory_size = 384
-chatbot_image_model_id = "amazon.nova-canvas-v1:0"
-chatbot_image_enabled = false
+
+# Image generation (NOT AVAILABLE IN GOVCLOUD us-gov-west-1)
+# WARNING: Amazon Titan, Nova Canvas, and Stability AI models are NOT in GovCloud
+# GovCloud users: Keep chatbot_image_enabled = false or use SageMaker alternative
+chatbot_image_model_id = "amazon.nova-canvas-v1:0"  # Not available in GovCloud
+chatbot_image_enabled = false  # MUST be false for GovCloud
 chatbot_image_default_size = "1024x1024"
 chatbot_image_safety_enabled = true
 chatbot_image_banned_terms = ["explicit sexual", "nudity", "child sexual", "self-harm", "graphic gore", "extreme violence", "dismemberment"]

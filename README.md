@@ -187,6 +187,7 @@ Image generation endpoint:
 
 - `POST /chatbot/image`
 - Requires `CHATBOT_IMAGE_ENABLED=true` (Terraform default is `false` to avoid image-model spend)
+- **⚠️ GovCloud Warning**: NO Bedrock image models available in `us-gov-west-1`. GovCloud users must keep this disabled or use SageMaker alternative.
 - JSON body:
   - `query` (required image prompt)
   - `model_id` (optional Bedrock image model override)
@@ -195,11 +196,13 @@ Image generation endpoint:
 
 Image safety and rate controls:
 
-- `CHATBOT_IMAGE_ENABLED=true|false` (default `false` in Terraform)
+- `CHATBOT_IMAGE_ENABLED=true|false` (default `false` in Terraform, **MUST be false for GovCloud**)
 - `CHATBOT_IMAGE_SAFETY_ENABLED=true|false`
 - `CHATBOT_IMAGE_BANNED_TERMS` (CSV blocked phrases)
 - `CHATBOT_IMAGE_USER_REQUESTS_PER_MINUTE` (default `6`)
 - `CHATBOT_IMAGE_CONVERSATION_REQUESTS_PER_MINUTE` (default `3`)
+
+**GovCloud Image Generation**: Amazon Titan, Nova Canvas, and Stability AI models are NOT available in `us-gov-west-1`. For image generation in GovCloud, deploy an open-source model on SageMaker (JumpStart GPU instances).
 
 Conversation memory options (optional):
 

@@ -640,13 +640,13 @@ variable "chatbot_model_pricing_json" {
 }
 
 variable "chatbot_image_model_id" {
-  description = "Bedrock image model ID for /chatbot/image endpoint"
+  description = "Bedrock image model ID for /chatbot/image endpoint (WARNING: NO Bedrock image models available in GovCloud - must use SageMaker alternative)"
   type        = string
   default     = "amazon.nova-canvas-v1:0"
 }
 
 variable "chatbot_image_enabled" {
-  description = "Enable /chatbot/image endpoint (disable to avoid image-model spend)"
+  description = "Enable /chatbot/image endpoint (WARNING: GovCloud users MUST set to false - no Bedrock image models available in us-gov-west-1)"
   type        = bool
   default     = false
 }

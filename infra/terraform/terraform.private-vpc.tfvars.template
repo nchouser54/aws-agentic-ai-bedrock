@@ -99,7 +99,11 @@ worker_lambda_architecture = "arm64"
 worker_lambda_memory_size = 768
 chatbot_lambda_architecture = "arm64"
 chatbot_lambda_memory_size = 384
-chatbot_image_enabled = false
+
+# Image generation - WARNING: NOT AVAILABLE IN GOVCLOUD us-gov-west-1
+# Amazon Titan, Nova Canvas, and Stability AI models are NOT in GovCloud
+# GovCloud users: Keep chatbot_image_enabled = false
+chatbot_image_enabled = false  # MUST be false for GovCloud
 chatbot_image_user_requests_per_minute = 6
 chatbot_image_conversation_requests_per_minute = 3
 

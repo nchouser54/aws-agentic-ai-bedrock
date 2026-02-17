@@ -109,6 +109,25 @@ These resources are required by all features and are always created by Terraform
 
 See: [AWS GovCloud Bedrock Documentation](https://docs.aws.amazon.com/govcloud-us/latest/UserGuide/govcloud-bedrock.html)
 
+#### GovCloud Image Generation Limitation
+
+**⛔ NO Bedrock image models available in `us-gov-west-1`**:
+- ❌ Amazon Titan Image Generator G1 / G1 v2
+- ❌ Amazon Nova Canvas
+- ❌ Stability AI (Stable Diffusion, Stable Image)
+
+**Configuration Required**: 
+- Keep `chatbot_image_enabled = false` (default)
+- The `/chatbot/image` endpoint will not work in GovCloud
+
+**Alternative for Image Generation**:
+If you need image generation in GovCloud, deploy an open-source model on **SageMaker** using:
+- SageMaker JumpStart (available in GovCloud)
+- GPU instances (e.g., ml.g5.xlarge, availability permitting)
+- Open models: Stable Diffusion XL, SDXL Turbo, or similar
+
+Contact your AWS SA for SageMaker image generation deployment guidance.
+
 ### 1.1 Local Toolchain (recommended to avoid drift)
 
 This repo pins recommended local versions in:
@@ -812,6 +831,16 @@ Find these in your GitHub App settings.
 - Verify the model is enabled in your GovCloud Bedrock console at `us-gov-west-1`
 - Check that your model ID matches: `anthropic.claude-3-5-sonnet-20240620-v1:0` (default)
 - Ensure IAM policy includes `bedrock:InvokeModel` permission
+
+### Image Generation: Not working or 400 error
+
+- **GovCloud users**: Image generation is NOT available - no Bedrock image models in `us-gov-west-1`
+  - Verify `chatbot_image_enabled = false` in your Terraform configuration
+  - Do NOT attempt to use `/chatbot/image` endpoint in GovCloud
+  - Alternative: Deploy SageMaker JumpStart with GPU instances for open-source image models
+- **Commercial AWS regions**: Verify `CHATBOT_IMAGE_ENABLED=true` in Lambda environment
+  - Ensure image model is enabled in Bedrock console (e.g., Amazon Nova Canvas)
+  - Check IAM permissions include `bedrock:InvokeModel` for image models
 
 ### Lambda: Timeout
 
