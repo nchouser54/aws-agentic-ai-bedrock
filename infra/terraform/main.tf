@@ -1564,8 +1564,6 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
       CHATBOT_BUDGET_TTL_DAYS                        = tostring(var.chatbot_budget_ttl_days)
       CHATBOT_ROUTER_LOW_COST_BEDROCK_MODEL_ID       = var.chatbot_router_low_cost_bedrock_model_id
       CHATBOT_ROUTER_HIGH_QUALITY_BEDROCK_MODEL_ID   = var.chatbot_router_high_quality_bedrock_model_id
-      CHATBOT_ROUTER_LOW_COST_ANTHROPIC_MODEL_ID     = var.chatbot_router_low_cost_anthropic_model_id
-      CHATBOT_ROUTER_HIGH_QUALITY_ANTHROPIC_MODEL_ID = var.chatbot_router_high_quality_anthropic_model_id
       CHATBOT_MODEL_PRICING_JSON                     = var.chatbot_model_pricing_json
       CHATBOT_WEBSOCKET_DEFAULT_CHUNK_CHARS          = tostring(var.chatbot_websocket_default_chunk_chars)
       CHATBOT_METRICS_ENABLED                        = tostring(var.chatbot_observability_enabled)

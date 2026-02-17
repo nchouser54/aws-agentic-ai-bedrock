@@ -197,36 +197,6 @@ variable "chatbot_allowed_model_ids" {
   default     = []
 }
 
-variable "chatbot_allowed_anthropic_model_ids" {
-  description = "Deprecated: unused in Bedrock-only deployment"
-  type        = list(string)
-  default     = []
-}
-
-variable "chatbot_enable_anthropic_direct" {
-  description = "Deprecated: unused in Bedrock-only deployment"
-  type        = bool
-  default     = false
-}
-
-variable "chatbot_anthropic_api_key_secret_arn" {
-  description = "Deprecated: unused in Bedrock-only deployment"
-  type        = string
-  default     = ""
-}
-
-variable "chatbot_anthropic_api_base" {
-  description = "Deprecated: unused in Bedrock-only deployment"
-  type        = string
-  default     = "https://api.anthropic.com"
-}
-
-variable "chatbot_anthropic_model_id" {
-  description = "Deprecated: unused in Bedrock-only deployment"
-  type        = string
-  default     = "claude-sonnet-4-5"
-}
-
 variable "chatbot_github_live_enabled" {
   description = "Enable optional live GitHub code/doc lookup during chatbot live/hybrid fallback mode"
   type        = bool
@@ -555,18 +525,6 @@ variable "chatbot_router_low_cost_bedrock_model_id" {
 
 variable "chatbot_router_high_quality_bedrock_model_id" {
   description = "Optional high-quality Bedrock model override for dynamic routing"
-  type        = string
-  default     = ""
-}
-
-variable "chatbot_router_low_cost_anthropic_model_id" {
-  description = "Optional low-cost Anthropic-direct model for dynamic routing"
-  type        = string
-  default     = ""
-}
-
-variable "chatbot_router_high_quality_anthropic_model_id" {
-  description = "Optional high-quality Anthropic-direct model override for dynamic routing"
   type        = string
   default     = ""
 }

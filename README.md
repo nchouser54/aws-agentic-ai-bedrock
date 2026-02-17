@@ -168,7 +168,6 @@ Dynamic routing + budget controls:
 - `CHATBOT_BUDGET_HARD_LIMIT_USD` (default `0.75`)
 - `CHATBOT_BUDGET_TTL_DAYS` (default `90`)
 - `CHATBOT_ROUTER_LOW_COST_BEDROCK_MODEL_ID` / `CHATBOT_ROUTER_HIGH_QUALITY_BEDROCK_MODEL_ID`
-- `CHATBOT_ROUTER_LOW_COST_ANTHROPIC_MODEL_ID` / `CHATBOT_ROUTER_HIGH_QUALITY_ANTHROPIC_MODEL_ID`
 - `CHATBOT_MODEL_PRICING_JSON` (optional model pricing map for estimated cost accounting)
 - API error: `conversation_budget_exceeded` (429)
 

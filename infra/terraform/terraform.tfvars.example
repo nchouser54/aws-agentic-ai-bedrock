@@ -46,11 +46,6 @@ chatbot_allowed_model_ids = [
   # "amazon.nova-pro-v1:0",
   # "anthropic.claude-3-7-sonnet-20250219-v1:0",
 ]
-chatbot_allowed_anthropic_model_ids = []
-chatbot_enable_anthropic_direct = false
-chatbot_anthropic_api_key_secret_arn = ""
-chatbot_anthropic_api_base = "https://api.anthropic.com"
-chatbot_anthropic_model_id = "claude-sonnet-4-5"
 chatbot_github_live_enabled = false
 chatbot_github_live_repos = []
 chatbot_github_live_max_results = 2
@@ -88,8 +83,6 @@ chatbot_jira_max_results = 3
 chatbot_confluence_max_results = 3
 chatbot_router_low_cost_bedrock_model_id = "amazon.nova-lite-v1:0"
 chatbot_router_high_quality_bedrock_model_id = ""
-chatbot_router_low_cost_anthropic_model_id = ""
-chatbot_router_high_quality_anthropic_model_id = ""
 chatbot_model_pricing_json = "{}"
 worker_lambda_architecture = "arm64"
 worker_lambda_memory_size = 768
