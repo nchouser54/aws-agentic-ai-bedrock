@@ -1039,7 +1039,6 @@ resource "aws_iam_policy" "chatbot_policy" {
           var.chatbot_enabled && var.teams_adapter_enabled ? local.teams_adapter_token_secret_arn : "",
           var.chatbot_enabled && var.chatbot_github_live_enabled ? local.github_app_private_key_secret_arn : "",
           var.chatbot_enabled && var.chatbot_github_live_enabled ? local.github_app_ids_secret_arn : "",
-          var.chatbot_enabled && var.chatbot_enable_anthropic_direct && length(trimspace(var.chatbot_anthropic_api_key_secret_arn)) > 0 ? var.chatbot_anthropic_api_key_secret_arn : "",
         ])
       },
       {
@@ -1526,11 +1525,6 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
       CHATBOT_LLM_PROVIDER                           = var.chatbot_llm_provider
       CHATBOT_ALLOWED_LLM_PROVIDERS                  = join(",", var.chatbot_allowed_llm_providers)
       CHATBOT_ALLOWED_MODEL_IDS                      = join(",", var.chatbot_allowed_model_ids)
-      CHATBOT_ALLOWED_ANTHROPIC_MODEL_IDS            = join(",", var.chatbot_allowed_anthropic_model_ids)
-      CHATBOT_ENABLE_ANTHROPIC_DIRECT                = tostring(var.chatbot_enable_anthropic_direct)
-      CHATBOT_ANTHROPIC_API_KEY_SECRET_ARN           = var.chatbot_anthropic_api_key_secret_arn
-      CHATBOT_ANTHROPIC_API_BASE                     = var.chatbot_anthropic_api_base
-      CHATBOT_ANTHROPIC_MODEL_ID                     = var.chatbot_anthropic_model_id
       CHATBOT_IMAGE_MODEL_ID                         = var.chatbot_image_model_id
       CHATBOT_IMAGE_ENABLED                          = tostring(var.chatbot_image_enabled)
       CHATBOT_IMAGE_SIZE                             = var.chatbot_image_default_size

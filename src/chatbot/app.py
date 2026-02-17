@@ -14,7 +14,6 @@ from typing import Any, Callable
 import boto3
 
 from shared.atlassian_client import AtlassianClient
-from shared.anthropic_chat import AnthropicChatClient
 from shared.bedrock_chat import BedrockChatClient
 from shared.bedrock_kb import BedrockKnowledgeBaseClient
 from shared.constants import DEFAULT_REGION, MAX_QUERY_FILTER_LENGTH, MAX_QUERY_LENGTH
@@ -25,7 +24,7 @@ from shared.logging import get_logger
 logger = get_logger("jira_confluence_chatbot")
 ALLOWED_RETRIEVAL_MODES = {"live", "kb", "hybrid"}
 ALLOWED_ASSISTANT_MODES = {"contextual", "general"}
-ALLOWED_LLM_PROVIDERS = {"bedrock", "anthropic_direct"}
+ALLOWED_LLM_PROVIDERS = {"bedrock"}
 _VALID_CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _VALID_ATLASSIAN_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{15,127}$")
 _VALID_FEEDBACK_SENTIMENTS = {"positive", "negative", "neutral"}
@@ -54,7 +53,6 @@ _SENSITIVE_STORE_PATTERNS = (
 _cloudwatch: Any | None = None
 
 _cached_api_token: str | None = None
-_cached_anthropic_api_key: str | None = None
 _dynamodb_client_cached: Any | None = None
 _secrets_client_cached: Any | None = None
 
@@ -185,7 +183,6 @@ def _error_status_code(error_code: str) -> int:
     if normalized in {
         "provider_not_allowed",
         "model_not_allowed",
-        "anthropic_direct_disabled",
         "data_exfiltration_attempt",
         "atlassian_user_auth_disabled",
         "atlassian_session_broker_disabled",
@@ -251,10 +248,7 @@ def _allowed_llm_providers() -> set[str]:
         filtered = {item for item in allowed if item in ALLOWED_LLM_PROVIDERS}
         return filtered or {"bedrock"}
 
-    providers = {"bedrock"}
-    if os.getenv("CHATBOT_ENABLE_ANTHROPIC_DIRECT", "false").strip().lower() == "true":
-        providers.add("anthropic_direct")
-    return providers
+    return {"bedrock"}
 
 
 def _validate_provider(provider: str) -> None:
@@ -285,21 +279,6 @@ def _allowed_bedrock_model_ids() -> set[str]:
     return allowlist
 
 
-def _allowed_anthropic_model_ids() -> set[str]:
-    raw = os.getenv("CHATBOT_ALLOWED_ANTHROPIC_MODEL_IDS", "").strip()
-    if raw:
-        allowlist = {item.strip() for item in raw.split(",") if item.strip()}
-    else:
-        default_model = os.getenv("CHATBOT_ANTHROPIC_MODEL_ID", "claude-sonnet-4-5").strip()
-        allowlist = {default_model} if default_model else set()
-
-    for env_name in ("CHATBOT_ROUTER_LOW_COST_ANTHROPIC_MODEL_ID", "CHATBOT_ROUTER_HIGH_QUALITY_ANTHROPIC_MODEL_ID"):
-        candidate = os.getenv(env_name, "").strip()
-        if candidate:
-            allowlist.add(candidate)
-    return allowlist
-
-
 def _validate_bedrock_model_id(model_id: str) -> None:
     if not model_id:
         raise ValueError("model_id_required")
@@ -308,42 +287,13 @@ def _validate_bedrock_model_id(model_id: str) -> None:
         raise ValueError("model_not_allowed")
 
 
-def _validate_anthropic_model_id(model_id: str) -> None:
-    if not model_id:
-        raise ValueError("model_id_required")
-    allowlist = _allowed_anthropic_model_ids()
-    if not allowlist or model_id not in allowlist:
-        raise ValueError("model_not_allowed")
-
-
 def _validate_model_policy(provider: str, model_id: str) -> None:
     _validate_provider(provider)
-    if provider == "anthropic_direct":
-        _validate_anthropic_model_id(model_id)
-        return
     _validate_bedrock_model_id(model_id)
-
-
-def _load_anthropic_api_key() -> str:
-    global _cached_anthropic_api_key  # noqa: PLW0603
-    if _cached_anthropic_api_key is not None:
-        return _cached_anthropic_api_key
-
-    secret_arn = os.getenv("CHATBOT_ANTHROPIC_API_KEY_SECRET_ARN", "").strip()
-    if secret_arn:
-        client = _secrets_client()
-        resp = client.get_secret_value(SecretId=secret_arn)
-        _cached_anthropic_api_key = (resp.get("SecretString") or "").strip()
-    else:
-        _cached_anthropic_api_key = os.getenv("CHATBOT_ANTHROPIC_API_KEY", "").strip()
-
-    return _cached_anthropic_api_key
 
 
 def _resolve_model_id(provider: str, requested_model_id: str | None) -> str:
     requested = (requested_model_id or "").strip()
-    if provider == "anthropic_direct":
-        return requested or os.getenv("CHATBOT_ANTHROPIC_MODEL_ID", "claude-sonnet-4-5")
     return requested or os.getenv("CHATBOT_MODEL_ID", os.environ.get("BEDROCK_MODEL_ID", ""))
 
 
@@ -664,16 +614,11 @@ def _budget_ttl_days() -> int:
 
 
 def _router_low_cost_model(provider: str) -> str:
-    if provider == "anthropic_direct":
-        return (os.getenv("CHATBOT_ROUTER_LOW_COST_ANTHROPIC_MODEL_ID", "") or "").strip()
     return (os.getenv("CHATBOT_ROUTER_LOW_COST_BEDROCK_MODEL_ID", "") or "").strip()
 
 
 def _router_high_quality_model(provider: str, fallback: str) -> str:
-    if provider == "anthropic_direct":
-        candidate = (os.getenv("CHATBOT_ROUTER_HIGH_QUALITY_ANTHROPIC_MODEL_ID", "") or "").strip()
-    else:
-        candidate = (os.getenv("CHATBOT_ROUTER_HIGH_QUALITY_BEDROCK_MODEL_ID", "") or "").strip()
+    candidate = (os.getenv("CHATBOT_ROUTER_HIGH_QUALITY_BEDROCK_MODEL_ID", "") or "").strip()
     return candidate or fallback
 
 
@@ -1884,27 +1829,6 @@ def _answer_with_provider(
     if telemetry is not None:
         telemetry["provider"] = provider
         telemetry["model_id"] = model_id
-
-    if provider == "anthropic_direct":
-        enabled = os.getenv("CHATBOT_ENABLE_ANTHROPIC_DIRECT", "false").strip().lower() == "true"
-        if not enabled:
-            raise ValueError("anthropic_direct_disabled")
-
-        api_key = _load_anthropic_api_key()
-        if not api_key:
-            raise ValueError("anthropic_api_key_missing")
-
-        client = AnthropicChatClient(
-            api_key=api_key,
-            model_id=model_id,
-            api_base=os.getenv("CHATBOT_ANTHROPIC_API_BASE", "https://api.anthropic.com"),
-            max_tokens=int(os.getenv("CHATBOT_MAX_TOKENS", "1200")),
-        )
-        if telemetry is not None:
-            telemetry["guardrail_configured"] = False
-        if stream_callback is None:
-            return client.answer(system_prompt=system_prompt, user_prompt=user_prompt)
-        return client.stream_answer(system_prompt=system_prompt, user_prompt=user_prompt, on_delta=stream_callback)
 
     guardrail_identifier = (os.getenv("CHATBOT_GUARDRAIL_ID") or os.getenv("BEDROCK_GUARDRAIL_ID") or "").strip()
     guardrail_version = (os.getenv("CHATBOT_GUARDRAIL_VERSION") or os.getenv("BEDROCK_GUARDRAIL_VERSION") or "").strip()

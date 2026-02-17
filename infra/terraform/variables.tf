@@ -168,26 +168,26 @@ variable "chatbot_default_assistant_mode" {
 }
 
 variable "chatbot_llm_provider" {
-  description = "Default chatbot LLM provider: bedrock or anthropic_direct"
+  description = "Default chatbot LLM provider (Bedrock-only)"
   type        = string
   default     = "bedrock"
 
   validation {
-    condition     = contains(["bedrock", "anthropic_direct"], var.chatbot_llm_provider)
-    error_message = "Must be one of: bedrock, anthropic_direct."
+    condition     = var.chatbot_llm_provider == "bedrock"
+    error_message = "Only bedrock is supported."
   }
 }
 
 variable "chatbot_allowed_llm_providers" {
-  description = "Allow-list of requestable chatbot providers"
+  description = "Allow-list of requestable chatbot providers (Bedrock-only)"
   type        = list(string)
   default     = ["bedrock"]
 
   validation {
     condition = alltrue([
-      for provider in var.chatbot_allowed_llm_providers : contains(["bedrock", "anthropic_direct"], provider)
+      for provider in var.chatbot_allowed_llm_providers : provider == "bedrock"
     ])
-    error_message = "chatbot_allowed_llm_providers values must be bedrock and/or anthropic_direct."
+    error_message = "chatbot_allowed_llm_providers must only contain bedrock."
   }
 }
 
@@ -198,31 +198,31 @@ variable "chatbot_allowed_model_ids" {
 }
 
 variable "chatbot_allowed_anthropic_model_ids" {
-  description = "Optional allow-list of direct Anthropic model IDs that the chatbot may use when model_id override is supplied"
+  description = "Deprecated: unused in Bedrock-only deployment"
   type        = list(string)
   default     = []
 }
 
 variable "chatbot_enable_anthropic_direct" {
-  description = "Enable direct Anthropic API provider path in chatbot"
+  description = "Deprecated: unused in Bedrock-only deployment"
   type        = bool
   default     = false
 }
 
 variable "chatbot_anthropic_api_key_secret_arn" {
-  description = "Optional Secrets Manager ARN containing Anthropic API key for direct provider path"
+  description = "Deprecated: unused in Bedrock-only deployment"
   type        = string
   default     = ""
 }
 
 variable "chatbot_anthropic_api_base" {
-  description = "Base URL for direct Anthropic API provider"
+  description = "Deprecated: unused in Bedrock-only deployment"
   type        = string
   default     = "https://api.anthropic.com"
 }
 
 variable "chatbot_anthropic_model_id" {
-  description = "Default Anthropic direct model ID used when request model_id is not provided"
+  description = "Deprecated: unused in Bedrock-only deployment"
   type        = string
   default     = "claude-sonnet-4-5"
 }

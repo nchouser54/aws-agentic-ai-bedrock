@@ -107,7 +107,7 @@ Chatbot endpoint:
   - `stream` (optional bool; returns chunked stream payload for stream-style UI)
   - `stream_chunk_chars` (optional int; chunk size for stream payload)
   - `assistant_mode` (optional: `contextual|general`; defaults to `contextual`)
-  - `llm_provider` (optional: `bedrock|anthropic_direct`; defaults to `bedrock`)
+  - `llm_provider` (optional; defaults to `bedrock`)
   - `model_id` (optional override; validated against allow-list when configured)
   - `jira_jql` (optional)
   - `confluence_cql` (optional)
@@ -137,18 +137,10 @@ Provider behavior:
 
 This deployment is configured as **Bedrock-only** (no direct third-party LLM API path).
 
-Anthropic direct configuration (optional):
-
-- `CHATBOT_ENABLE_ANTHROPIC_DIRECT=true`
-- `CHATBOT_ANTHROPIC_API_KEY` or `CHATBOT_ANTHROPIC_API_KEY_SECRET_ARN`
-- `CHATBOT_ANTHROPIC_MODEL_ID` (default when request does not supply `model_id`)
-- `CHATBOT_ANTHROPIC_API_BASE` (default `https://api.anthropic.com`)
-
 Bedrock model selection controls:
 
 - `CHATBOT_ALLOWED_MODEL_IDS` (CSV; optional allow-list for request `model_id`)
 - `CHATBOT_ALLOWED_LLM_PROVIDERS` (CSV allow-list; default `bedrock`)
-- `CHATBOT_ALLOWED_ANTHROPIC_MODEL_IDS` (CSV allow-list for `anthropic_direct`)
 - If model allow-lists are unset, chatbot defaults are used as the implicit allow-list.
 
 Context reranking controls:
@@ -554,7 +546,7 @@ In the UI, provide:
 - Auth mode (`token`, `bearer`, or `none`)
 - Auth value (API token or bearer token)
 - Assistant Mode (`contextual` or `general`)
-- LLM Provider (`bedrock` or `anthropic_direct`)
+- LLM Provider (`bedrock`)
 - Optional Model ID override (for example Amazon-hosted Bedrock model IDs)
 - Optional Conversation ID to retain memory across messages
 - Stream-style response mode toggle

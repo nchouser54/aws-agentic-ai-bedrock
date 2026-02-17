@@ -75,7 +75,7 @@ def test_normalize_assistant_mode() -> None:
 
 def test_normalize_llm_provider() -> None:
     assert _normalize_llm_provider("bedrock") == "bedrock"
-    assert _normalize_llm_provider("anthropic_direct") == "anthropic_direct"
+    assert _normalize_llm_provider("anthropic_direct") == "bedrock"
     assert _normalize_llm_provider("other") == "bedrock"
 
 
@@ -708,34 +708,6 @@ def test_handle_query_general_mode_skips_context(mock_chat_cls) -> None:
     assert out["sources"]["assistant_mode"] == "general"
     assert out["sources"]["context_source"] == "none"
     assert out["sources"]["jira_count"] == 0
-
-
-@patch("chatbot.app._load_anthropic_api_key", return_value="anthropic-key")
-@patch("chatbot.app.AnthropicChatClient")
-def test_handle_query_general_mode_anthropic_direct(mock_anthropic_cls, _mock_key) -> None:
-    mock_client = MagicMock()
-    mock_client.answer.return_value = "Anthropic direct answer"
-    mock_anthropic_cls.return_value = mock_client
-
-    with patch.dict(
-        "os.environ",
-        {
-            "CHATBOT_ENABLE_ANTHROPIC_DIRECT": "true",
-            "CHATBOT_ANTHROPIC_MODEL_ID": "claude-sonnet-4-5",
-        },
-        clear=False,
-    ):
-        out = handle_query(
-            "write a summary",
-            "order by updated DESC",
-            "type=page",
-            "corr-anth",
-            assistant_mode="general",
-            llm_provider="anthropic_direct",
-        )
-
-    assert out["answer"] == "Anthropic direct answer"
-    assert out["sources"]["provider"] == "anthropic_direct"
 
 
 @patch("chatbot.app._append_conversation_turn")
