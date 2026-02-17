@@ -1005,12 +1005,12 @@ resource "aws_iam_policy" "worker_policy" {
           "bedrock:InvokeModel",
           "bedrock:InvokeAgent"
         ]
-        Resource = "*"
+        Resource = ["*"]
       },
       {
         Effect   = "Allow"
         Action   = ["cloudwatch:PutMetricData"]
-        Resource = "*"
+        Resource = ["*"]
       },
       {
         Effect   = "Allow"
@@ -1057,7 +1057,7 @@ resource "aws_iam_policy" "chatbot_policy" {
           "bedrock:Retrieve",
           "bedrock:RetrieveAndGenerate"
         ]
-        Resource = "*"
+        Resource = ["*"]
       },
       {
         Effect   = "Allow"
@@ -1148,7 +1148,7 @@ resource "aws_iam_policy" "kb_sync_policy" {
           "bedrock:StartIngestionJob",
           "bedrock:GetIngestionJob"
         ]
-        Resource = "*"
+        Resource = ["*"]
       },
       {
         Effect   = "Allow"
@@ -2243,7 +2243,7 @@ resource "aws_iam_policy" "release_notes_policy" {
       {
         Effect   = "Allow"
         Action   = ["bedrock:InvokeModel"]
-        Resource = "*"
+        Resource = ["*"]
       },
       {
         Effect   = "Allow"
@@ -2371,7 +2371,7 @@ resource "aws_iam_policy" "sprint_report_policy" {
       {
         Effect   = "Allow"
         Action   = ["bedrock:InvokeModel"]
-        Resource = "*"
+        Resource = ["*"]
       },
       {
         Effect   = "Allow"
@@ -2553,7 +2553,7 @@ resource "aws_iam_policy" "test_gen_policy" {
       {
         Effect   = "Allow"
         Action   = ["bedrock:InvokeModel"]
-        Resource = "*"
+        Resource = ["*"]
       },
       {
         Effect   = "Allow"
@@ -2721,7 +2721,7 @@ resource "aws_iam_policy" "pr_description_policy" {
       {
         Effect   = "Allow"
         Action   = ["bedrock:InvokeModel"]
-        Resource = "*"
+        Resource = ["*"]
       },
       {
         Effect   = "Allow"
