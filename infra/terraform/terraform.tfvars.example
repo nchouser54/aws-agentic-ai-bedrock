@@ -37,6 +37,11 @@ chatbot_model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
 chatbot_guardrail_id = ""
 chatbot_guardrail_version = ""
 chatbot_guardrail_trace = "disabled"
+
+# Bedrock Guardrails (Terraform-managed)
+create_bedrock_guardrail_resources = false
+create_chatbot_guardrail_resources = false
+
 chatbot_retrieval_mode = "hybrid"
 chatbot_default_assistant_mode = "contextual"
 chatbot_llm_provider = "bedrock"

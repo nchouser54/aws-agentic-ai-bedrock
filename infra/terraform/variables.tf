@@ -145,6 +145,110 @@ variable "chatbot_guardrail_trace" {
   }
 }
 
+variable "create_bedrock_guardrail_resources" {
+  description = "When true, Terraform creates a Bedrock Guardrail for the PR reviewer and uses its ID automatically. When false, provide existing bedrock_guardrail_id / bedrock_guardrail_version."
+  type        = bool
+  default     = false
+}
+
+variable "create_chatbot_guardrail_resources" {
+  description = "When true, Terraform creates a Bedrock Guardrail for the chatbot and uses its ID automatically. When false, provide existing chatbot_guardrail_id / chatbot_guardrail_version."
+  type        = bool
+  default     = false
+}
+
+variable "bedrock_guardrail_content_filters" {
+  description = "Content filter strengths for the PR reviewer guardrail (input/output per category)"
+  type = object({
+    hate_input          = optional(string, "HIGH")
+    hate_output         = optional(string, "HIGH")
+    insults_input       = optional(string, "HIGH")
+    insults_output      = optional(string, "HIGH")
+    sexual_input        = optional(string, "HIGH")
+    sexual_output       = optional(string, "HIGH")
+    violence_input      = optional(string, "HIGH")
+    violence_output     = optional(string, "HIGH")
+    misconduct_input    = optional(string, "HIGH")
+    misconduct_output   = optional(string, "HIGH")
+    prompt_attack_input = optional(string, "HIGH")
+  })
+  default = {}
+}
+
+variable "chatbot_guardrail_content_filters" {
+  description = "Content filter strengths for the chatbot guardrail (input/output per category)"
+  type = object({
+    hate_input          = optional(string, "HIGH")
+    hate_output         = optional(string, "HIGH")
+    insults_input       = optional(string, "HIGH")
+    insults_output      = optional(string, "HIGH")
+    sexual_input        = optional(string, "HIGH")
+    sexual_output       = optional(string, "HIGH")
+    violence_input      = optional(string, "HIGH")
+    violence_output     = optional(string, "HIGH")
+    misconduct_input    = optional(string, "HIGH")
+    misconduct_output   = optional(string, "HIGH")
+    prompt_attack_input = optional(string, "HIGH")
+  })
+  default = {}
+}
+
+variable "bedrock_guardrail_denied_topics" {
+  description = "List of denied topic definitions for the PR reviewer guardrail"
+  type = list(object({
+    name       = string
+    definition = string
+    examples   = optional(list(string), [])
+  }))
+  default = []
+}
+
+variable "chatbot_guardrail_denied_topics" {
+  description = "List of denied topic definitions for the chatbot guardrail"
+  type = list(object({
+    name       = string
+    definition = string
+    examples   = optional(list(string), [])
+  }))
+  default = []
+}
+
+variable "bedrock_guardrail_denied_words" {
+  description = "List of denied words/phrases for the PR reviewer guardrail"
+  type        = list(string)
+  default     = []
+}
+
+variable "chatbot_guardrail_denied_words" {
+  description = "List of denied words/phrases for the chatbot guardrail"
+  type        = list(string)
+  default     = []
+}
+
+variable "bedrock_guardrail_blocked_input_message" {
+  description = "Message returned when the PR reviewer guardrail blocks input"
+  type        = string
+  default     = "Your request was blocked by the content safety guardrail."
+}
+
+variable "bedrock_guardrail_blocked_output_message" {
+  description = "Message returned when the PR reviewer guardrail blocks output"
+  type        = string
+  default     = "The response was blocked by the content safety guardrail."
+}
+
+variable "chatbot_guardrail_blocked_input_message" {
+  description = "Message returned when the chatbot guardrail blocks input"
+  type        = string
+  default     = "Your request was blocked by the content safety guardrail."
+}
+
+variable "chatbot_guardrail_blocked_output_message" {
+  description = "Message returned when the chatbot guardrail blocks output"
+  type        = string
+  default     = "The response was blocked by the content safety guardrail."
+}
+
 variable "chatbot_retrieval_mode" {
   description = "Chatbot retrieval mode: live, kb, or hybrid"
   type        = string

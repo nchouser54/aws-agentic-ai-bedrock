@@ -71,6 +71,13 @@ locals {
   effective_bedrock_knowledge_base_id = local.manage_bedrock_kb_in_terraform ? aws_bedrockagent_knowledge_base.managed[0].id : trimspace(var.bedrock_knowledge_base_id)
   effective_bedrock_kb_data_source_id = local.manage_bedrock_kb_in_terraform ? aws_bedrockagent_data_source.managed[0].id : trimspace(var.bedrock_kb_data_source_id)
   effective_github_kb_data_source_id  = trimspace(var.github_kb_data_source_id) != "" ? trimspace(var.github_kb_data_source_id) : local.effective_bedrock_kb_data_source_id
+
+  manage_bedrock_guardrail_in_terraform = var.create_bedrock_guardrail_resources
+  manage_chatbot_guardrail_in_terraform = var.create_chatbot_guardrail_resources
+  effective_bedrock_guardrail_id      = local.manage_bedrock_guardrail_in_terraform ? aws_bedrock_guardrail.reviewer[0].guardrail_id : trimspace(var.bedrock_guardrail_id)
+  effective_bedrock_guardrail_version = local.manage_bedrock_guardrail_in_terraform ? aws_bedrock_guardrail_version.reviewer[0].version : trimspace(var.bedrock_guardrail_version)
+  effective_chatbot_guardrail_id      = local.manage_chatbot_guardrail_in_terraform ? aws_bedrock_guardrail.chatbot[0].guardrail_id : trimspace(var.chatbot_guardrail_id)
+  effective_chatbot_guardrail_version = local.manage_chatbot_guardrail_in_terraform ? aws_bedrock_guardrail_version.chatbot[0].version : trimspace(var.chatbot_guardrail_version)
 }
 
 data "aws_caller_identity" "current" {}
@@ -1369,6 +1376,156 @@ resource "aws_opensearchserverless_access_policy" "managed_bedrock_kb" {
   depends_on = [aws_opensearchserverless_collection.managed_bedrock_kb]
 }
 
+# ─── Bedrock Guardrail: PR Reviewer ─────────────────────────────────────────
+resource "aws_bedrock_guardrail" "reviewer" {
+  count                     = local.manage_bedrock_guardrail_in_terraform ? 1 : 0
+  name                      = "${local.name_prefix}-reviewer-guardrail"
+  description               = "Content safety guardrail for PR reviewer InvokeModel calls"
+  blocked_input_messaging   = var.bedrock_guardrail_blocked_input_message
+  blocked_outputs_messaging = var.bedrock_guardrail_blocked_output_message
+
+  content_policy_config {
+    filters_config {
+      type            = "HATE"
+      input_strength  = var.bedrock_guardrail_content_filters.hate_input
+      output_strength = var.bedrock_guardrail_content_filters.hate_output
+    }
+    filters_config {
+      type            = "INSULTS"
+      input_strength  = var.bedrock_guardrail_content_filters.insults_input
+      output_strength = var.bedrock_guardrail_content_filters.insults_output
+    }
+    filters_config {
+      type            = "SEXUAL"
+      input_strength  = var.bedrock_guardrail_content_filters.sexual_input
+      output_strength = var.bedrock_guardrail_content_filters.sexual_output
+    }
+    filters_config {
+      type            = "VIOLENCE"
+      input_strength  = var.bedrock_guardrail_content_filters.violence_input
+      output_strength = var.bedrock_guardrail_content_filters.violence_output
+    }
+    filters_config {
+      type            = "MISCONDUCT"
+      input_strength  = var.bedrock_guardrail_content_filters.misconduct_input
+      output_strength = var.bedrock_guardrail_content_filters.misconduct_output
+    }
+    filters_config {
+      type            = "PROMPT_ATTACK"
+      input_strength  = var.bedrock_guardrail_content_filters.prompt_attack_input
+      output_strength = "NONE"
+    }
+  }
+
+  dynamic "topic_policy_config" {
+    for_each = length(var.bedrock_guardrail_denied_topics) > 0 ? [1] : []
+    content {
+      dynamic "topics_config" {
+        for_each = var.bedrock_guardrail_denied_topics
+        content {
+          name       = topics_config.value.name
+          definition = topics_config.value.definition
+          examples   = topics_config.value.examples
+          type       = "DENY"
+        }
+      }
+    }
+  }
+
+  dynamic "word_policy_config" {
+    for_each = length(var.bedrock_guardrail_denied_words) > 0 ? [1] : []
+    content {
+      dynamic "words_config" {
+        for_each = var.bedrock_guardrail_denied_words
+        content {
+          text = words_config.value
+        }
+      }
+    }
+  }
+}
+
+resource "aws_bedrock_guardrail_version" "reviewer" {
+  count         = local.manage_bedrock_guardrail_in_terraform ? 1 : 0
+  guardrail_arn = aws_bedrock_guardrail.reviewer[0].guardrail_arn
+  description   = "Managed by Terraform"
+}
+
+# ─── Bedrock Guardrail: Chatbot ─────────────────────────────────────────────
+resource "aws_bedrock_guardrail" "chatbot" {
+  count                     = local.manage_chatbot_guardrail_in_terraform ? 1 : 0
+  name                      = "${local.name_prefix}-chatbot-guardrail"
+  description               = "Content safety guardrail for chatbot Converse calls"
+  blocked_input_messaging   = var.chatbot_guardrail_blocked_input_message
+  blocked_outputs_messaging = var.chatbot_guardrail_blocked_output_message
+
+  content_policy_config {
+    filters_config {
+      type            = "HATE"
+      input_strength  = var.chatbot_guardrail_content_filters.hate_input
+      output_strength = var.chatbot_guardrail_content_filters.hate_output
+    }
+    filters_config {
+      type            = "INSULTS"
+      input_strength  = var.chatbot_guardrail_content_filters.insults_input
+      output_strength = var.chatbot_guardrail_content_filters.insults_output
+    }
+    filters_config {
+      type            = "SEXUAL"
+      input_strength  = var.chatbot_guardrail_content_filters.sexual_input
+      output_strength = var.chatbot_guardrail_content_filters.sexual_output
+    }
+    filters_config {
+      type            = "VIOLENCE"
+      input_strength  = var.chatbot_guardrail_content_filters.violence_input
+      output_strength = var.chatbot_guardrail_content_filters.violence_output
+    }
+    filters_config {
+      type            = "MISCONDUCT"
+      input_strength  = var.chatbot_guardrail_content_filters.misconduct_input
+      output_strength = var.chatbot_guardrail_content_filters.misconduct_output
+    }
+    filters_config {
+      type            = "PROMPT_ATTACK"
+      input_strength  = var.chatbot_guardrail_content_filters.prompt_attack_input
+      output_strength = "NONE"
+    }
+  }
+
+  dynamic "topic_policy_config" {
+    for_each = length(var.chatbot_guardrail_denied_topics) > 0 ? [1] : []
+    content {
+      dynamic "topics_config" {
+        for_each = var.chatbot_guardrail_denied_topics
+        content {
+          name       = topics_config.value.name
+          definition = topics_config.value.definition
+          examples   = topics_config.value.examples
+          type       = "DENY"
+        }
+      }
+    }
+  }
+
+  dynamic "word_policy_config" {
+    for_each = length(var.chatbot_guardrail_denied_words) > 0 ? [1] : []
+    content {
+      dynamic "words_config" {
+        for_each = var.chatbot_guardrail_denied_words
+        content {
+          text = words_config.value
+        }
+      }
+    }
+  }
+}
+
+resource "aws_bedrock_guardrail_version" "chatbot" {
+  count         = local.manage_chatbot_guardrail_in_terraform ? 1 : 0
+  guardrail_arn = aws_bedrock_guardrail.chatbot[0].guardrail_arn
+  description   = "Managed by Terraform"
+}
+
 resource "aws_bedrockagent_knowledge_base" "managed" {
   count    = local.manage_bedrock_kb_in_terraform ? 1 : 0
   name     = "${local.name_prefix}-kb"
@@ -1462,8 +1619,8 @@ resource "aws_lambda_function" "pr_review_worker" {
       BEDROCK_AGENT_ID                  = var.bedrock_agent_id
       BEDROCK_AGENT_ALIAS_ID            = var.bedrock_agent_alias_id
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
-      BEDROCK_GUARDRAIL_ID              = var.bedrock_guardrail_id
-      BEDROCK_GUARDRAIL_VERSION         = var.bedrock_guardrail_version
+      BEDROCK_GUARDRAIL_ID              = local.effective_bedrock_guardrail_id
+      BEDROCK_GUARDRAIL_VERSION         = local.effective_bedrock_guardrail_version
       BEDROCK_GUARDRAIL_TRACE           = var.bedrock_guardrail_trace
       GITHUB_API_BASE                   = var.github_api_base
       DRY_RUN                           = tostring(var.dry_run)
@@ -1514,11 +1671,11 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
       AWS_REGION                                     = data.aws_region.current.region
       CHATBOT_MODEL_ID                               = var.chatbot_model_id
       BEDROCK_MODEL_ID                               = var.bedrock_model_id
-      BEDROCK_GUARDRAIL_ID                           = var.bedrock_guardrail_id
-      BEDROCK_GUARDRAIL_VERSION                      = var.bedrock_guardrail_version
+      BEDROCK_GUARDRAIL_ID                           = local.effective_bedrock_guardrail_id
+      BEDROCK_GUARDRAIL_VERSION                      = local.effective_bedrock_guardrail_version
       BEDROCK_GUARDRAIL_TRACE                        = var.bedrock_guardrail_trace
-      CHATBOT_GUARDRAIL_ID                           = var.chatbot_guardrail_id
-      CHATBOT_GUARDRAIL_VERSION                      = var.chatbot_guardrail_version
+      CHATBOT_GUARDRAIL_ID                           = local.effective_chatbot_guardrail_id
+      CHATBOT_GUARDRAIL_VERSION                      = local.effective_chatbot_guardrail_version
       CHATBOT_GUARDRAIL_TRACE                        = var.chatbot_guardrail_trace
       CHATBOT_RETRIEVAL_MODE                         = var.chatbot_retrieval_mode
       CHATBOT_DEFAULT_ASSISTANT_MODE                 = var.chatbot_default_assistant_mode
@@ -1631,11 +1788,11 @@ resource "aws_lambda_function" "teams_chatbot_adapter" {
       AWS_REGION                       = data.aws_region.current.region
       CHATBOT_MODEL_ID                 = var.chatbot_model_id
       BEDROCK_MODEL_ID                 = var.bedrock_model_id
-      BEDROCK_GUARDRAIL_ID             = var.bedrock_guardrail_id
-      BEDROCK_GUARDRAIL_VERSION        = var.bedrock_guardrail_version
+      BEDROCK_GUARDRAIL_ID             = local.effective_bedrock_guardrail_id
+      BEDROCK_GUARDRAIL_VERSION        = local.effective_bedrock_guardrail_version
       BEDROCK_GUARDRAIL_TRACE          = var.bedrock_guardrail_trace
-      CHATBOT_GUARDRAIL_ID             = var.chatbot_guardrail_id
-      CHATBOT_GUARDRAIL_VERSION        = var.chatbot_guardrail_version
+      CHATBOT_GUARDRAIL_ID             = local.effective_chatbot_guardrail_id
+      CHATBOT_GUARDRAIL_VERSION        = local.effective_chatbot_guardrail_version
       CHATBOT_GUARDRAIL_TRACE          = var.chatbot_guardrail_trace
       CHATBOT_RETRIEVAL_MODE           = var.chatbot_retrieval_mode
       BEDROCK_KNOWLEDGE_BASE_ID        = local.effective_bedrock_knowledge_base_id
