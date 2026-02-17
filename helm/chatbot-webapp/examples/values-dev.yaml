@@ -1,0 +1,83 @@
+# Development Environment Configuration
+# Lower resources, fast iteration, local testing
+
+webapp:
+  enabled: true
+  replicaCount: 1  # Single replica for dev
+  
+  image:
+    repository: "REPLACE_WITH_YOUR_ECR_URL/chatbot-webapp"
+    tag: "dev"
+    pullPolicy: Always  # Always pull latest dev image
+  
+  # Minimal resources for dev
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+  
+  # Disable autoscaling in dev
+  autoscaling:
+    enabled: false
+
+config:
+  chatbotUrl: "https://dev-api.example.com/chatbot/query"
+  authMode: "none"  # No auth for easier testing
+  retrievalMode: "hybrid"
+  assistantMode: "contextual"
+  llmProvider: "bedrock"
+  modelId: "anthropic.claude-3-5-sonnet-20240620-v1:0"
+  streamMode: "sse"
+
+# Option 1: Use port-forward (no ingress)
+ingress:
+  enabled: false
+
+# Option 2: Use internal ALB with self-signed cert
+# ingress:
+#   enabled: true
+#   className: "alb"
+#   annotations:
+#     alb.ingress.kubernetes.io/scheme: internal
+#     alb.ingress.kubernetes.io/target-type: ip
+#     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'  # HTTP only for dev
+#   hosts:
+#     - host: "chatbot-dev.internal"
+#       paths:
+#         - path: /
+#           pathType: Prefix
+#   tls:
+#     enabled: false  # No HTTPS for dev
+
+# Disable authentication in dev
+oauth2Proxy:
+  enabled: false
+
+keycloak:
+  enabled: false
+
+# Quick dev deployment tips:
+# 
+# 1. Build and push image:
+#    docker build -t your-ecr/chatbot-webapp:dev ./webapp
+#    docker push your-ecr/chatbot-webapp:dev
+#
+# 2. Install chart:
+#    helm install chatbot-dev ./helm/chatbot-webapp -f examples/values-dev.yaml --namespace dev --create-namespace
+#
+# 3. Access via port-forward:
+#    kubectl port-forward -n dev svc/chatbot-dev-chatbot-webapp 8080:80
+#    open http://localhost:8080
+#
+# 4. Watch logs:
+#    kubectl logs -n dev -l app.kubernetes.io/name=chatbot-webapp -f
+#
+# 5. Update after code changes:
+#    docker build -t your-ecr/chatbot-webapp:dev ./webapp && docker push your-ecr/chatbot-webapp:dev
+#    kubectl rollout restart -n dev deployment/chatbot-dev-chatbot-webapp
+#
+# 6. Debug pod:
+#    kubectl exec -n dev -it deployment/chatbot-dev-chatbot-webapp -- /bin/sh

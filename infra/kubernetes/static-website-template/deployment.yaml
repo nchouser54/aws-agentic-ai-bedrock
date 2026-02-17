@@ -1,0 +1,266 @@
+# Kubernetes Deployment Template for Static Websites
+#
+# REQUIRED REPLACEMENTS:
+#   - <APP_NAME>: Your application name (e.g., my-website, blog, docs)
+#   - <NAMESPACE>: Kubernetes namespace (e.g., default, production, staging)
+#   - <IMAGE_URL>: Full ECR image URL (e.g., 123456.dkr.ecr.us-gov-west-1.amazonaws.com/my-site:latest)
+#   - <DOMAIN>: Your domain name (or remove if using LoadBalancer IP/DNS)
+#   - <CERT_ARN>: ACM certificate ARN for HTTPS (or remove if using HTTP only)
+#
+# OPTIONAL CUSTOMIZATIONS:
+#   - Replicas: Adjust based on traffic (recommend: 2-5 for production)
+#   - Resources: Tune CPU/memory based on site size
+#   - Ingress: Choose between ALB (L7) or NLB (L4)
+#
+# Deploy:
+#   kubectl apply -f deployment.yaml
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: <NAMESPACE>
+  labels:
+    name: <NAMESPACE>
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: <APP_NAME>-nginx-config
+  namespace: <NAMESPACE>
+data:
+  # Optional: Custom nginx configuration
+  # Uncomment and customize if you need advanced nginx settings
+  # nginx.conf: |
+  #   user nginx;
+  #   worker_processes auto;
+  #   ... your custom nginx.conf
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: <APP_NAME>
+  namespace: <NAMESPACE>
+  labels:
+    app: <APP_NAME>
+    tier: frontend
+spec:
+  # Number of pod replicas - adjust based on traffic
+  replicas: 2
+  
+  # Rolling update strategy
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  
+  selector:
+    matchLabels:
+      app: <APP_NAME>
+  
+  template:
+    metadata:
+      labels:
+        app: <APP_NAME>
+        tier: frontend
+      annotations:
+        # Force pod restart on ConfigMap changes (optional)
+        checksum/config: "{{ .Values.configMapChecksum }}"
+    
+    spec:
+      # Pod affinity: spread pods across availability zones
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - <APP_NAME>
+              topologyKey: topology.kubernetes.io/zone
+      
+      containers:
+      - name: nginx
+        image: <IMAGE_URL>
+        imagePullPolicy: Always
+        
+        ports:
+        - containerPort: 80
+          name: http
+          protocol: TCP
+        
+        # Resource limits - adjust based on your site size
+        resources:
+          requests:
+            cpu: 50m        # 0.05 CPU cores
+            memory: 64Mi    # 64 MB RAM
+          limits:
+            cpu: 200m       # 0.2 CPU cores max
+            memory: 128Mi   # 128 MB RAM max
+        
+        # Liveness probe - restart if nginx is unresponsive
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        # Readiness probe - don't send traffic until ready
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        
+        # Optional: Mount custom nginx config
+        # volumeMounts:
+        # - name: nginx-config
+        #   mountPath: /etc/nginx/nginx.conf
+        #   subPath: nginx.conf
+        #   readOnly: true
+      
+      # Optional: Custom nginx config volume
+      # volumes:
+      # - name: nginx-config
+      #   configMap:
+      #     name: <APP_NAME>-nginx-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: <APP_NAME>
+  namespace: <NAMESPACE>
+  labels:
+    app: <APP_NAME>
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    app: <APP_NAME>
+
+---
+# OPTION 1: ALB Ingress (Application Load Balancer - Layer 7)
+# Best for: HTTP/HTTPS websites, path-based routing, host-based routing
+# Requires: AWS Load Balancer Controller installed
+# Cost: ~$20-25/month per ALB (but can share with multiple apps)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: <APP_NAME>-alb
+  namespace: <NAMESPACE>
+  annotations:
+    # ALB: Internal or internet-facing
+    alb.ingress.kubernetes.io/scheme: internal  # Change to "internet-facing" for public
+    
+    # Target type: ip (default) or instance
+    alb.ingress.kubernetes.io/target-type: ip
+    
+    # Listen on both HTTP and HTTPS
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    
+    # HTTPS certificate from ACM
+    alb.ingress.kubernetes.io/certificate-arn: <CERT_ARN>
+    
+    # TLS policy
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    
+    # Redirect HTTP to HTTPS (uncomment if desired)
+    # alb.ingress.kubernetes.io/ssl-redirect: '443'
+    
+    # Health check path
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-protocol: HTTP
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: '15'
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: '5'
+    alb.ingress.kubernetes.io/healthy-threshold-count: '2'
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: '2'
+    
+    # Optional: Specify subnets (comma-separated)
+    # alb.ingress.kubernetes.io/subnets: subnet-abc123,subnet-def456
+    
+    # Optional: Security groups
+    # alb.ingress.kubernetes.io/security-groups: sg-abc123
+    
+    # Optional: IP address type (ipv4 or dualstack)
+    # alb.ingress.kubernetes.io/ip-address-type: ipv4
+    
+    # Optional: WAF Web ACL
+    # alb.ingress.kubernetes.io/wafv2-acl-arn: arn:aws:wafv2:...
+spec:
+  ingressClassName: alb
+  rules:
+  - host: <DOMAIN>  # e.g., www.example.com (or remove "host:" for any domain)
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: <APP_NAME>
+            port:
+              number: 80
+
+---
+# OPTION 2: NLB via LoadBalancer Service (Network Load Balancer - Layer 4)
+# Best for: Static IPs, extreme performance, TCP/UDP, simpler setup
+# Requires: Nothing extra (built into Kubernetes)
+# Cost: ~$20-25/month per NLB
+# Note: Either use Ingress OR LoadBalancer Service, not both
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: <APP_NAME>-nlb
+#   namespace: <NAMESPACE>
+#   labels:
+#     app: <APP_NAME>
+#   annotations:
+#     # NLB: Internal or internet-facing
+#     service.beta.kubernetes.io/aws-load-balancer-scheme: internal  # Change to "internet-facing" for public
+#     
+#     # Load balancer type
+#     service.beta.kubernetes.io/aws-load-balancer-type: "external"
+#     service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
+#     
+#     # Optional: HTTPS/TLS termination (requires ACM cert)
+#     # service.beta.kubernetes.io/aws-load-balancer-ssl-cert: <CERT_ARN>
+#     # service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+#     # service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "http"
+#     
+#     # Optional: Specify subnets
+#     # service.beta.kubernetes.io/aws-load-balancer-subnets: subnet-abc123,subnet-def456
+#     
+#     # Optional: Enable access logs
+#     # service.beta.kubernetes.io/aws-load-balancer-access-log-enabled: "true"
+#     # service.beta.kubernetes.io/aws-load-balancer-access-log-s3-bucket-name: "my-logs-bucket"
+# spec:
+#   type: LoadBalancer
+#   externalTrafficPolicy: Local  # Preserve source IP
+#   ports:
+#   - name: http
+#     port: 80
+#     targetPort: 80
+#     protocol: TCP
+#   # Uncomment for HTTPS:
+#   # - name: https
+#   #   port: 443
+#   #   targetPort: 80
+#   #   protocol: TCP
+#   selector:
+#     app: <APP_NAME>

@@ -1,0 +1,78 @@
+# Docker build exclusions for static websites
+# Customize based on your project structure
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# CI/CD
+.github
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile
+
+# Development files
+.env
+.env.*
+*.md
+README.md
+LICENSE
+.editorconfig
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Node.js (if building locally before Docker)
+node_modules/
+npm-debug.log
+yarn-error.log
+package.json
+package-lock.json
+yarn.lock
+
+# Build tools configs (not needed in final image)
+webpack.config.js
+rollup.config.js
+vite.config.js
+tsconfig.json
+babel.config.js
+.eslintrc*
+.prettierrc*
+
+# Testing
+test/
+tests/
+__tests__/
+*.test.js
+*.spec.js
+.pytest_cache/
+coverage/
+.nyc_output/
+
+# Documentation
+docs/
+*.md
+
+# For React/Vue/Angular - exclude source, keep only build output
+src/
+public/
+# Note: Uncomment appropriate lines:
+# !build/    # Keep React build
+# !dist/     # Keep Vue/Angular dist
+
+# For Jekyll/Hugo - exclude source, keep only generated site
+# !_site/    # Keep Jekyll output
+# !public/   # Keep Hugo output
+
+# Logs
+*.log
+logs/
+
+# OS files
+Thumbs.db
+.DS_Store

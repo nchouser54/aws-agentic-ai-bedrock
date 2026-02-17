@@ -1,0 +1,26 @@
+{{- if .Values.webapp.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "chatbot-webapp.fullname" . }}
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "chatbot-webapp.labels" . | nindent 4 }}
+data:
+  config.js: |
+    window.WEBAPP_DEFAULTS = {
+      chatbotUrl: {{ .Values.config.chatbotUrl | quote }},
+      authMode: {{ .Values.config.authMode | quote }},
+      authValue: {{ .Values.config.authValue | quote }},
+      retrievalMode: {{ .Values.config.retrievalMode | quote }},
+      assistantMode: {{ .Values.config.assistantMode | quote }},
+      llmProvider: {{ .Values.config.llmProvider | quote }},
+      modelId: {{ .Values.config.modelId | quote }},
+      streamMode: {{ .Values.config.streamMode | quote }},
+      {{- if .Values.config.github.oauthBaseUrl }}
+      githubOauthBaseUrl: {{ .Values.config.github.oauthBaseUrl | quote }},
+      githubClientId: {{ .Values.config.github.clientId | quote }},
+      githubScope: {{ .Values.config.github.scope | quote }},
+      {{- end }}
+    };
+{{- end }}

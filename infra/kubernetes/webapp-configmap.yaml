@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chatbot-webapp-config
+  namespace: default  # Change this to your namespace
+data:
+  config.js: |
+    // Runtime configuration for chatbot webapp
+    // This ConfigMap allows you to update settings without rebuilding the container
+    
+    window.WEBAPP_DEFAULTS = {
+      // REQUIRED: Your chatbot API endpoint URL
+      // Example: https://your-api-gateway.execute-api.us-gov-west-1.amazonaws.com/chatbot/query
+      chatbotUrl: "https://<YOUR_API_GATEWAY_URL>/chatbot/query",
+      
+      // Authentication mode: "token" or "oauth" or "none"
+      authMode: "token",
+      
+      // If authMode is "token", set your API token here or leave empty for user input
+      // You can also use a Secret and mount as environment variable
+      authValue: "",
+      
+      // Retrieval mode: "live", "kb", or "hybrid"
+      retrievalMode: "hybrid",
+      
+      // Assistant mode: "chat", "jira", "confluence"
+      assistantMode: "chat",
+      
+      // LLM provider: "bedrock" or "cohere"
+      llmProvider: "bedrock",
+      
+      // Model ID (e.g., "anthropic.claude-3-5-sonnet-20240620-v1:0")
+      modelId: "anthropic.claude-3-5-sonnet-20240620-v1:0",
+      
+      // Stream mode: "sse" or "websocket" or "none"
+      streamMode: "sse",
+      
+      // GitHub OAuth settings (if using oauth auth mode)
+      githubOauthBaseUrl: "",
+      githubClientId: "",
+      githubScope: "user:email"
+    };

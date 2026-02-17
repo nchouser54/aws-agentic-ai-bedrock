@@ -1,0 +1,314 @@
+# Default values for chatbot-webapp
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+## Global settings
+global:
+  # Namespace where to deploy (overrides .Release.Namespace)
+  namespace: ""
+
+## Webapp deployment configuration
+webapp:
+  # Enable webapp deployment
+  enabled: true
+  
+  # Number of replicas
+  replicaCount: 2
+  
+  image:
+    # Image repository
+    repository: ""  # REQUIRED: Set to your ECR URL
+    # Image pull policy
+    pullPolicy: Always
+    # Overrides the image tag (default is chart appVersion)
+    tag: "latest"
+  
+  # Image pull secrets for private registries
+  imagePullSecrets: []
+  # - name: ecr-registry
+  
+  # Service account
+  serviceAccount:
+    # Specifies whether a service account should be created
+    create: true
+    # Annotations to add to the service account
+    annotations: {}
+    # The name of the service account to use
+    name: ""
+  
+  # Pod annotations
+  podAnnotations: {}
+  
+  # Pod security context
+  podSecurityContext: {}
+    # fsGroup: 2000
+  
+  # Container security context
+  securityContext: {}
+    # capabilities:
+    #   drop:
+    #   - ALL
+    # readOnlyRootFilesystem: true
+    # runAsNonRoot: true
+    # runAsUser: 1000
+  
+  # Resource limits and requests
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  
+  # Autoscaling configuration
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
+  
+  # Node selector
+  nodeSelector: {}
+  
+  # Tolerations
+  tolerations: []
+  
+  # Affinity rules (pod anti-affinity enabled by default)
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+              - chatbot-webapp
+          topologyKey: topology.kubernetes.io/zone
+  
+  # Liveness probe configuration
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  
+  # Readiness probe configuration
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 2
+
+## Service configuration
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: http
+  annotations: {}
+
+## Ingress configuration
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+    # alb.ingress.kubernetes.io/certificate-arn: ""  # Set via ingress.tls.certificateArn
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-protocol: HTTP
+  hosts:
+    - host: ""  # REQUIRED: Set to chatbot.your-domain.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    enabled: true
+    certificateArn: ""  # REQUIRED for HTTPS: arn:aws:acm:...
+  # Make load balancer internet-facing instead of internal
+  public: false
+
+## Webapp configuration (ConfigMap)
+config:
+  # Backend API Gateway URL
+  chatbotUrl: ""  # REQUIRED: https://api-gateway-url/chatbot/query
+  
+  # Authentication mode: token, bearer, or none
+  authMode: token
+  
+  # Default auth token (leave empty for user input)
+  authValue: ""
+  
+  # Retrieval mode: hybrid, kb, or live
+  retrievalMode: hybrid
+  
+  # Assistant mode: contextual or general
+  assistantMode: contextual
+  
+  # LLM provider
+  llmProvider: bedrock
+  
+  # Default model ID
+  modelId: "anthropic.claude-3-5-sonnet-20240620-v1:0"
+  
+  # Stream mode: sse, websocket, or none
+  streamMode: sse
+  
+  # GitHub OAuth settings (if using GitHub auth)
+  github:
+    oauthBaseUrl: ""
+    clientId: ""
+    scope: "user:email"
+
+## OAuth2 Proxy (for Keycloak integration)
+oauth2Proxy:
+  # Enable OAuth2 Proxy for authentication
+  enabled: false
+  
+  # Number of replicas
+  replicaCount: 2
+  
+  image:
+    repository: quay.io/oauth2-proxy/oauth2-proxy
+    tag: v7.6.0
+    pullPolicy: IfNotPresent
+  
+  # OAuth2 Proxy configuration
+  config:
+    # OAuth provider (keycloak-oidc, github, google, etc.)
+    provider: keycloak-oidc
+    
+    # Keycloak/OIDC issuer URL
+    oidcIssuerUrl: ""  # REQUIRED if enabled: https://keycloak.domain.com/auth/realms/chatbot
+    
+    # Client ID from Keycloak
+    clientId: ""  # REQUIRED if enabled
+    
+    # Client secret from Keycloak (set via secret)
+    clientSecret: ""  # REQUIRED if enabled
+    
+    # Cookie secret (auto-generated if empty)
+    cookieSecret: ""
+    
+    # Email domains to allow (* for all)
+    emailDomain: "*"
+    
+    # Redirect URL
+    redirectUrl: ""  # Auto-generated: https://{ingress.host}/oauth2/callback
+    
+    # Additional args
+    extraArgs: []
+    # - --cookie-expire=12h
+    # - --cookie-refresh=1h
+  
+  # Resource limits
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 4180
+    annotations: {}
+
+## Keycloak deployment (optional)
+keycloak:
+  # Enable Keycloak deployment
+  enabled: false
+  
+  # Number of replicas
+  replicaCount: 1
+  
+  image:
+    repository: quay.io/keycloak/keycloak
+    tag: "23.0"
+    pullPolicy: IfNotPresent
+  
+  # Keycloak admin credentials
+  admin:
+    username: admin
+    # Password (set via secret or auto-generated)
+    password: ""  # Will be auto-generated if empty
+  
+  # Keycloak startup args
+  args:
+    - start-dev
+    - --http-relative-path=/auth
+  
+  # Environment variables
+  env:
+    KC_PROXY: edge
+    KC_HOSTNAME_STRICT: "false"
+    KC_HTTP_ENABLED: "true"
+  
+  # Database configuration (optional, uses H2 by default)
+  database:
+    enabled: false
+    vendor: postgres
+    host: postgres
+    port: 5432
+    database: keycloak
+    username: keycloak
+    # Password from secret
+    existingSecret: ""
+    existingSecretKey: password
+  
+  # Persistent storage
+  persistence:
+    enabled: false
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 10Gi
+  
+  # Resource limits
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 8080
+    annotations: {}
+  
+  # Ingress configuration for Keycloak
+  ingress:
+    enabled: true
+    className: alb
+    annotations:
+      alb.ingress.kubernetes.io/scheme: internal
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+    host: ""  # keycloak.your-domain.com
+    tls:
+      enabled: true
+      certificateArn: ""
+
+## Common labels to apply to all resources
+commonLabels: {}
+
+## Additional labels
+labels: {}
+
+## Additional annotations
+annotations: {}

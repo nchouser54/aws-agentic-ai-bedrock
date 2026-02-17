@@ -1,0 +1,98 @@
+{{- if .Values.keycloak.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "chatbot-webapp.keycloakName" . }}
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "chatbot-webapp.keycloakLabels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "chatbot-webapp.keycloakName" . }}
+  replicas: {{ .Values.keycloak.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "chatbot-webapp.keycloakSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "chatbot-webapp.keycloakSelectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/keycloak-secret.yaml") . | sha256sum }}
+    spec:
+      containers:
+      - name: keycloak
+        image: "{{ .Values.keycloak.image.repository }}:{{ .Values.keycloak.image.tag }}"
+        imagePullPolicy: {{ .Values.keycloak.image.pullPolicy }}
+        args:
+          {{- toYaml .Values.keycloak.args | nindent 10 }}
+        env:
+        - name: KEYCLOAK_ADMIN
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "chatbot-webapp.keycloakName" . }}
+              key: admin-username
+        - name: KEYCLOAK_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "chatbot-webapp.keycloakName" . }}
+              key: admin-password
+        {{- range $key, $value := .Values.keycloak.env }}
+        - name: {{ $key }}
+          value: {{ $value | quote }}
+        {{- end }}
+        {{- if .Values.keycloak.database.enabled }}
+        - name: KC_DB
+          value: {{ .Values.keycloak.database.vendor | quote }}
+        - name: KC_DB_URL
+          value: "jdbc:postgresql://{{ .Values.keycloak.database.host }}:{{ .Values.keycloak.database.port }}/{{ .Values.keycloak.database.database }}"
+        - name: KC_DB_USERNAME
+          value: {{ .Values.keycloak.database.username | quote }}
+        - name: KC_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.keycloak.database.existingSecret | default (include "chatbot-webapp.keycloakName" .) }}
+              key: {{ .Values.keycloak.database.existingSecretKey | default "db-password" }}
+        {{- end }}
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        - name: https
+          containerPort: 8443
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /auth/health/live
+            port: http
+          initialDelaySeconds: 120
+          periodSeconds: 30
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /auth/health/ready
+            port: http
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+        resources:
+          {{- toYaml .Values.keycloak.resources | nindent 10 }}
+        {{- if .Values.keycloak.persistence.enabled }}
+        volumeMounts:
+        - name: data
+          mountPath: /opt/keycloak/data
+        {{- end }}
+  {{- if .Values.keycloak.persistence.enabled }}
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+      - {{ .Values.keycloak.persistence.accessMode }}
+      {{- if .Values.keycloak.persistence.storageClass }}
+      storageClassName: {{ .Values.keycloak.persistence.storageClass }}
+      {{- end }}
+      resources:
+        requests:
+          storage: {{ .Values.keycloak.persistence.size }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,86 @@
+# PR Agent Quick Test - GitHub Action
+#
+# This workflow runs PR Agent alongside your existing Lambda-based reviewer
+# for comparison and evaluation.
+#
+# Setup:
+# 1. Add OPENAI_KEY to GitHub Secrets (or use ANTHROPIC_API_KEY for Claude)
+# 2. Enable this workflow by renaming to .github/workflows/pr-agent-test.yml
+# 3. Open a test PR to trigger
+#
+# After 2-4 weeks, compare:
+# - Review quality between PR Agent and your Lambda reviewer
+# - Speed (PR Agent ~30s vs your system)
+# - Cost (OpenAI API vs Bedrock)
+# - Comment style and usefulness
+
+name: PR Agent Test (Parallel)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    # Optional: only run on specific repos or labels
+    # labels: [test-pr-agent]
+
+jobs:
+  pr_agent_review:
+    runs-on: ubuntu-latest
+    # Only run if PR is from the same repo (skip forks for security)
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    
+    permissions:
+      contents: read
+      pull-requests: write
+    
+    steps:
+      - name: PR Agent Review
+        uses: Codium-ai/pr-agent@main
+        env:
+          # Option 1: OpenAI (recommended for testing)
+          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
+          
+          # Option 2: Anthropic Claude (uncomment to use)
+          # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          
+          # Option 3: Other providers (see PR Agent docs)
+          # https://qodo-merge-docs.qodo.ai/usage-guide/configuration_options/
+          
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+          # Configuration options (optional)
+          # pr_reviewer.num_code_suggestions: "4"
+          # pr_reviewer.inline_code_comments: "true"
+          # pr_reviewer.auto_review: "true"
+
+  # Optional: Add comparison metrics
+  log_metrics:
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [pr_agent_review]
+    steps:
+      - name: Log PR Agent Execution
+        run: |
+          echo "PR Agent completed for PR #${{ github.event.pull_request.number }}"
+          echo "Check PR comments to compare with Lambda reviewer"
+          echo "Review at: ${{ github.event.pull_request.html_url }}"
+
+# Notes:
+# - Your Lambda reviewer will still run via webhook (no changes needed)
+# - Both reviewers will post comments to the PR
+# - PR Agent comments will be labeled with @CodiumAI-Agent
+# - Your Lambda comments will come from your GitHub App
+#
+# Evaluation Checklist:
+# □ Compare review quality (which catches more issues?)
+# □ Compare speed (check workflow run time vs Lambda logs)
+# □ Compare cost (check OpenAI usage vs CloudWatch Bedrock costs)
+# □ Compare comment clarity and actionability
+# □ Check for duplicate findings
+# □ Test with small PRs (<10 files) and large PRs (50+ files)
+# □ Test different languages (Python, TypeScript, Go, etc.)
+#
+# After evaluation, decide:
+# - Keep both? (unlikely - clutters PRs)
+# - Keep PR Agent? (simpler, but lose custom features)
+# - Keep Lambda reviewer? (more features, AWS-native)
+# - Borrow patterns? (best approach - enhance your system)

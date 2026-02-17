@@ -1,0 +1,43 @@
+# Build context exclusions for Docker
+.git
+.github
+.gitignore
+.env
+.env.*
+*.md
+README.md
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+
+# Keep only webapp files
+*
+!index.html
+!app.js
+!styles.css
+!config.js

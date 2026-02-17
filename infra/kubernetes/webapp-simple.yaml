@@ -1,0 +1,123 @@
+# Simple deployment without Ingress Controller
+# Use this if you don't have AWS ALB Ingress Controller installed
+#
+# This creates:
+# - Deployment with 2 replicas
+# - LoadBalancer service (creates Network Load Balancer)
+# - ConfigMap for configuration
+#
+# Deploy with: kubectl apply -f webapp-simple.yaml
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chatbot-webapp-config
+  namespace: default
+data:
+  config.js: |
+    window.WEBAPP_DEFAULTS = {
+      // REPLACE WITH YOUR API GATEWAY URL
+      chatbotUrl: "https://<YOUR_API_GATEWAY_URL>/chatbot/query",
+      authMode: "token",
+      authValue: "",
+      retrievalMode: "hybrid",
+      assistantMode: "chat",
+      llmProvider: "bedrock",
+      modelId: "anthropic.claude-3-5-sonnet-20240620-v1:0",
+      streamMode: "sse",
+      githubOauthBaseUrl: "",
+      githubClientId: "",
+      githubScope: "user:email"
+    };
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chatbot-webapp
+  namespace: default
+  labels:
+    app: chatbot-webapp
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: chatbot-webapp
+  template:
+    metadata:
+      labels:
+        app: chatbot-webapp
+    spec:
+      containers:
+      - name: webapp
+        # REPLACE WITH YOUR IMAGE
+        image: <ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/chatbot-webapp:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 80
+          name: http
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+        livenessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - name: config
+          mountPath: /usr/share/nginx/html/config.js
+          subPath: config.js
+      volumes:
+      - name: config
+        configMap:
+          name: chatbot-webapp-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chatbot-webapp
+  namespace: default
+  labels:
+    app: chatbot-webapp
+  annotations:
+    # Create Network Load Balancer (NLB)
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    
+    # Internal load balancer (remove this line for public access)
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internal"
+    
+    # Optional: Specify subnets (comma-separated)
+    # service.beta.kubernetes.io/aws-load-balancer-subnets: "subnet-abc123,subnet-def456"
+    
+    # Optional: Enable TLS (requires ACM certificate)
+    # service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "arn:aws-us-gov:acm:us-gov-west-1:ACCOUNT:certificate/CERT_ID"
+    # service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "http"
+    # service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+spec:
+  type: LoadBalancer
+  ports:
+  - name: http
+    port: 80
+    targetPort: 80
+    protocol: TCP
+  # Uncomment for HTTPS (requires certificate annotation above)
+  # - name: https
+  #   port: 443
+  #   targetPort: 80
+  #   protocol: TCP
+  selector:
+    app: chatbot-webapp

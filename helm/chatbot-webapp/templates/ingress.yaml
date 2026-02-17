@@ -1,0 +1,60 @@
+{{- if .Values.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "chatbot-webapp.fullname" . }}
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "chatbot-webapp.labels" . | nindent 4 }}
+  annotations:
+    {{- if .Values.ingress.tls.enabled }}
+    {{- if .Values.ingress.tls.certificateArn }}
+    alb.ingress.kubernetes.io/certificate-arn: {{ .Values.ingress.tls.certificateArn | quote }}
+    {{- end }}
+    {{- end }}
+    {{- if .Values.ingress.public }}
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    {{- end }}
+    {{- if .Values.oauth2Proxy.enabled }}
+    {{- /* Route to OAuth2 Proxy instead of directly to webapp */ -}}
+    alb.ingress.kubernetes.io/actions.oauth2-proxy: |
+      {
+        "type": "forward",
+        "forwardConfig": {
+          "targetGroups": [
+            {
+              "serviceName": "{{ include "chatbot-webapp.oauth2ProxyName" . }}",
+              "servicePort": "{{ .Values.oauth2Proxy.service.port }}"
+            }
+          ]
+        }
+      }
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+  {{- range .Values.ingress.hosts }}
+  - host: {{ .host | quote }}
+    http:
+      paths:
+      {{- range .paths }}
+      - path: {{ .path }}
+        pathType: {{ .pathType }}
+        backend:
+          {{- if $.Values.oauth2Proxy.enabled }}
+          service:
+            name: {{ include "chatbot-webapp.oauth2ProxyName" $ }}
+            port:
+              number: {{ $.Values.oauth2Proxy.service.port }}
+          {{- else }}
+          service:
+            name: {{ include "chatbot-webapp.fullname" $ }}
+            port:
+              number: {{ $.Values.service.port }}
+          {{- end }}
+      {{- end }}
+  {{- end }}
+{{- end }}

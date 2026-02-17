@@ -1,0 +1,144 @@
+# Production Deployment Configuration
+# High availability, autoscaling, external auth provider
+
+webapp:
+  enabled: true
+  replicaCount: 3  # Higher initial count
+  
+  image:
+    repository: "REPLACE_WITH_YOUR_ECR_URL/chatbot-webapp"
+    tag: "v1.0.0"  # Use semantic versioning
+    pullPolicy: IfNotPresent  # Cache images
+  
+  # Enable autoscaling
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  
+  # Production resource limits
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  
+  # Pod anti-affinity for HA
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - chatbot-webapp
+        topologyKey: topology.kubernetes.io/zone
+  
+  # Service account with IAM role (optional)
+  serviceAccount:
+    create: true
+    annotations:
+      eks.amazonaws.com/role-arn: "arn:aws:iam::123456789012:role/chatbot-webapp-prod"
+
+config:
+  chatbotUrl: "https://api.prod.example.com/chatbot/query"
+  authMode: "bearer"
+  retrievalMode: "hybrid"
+  assistantMode: "contextual"
+  llmProvider: "bedrock"
+  modelId: "anthropic.claude-3-5-sonnet-20240620-v1:0"
+  streamMode: "sse"
+
+ingress:
+  enabled: true
+  className: "alb"
+  
+  annotations:
+    # Internet-facing for production
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: "5"
+    alb.ingress.kubernetes.io/healthy-threshold-count: "2"
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: "3"
+    # WAF protection
+    alb.ingress.kubernetes.io/wafv2-acl-arn: "arn:aws:wafv2:us-east-1:123456789012:global/webacl/chatbot-prod/..."
+    # Access logs
+    alb.ingress.kubernetes.io/load-balancer-attributes: access_logs.s3.enabled=true,access_logs.s3.bucket=my-alb-logs
+  
+  hosts:
+    - host: "chatbot.example.com"
+      paths:
+        - path: /
+          pathType: Prefix
+  
+  tls:
+    enabled: true
+    certificateArn: "arn:aws:acm:us-east-1:123456789012:certificate/PROD_CERT_ID"
+  
+  public: true
+
+# OAuth2 Proxy with external Keycloak
+oauth2Proxy:
+  enabled: true
+  replicaCount: 3
+  
+  config:
+    provider: "keycloak-oidc"
+    oidcIssuerUrl: "https://auth.example.com/realms/production"
+    clientId: "chatbot-prod"
+    # Use external secret manager
+    clientSecret: "SECRET_FROM_AWS_SECRETS_MANAGER"
+    emailDomain: "@example.com"  # Restrict to company domain
+    
+    extraArgs:
+      - --cookie-expire=8h
+      - --cookie-refresh=1h
+      - --cookie-secure=true
+      - --cookie-samesite=strict
+      - --ssl-insecure-skip-verify=false
+  
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+
+# Use external managed Keycloak
+keycloak:
+  enabled: false
+
+# Common labels for all resources
+commonLabels:
+  environment: production
+  team: platform
+  cost-center: engineering
+
+# Additional annotations for monitoring
+webapp:
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "80"
+    prometheus.io/path: "/metrics"
+
+# Note: For production, also consider:
+# 1. Container image scanning in CI/CD
+# 2. Network policies for pod isolation
+# 3. Pod security policies/standards
+# 4. Regular security updates
+# 5. Backup and disaster recovery
+# 6. Monitoring and alerting (CloudWatch, Prometheus, Grafana)
+# 7. Distributed tracing (X-Ray, Jaeger)
+# 8. Rate limiting and DDoS protection
+# 9. Secret rotation with AWS Secrets Manager
+# 10. Multi-region deployment for DR

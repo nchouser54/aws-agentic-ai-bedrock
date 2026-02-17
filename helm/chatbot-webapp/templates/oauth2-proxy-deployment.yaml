@@ -1,0 +1,85 @@
+{{- if .Values.oauth2Proxy.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "chatbot-webapp.oauth2ProxyName" . }}
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "chatbot-webapp.oauth2ProxyLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.oauth2Proxy.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "chatbot-webapp.oauth2ProxySelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "chatbot-webapp.oauth2ProxySelectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/oauth2-proxy-secret.yaml") . | sha256sum }}
+    spec:
+      containers:
+      - name: oauth2-proxy
+        image: "{{ .Values.oauth2Proxy.image.repository }}:{{ .Values.oauth2Proxy.image.tag }}"
+        imagePullPolicy: {{ .Values.oauth2Proxy.image.pullPolicy }}
+        args:
+        - --provider={{ .Values.oauth2Proxy.config.provider }}
+        - --client-id=$(CLIENT_ID)
+        - --client-secret=$(CLIENT_SECRET)
+        - --cookie-secret=$(COOKIE_SECRET)
+        - --email-domain={{ .Values.oauth2Proxy.config.emailDomain }}
+        {{- if .Values.oauth2Proxy.config.oidcIssuerUrl }}
+        - --oidc-issuer-url={{ required "oauth2Proxy.config.oidcIssuerUrl is required when oauth2Proxy is enabled" .Values.oauth2Proxy.config.oidcIssuerUrl }}
+        {{- end }}
+        {{- $redirectUrl := include "chatbot-webapp.oauth2ProxyRedirectUrl" . }}
+        {{- if $redirectUrl }}
+        - --redirect-url={{ $redirectUrl }}
+        {{- end }}
+        - --http-address=0.0.0.0:4180
+        - --upstream=http://{{ include "chatbot-webapp.fullname" . }}:{{ .Values.service.port }}
+        - --skip-provider-button=true
+        - --cookie-secure=true
+        - --cookie-httponly=true
+        - --cookie-samesite=lax
+        - --pass-access-token=true
+        - --pass-authorization-header=true
+        - --set-authorization-header=true
+        - --set-xauthrequest=true
+        {{- with .Values.oauth2Proxy.config.extraArgs }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        env:
+        - name: CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "chatbot-webapp.oauth2ProxyName" . }}
+              key: client-id
+        - name: CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "chatbot-webapp.oauth2ProxyName" . }}
+              key: client-secret
+        - name: COOKIE_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "chatbot-webapp.oauth2ProxyName" . }}
+              key: cookie-secret
+        ports:
+        - name: http
+          containerPort: 4180
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /ping
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ping
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          {{- toYaml .Values.oauth2Proxy.resources | nindent 10 }}
+{{- end }}

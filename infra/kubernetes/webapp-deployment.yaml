@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chatbot-webapp
+  namespace: default  # Change this to your namespace
+  labels:
+    app: chatbot-webapp
+    component: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: chatbot-webapp
+  template:
+    metadata:
+      labels:
+        app: chatbot-webapp
+        component: frontend
+    spec:
+      containers:
+      - name: webapp
+        # REPLACE WITH YOUR ECR IMAGE
+        # Build: docker build -t <ACCOUNT>.dkr.ecr.us-gov-west-1.amazonaws.com/chatbot-webapp:latest webapp/
+        # Push: docker push <ACCOUNT>.dkr.ecr.us-gov-west-1.amazonaws.com/chatbot-webapp:latest
+        image: <ACCOUNT_ID>.dkr.ecr.us-gov-west-1.amazonaws.com/chatbot-webapp:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 80
+          name: http
+          protocol: TCP
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+        livenessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        volumeMounts:
+        - name: config
+          mountPath: /usr/share/nginx/html/config.js
+          subPath: config.js
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: chatbot-webapp-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chatbot-webapp
+  namespace: default  # Change this to your namespace
+  labels:
+    app: chatbot-webapp
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    app: chatbot-webapp
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: chatbot-webapp
+  namespace: default  # Change this to your namespace
+  annotations:
+    # For AWS ALB Ingress Controller
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws-us-gov:acm:us-gov-west-1:<ACCOUNT_ID>:certificate/<CERT_ID>
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS-1-2-2017-01
+    # Uncomment if you want HTTPS redirect:
+    # alb.ingress.kubernetes.io/ssl-redirect: '443'
+spec:
+  ingressClassName: alb
+  rules:
+  - host: chatbot.your-domain.com  # Change to your domain or remove for any host
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: chatbot-webapp
+            port:
+              number: 80

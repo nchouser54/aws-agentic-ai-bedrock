@@ -1,0 +1,120 @@
+{{- $webappUrl := "" }}
+{{- if .Values.ingress.enabled }}
+{{- $host := include "chatbot-webapp.ingressHost" . }}
+{{- if $host }}
+{{- $webappUrl = printf "https://%s" $host }}
+{{- end }}
+{{- end }}
+
+{{- $keycloakUrl := "" }}
+{{- if and .Values.keycloak.enabled .Values.keycloak.ingress.enabled .Values.keycloak.ingress.host }}
+{{- $keycloakUrl = printf "https://%s/auth" .Values.keycloak.ingress.host }}
+{{- end }}
+
+🎉 Chatbot Webapp has been deployed!
+
+{{ if .Values.webapp.enabled -}}
+📦 Webapp Deployment:
+  Name: {{ include "chatbot-webapp.fullname" . }}
+  Namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  Replicas: {{ .Values.webapp.replicaCount }}
+  {{- if .Values.webapp.autoscaling.enabled }}
+  Autoscaling: Enabled ({{ .Values.webapp.autoscaling.minReplicas }}-{{ .Values.webapp.autoscaling.maxReplicas }} replicas)
+  {{- end }}
+{{- end }}
+
+{{ if .Values.ingress.enabled -}}
+🌐 Access URL:
+  {{- if $webappUrl }}
+  {{ $webappUrl }}
+  {{- else }}
+  Please configure ingress.hosts[0].host in your values
+  {{- end }}
+{{- end }}
+
+{{ if .Values.oauth2Proxy.enabled -}}
+🔐 OAuth2 Proxy:
+  Status: Enabled
+  Provider: {{ .Values.oauth2Proxy.config.provider }}
+  {{- if .Values.oauth2Proxy.config.oidcIssuerUrl }}
+  OIDC Issuer: {{ .Values.oauth2Proxy.config.oidcIssuerUrl }}
+  {{- end }}
+  Replicas: {{ .Values.oauth2Proxy.replicaCount }}
+
+  ⚠️  Authentication is required to access the webapp.
+{{- end }}
+
+{{ if .Values.keycloak.enabled -}}
+🔑 Keycloak:
+  Name: {{ include "chatbot-webapp.keycloakName" . }}
+  {{- if $keycloakUrl }}
+  Admin Console: {{ $keycloakUrl }}/admin
+  {{- end }}
+  Admin Username: {{ .Values.keycloak.admin.username }}
+  
+  📝 Get admin password:
+  kubectl get secret {{ include "chatbot-webapp.keycloakName" . }} \
+    -n {{ .Values.global.namespace | default .Release.Namespace }} \
+    -o jsonpath='{.data.admin-password}' | base64 -d && echo
+
+  📖 Next steps for Keycloak setup:
+  1. Login to Keycloak admin console
+  2. Create a new realm (e.g., "chatbot")
+  3. Create a client for OAuth2 Proxy:
+     - Client ID: {{ .Values.oauth2Proxy.config.clientId | default "chatbot-webapp" }}
+     - Client Protocol: openid-connect
+     - Access Type: confidential
+     {{- if $webappUrl }}
+     - Valid Redirect URIs: {{ $webappUrl }}/oauth2/callback
+     {{- end }}
+  4. Copy the client secret and update your values
+  5. Create users and assign roles
+{{- end }}
+
+📊 Check deployment status:
+  kubectl get pods -n {{ .Values.global.namespace | default .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+  kubectl get ingress -n {{ .Values.global.namespace | default .Release.Namespace }}
+
+{{ if .Values.webapp.enabled -}}
+🪵 View logs:
+  # Webapp logs
+  kubectl logs -n {{ .Values.global.namespace | default .Release.Namespace }} -l app.kubernetes.io/name={{ include "chatbot-webapp.name" . }} -f
+  
+  {{- if .Values.oauth2Proxy.enabled }}
+  # OAuth2 Proxy logs
+  kubectl logs -n {{ .Values.global.namespace | default .Release.Namespace }} -l app.kubernetes.io/component=oauth2-proxy -f
+  {{- end }}
+  
+  {{- if .Values.keycloak.enabled }}
+  # Keycloak logs
+  kubectl logs -n {{ .Values.global.namespace | default .Release.Namespace }} -l app.kubernetes.io/component=keycloak -f
+  {{- end }}
+{{- end }}
+
+🔧 Configuration:
+  Backend API: {{ .Values.config.chatbotUrl | default "⚠️  NOT SET - Update config.chatbotUrl" }}
+  Auth Mode: {{ .Values.config.authMode }}
+  Retrieval Mode: {{ .Values.config.retrievalMode }}
+  Model: {{ .Values.config.modelId }}
+
+{{ if not .Values.config.chatbotUrl -}}
+⚠️  IMPORTANT: Set config.chatbotUrl to your API Gateway URL!
+{{- end }}
+
+{{ if and .Values.ingress.enabled (not .Values.ingress.tls.certificateArn) -}}
+⚠️  WARNING: TLS is enabled but no certificate ARN provided.
+   Set ingress.tls.certificateArn for HTTPS support.
+{{- end }}
+
+{{ if and (not .Values.ingress.enabled) .Values.oauth2Proxy.enabled -}}
+⚠️  WARNING: OAuth2 Proxy is enabled but Ingress is disabled.
+   Enable ingress or expose OAuth2 Proxy via port-forward for testing.
+{{- end }}
+
+📚 Documentation:
+  - Helm Chart: helm/chatbot-webapp/README.md
+  - Keycloak Integration: docs/keycloak_integration.md
+  - EKS Deployment: infra/kubernetes/README.md
+
+💡 Need help? Check the documentation or run:
+   helm get values {{ .Release.Name }} -n {{ .Values.global.namespace | default .Release.Namespace }}

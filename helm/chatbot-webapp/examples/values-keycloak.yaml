@@ -1,0 +1,151 @@
+# Full Deployment with Keycloak Authentication
+# This configuration deploys webapp + OAuth2 Proxy + Keycloak
+
+webapp:
+  enabled: true
+  replicaCount: 2
+  
+  image:
+    repository: "REPLACE_WITH_YOUR_ECR_URL/chatbot-webapp"
+    tag: "latest"
+    pullPolicy: Always
+  
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+config:
+  chatbotUrl: "https://YOUR_API_GATEWAY_ID.execute-api.us-east-1.amazonaws.com/prod/chatbot/query"
+  
+  # Use bearer tokens from Keycloak
+  authMode: "bearer"
+  
+  retrievalMode: "hybrid"
+  assistantMode: "contextual"
+  llmProvider: "bedrock"
+  modelId: "anthropic.claude-3-5-sonnet-20240620-v1:0"
+  streamMode: "sse"
+
+ingress:
+  enabled: true
+  className: "alb"
+  
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+  
+  hosts:
+    - host: "chatbot.your-domain.com"
+      paths:
+        - path: /
+          pathType: Prefix
+  
+  tls:
+    enabled: true
+    certificateArn: "arn:aws:acm:us-east-1:123456789012:certificate/YOUR_CERT_ID"
+
+# OAuth2 Proxy for authentication
+oauth2Proxy:
+  enabled: true
+  replicaCount: 2
+  
+  config:
+    provider: "keycloak-oidc"
+    
+    # Will be auto-generated: https://keycloak.your-domain.com/auth/realms/chatbot
+    oidcIssuerUrl: "https://keycloak.your-domain.com/auth/realms/chatbot"
+    
+    # Keycloak client credentials (create these in Keycloak admin console)
+    clientId: "chatbot-webapp"
+    clientSecret: "REPLACE_WITH_KEYCLOAK_CLIENT_SECRET"  # Get from Keycloak after creating client
+    
+    # Allow all email domains (* or specific like @company.com)
+    emailDomain: "*"
+    
+    # Optional: Cookie expiration (defaults to 12h)
+    extraArgs:
+      - --cookie-expire=12h
+      - --cookie-refresh=1h
+  
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# Keycloak deployment
+keycloak:
+  enabled: true
+  replicaCount: 1
+  
+  # Admin credentials
+  admin:
+    username: "admin"
+    password: "REPLACE_WITH_SECURE_PASSWORD"  # Or leave empty for auto-generation
+  
+  # Development mode (use production settings for prod)
+  args:
+    - start-dev
+    - --http-relative-path=/auth
+  
+  env:
+    KC_PROXY: edge
+    KC_HOSTNAME_STRICT: "false"
+    KC_HTTP_ENABLED: "true"
+  
+  # For production: Enable PostgreSQL instead of H2
+  database:
+    enabled: false  # Set to true and configure PostgreSQL for production
+    vendor: postgres
+    host: postgres
+    port: 5432
+    database: keycloak
+    username: keycloak
+  
+  # Persistent storage (recommended for production)
+  persistence:
+    enabled: false  # Set to true for production
+    storageClass: "gp3"
+    size: 10Gi
+  
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  
+  # Keycloak admin console access
+  ingress:
+    enabled: true
+    className: "alb"
+    annotations:
+      alb.ingress.kubernetes.io/scheme: internal
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+    host: "keycloak.your-domain.com"
+    tls:
+      enabled: true
+      certificateArn: "arn:aws:acm:us-east-1:123456789012:certificate/YOUR_CERT_ID"
+
+# Post-installation steps:
+# 1. Install the chart: helm install chatbot ./helm/chatbot-webapp -f values-keycloak.yaml
+# 2. Get Keycloak admin password: kubectl get secret chatbot-webapp-keycloak -o jsonpath='{.data.admin-password}' | base64 -d
+# 3. Access Keycloak: https://keycloak.your-domain.com/auth/admin
+# 4. Create realm: "chatbot"
+# 5. Create client: "chatbot-webapp" (confidential, openid-connect)
+# 6. Set Valid Redirect URI: https://chatbot.your-domain.com/oauth2/callback
+# 7. Copy client secret and update oauth2Proxy.config.clientSecret
+# 8. Upgrade deployment: helm upgrade chatbot ./helm/chatbot-webapp -f values-keycloak.yaml
+# 9. Create users in Keycloak
+# 10. Access chatbot at https://chatbot.your-domain.com (will redirect to Keycloak login)

@@ -1,0 +1,27 @@
+{{- if .Values.keycloak.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "chatbot-webapp.keycloakName" . }}
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "chatbot-webapp.keycloakLabels" . | nindent 4 }}
+  {{- with .Values.keycloak.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.keycloak.service.type }}
+  clusterIP: None  # Headless service for StatefulSet
+  ports:
+  - port: {{ .Values.keycloak.service.port }}
+    targetPort: http
+    protocol: TCP
+    name: http
+  - port: 8443
+    targetPort: https
+    protocol: TCP
+    name: https
+  selector:
+    {{- include "chatbot-webapp.keycloakSelectorLabels" . | nindent 4 }}
+{{- end }}

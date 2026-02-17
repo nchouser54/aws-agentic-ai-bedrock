@@ -1,0 +1,68 @@
+# Simple Deployment - No Authentication
+# This configuration deploys the chatbot webapp without Keycloak/OAuth2 Proxy
+
+webapp:
+  enabled: true
+  replicaCount: 2
+  
+  image:
+    repository: "REPLACE_WITH_YOUR_ECR_URL/chatbot-webapp"  # e.g., 123456789012.dkr.ecr.us-east-1.amazonaws.com/chatbot-webapp
+    tag: "latest"
+    pullPolicy: Always
+  
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+config:
+  # REQUIRED: Your API Gateway URL
+  chatbotUrl: "https://YOUR_API_GATEWAY_ID.execute-api.us-east-1.amazonaws.com/prod/chatbot/query"
+  
+  # Use token-based authentication
+  authMode: "token"
+  
+  # Optional: Default token (leave empty for user input)
+  authValue: ""
+  
+  # Retrieval settings
+  retrievalMode: "hybrid"
+  assistantMode: "contextual"
+  llmProvider: "bedrock"
+  modelId: "anthropic.claude-3-5-sonnet-20240620-v1:0"
+  streamMode: "sse"
+
+ingress:
+  enabled: true
+  className: "alb"
+  
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internal  # Change to "internet-facing" for public access
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+  
+  hosts:
+    - host: "chatbot.your-domain.com"  # REQUIRED: Your domain name
+      paths:
+        - path: /
+          pathType: Prefix
+  
+  tls:
+    enabled: true
+    certificateArn: "arn:aws:acm:us-east-1:123456789012:certificate/YOUR_CERT_ID"  # REQUIRED: Your ACM certificate
+  
+  # Set to true for internet-facing ALB
+  public: false
+
+# OAuth2 Proxy - disabled for simple deployment
+oauth2Proxy:
+  enabled: false
+
+# Keycloak - disabled for simple deployment
+keycloak:
+  enabled: false

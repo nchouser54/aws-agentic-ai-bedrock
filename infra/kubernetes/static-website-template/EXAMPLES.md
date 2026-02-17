@@ -1,0 +1,581 @@
+# Real-World Examples
+
+This document provides complete, ready-to-use examples for common static website deployment scenarios.
+
+## Table of Contents
+
+- [React Single Page Application](#react-single-page-application)
+- [Vue.js App with Environment Variables](#vuejs-app-with-environment-variables)
+- [Hugo Blog with Custom Domain](#hugo-blog-with-custom-domain)
+- [Angular App - Multi-Environment](#angular-app---multi-environment)
+- [Documentation Site (MkDocs/Docusaurus)](#documentation-site-mkdocsdocusaurus)
+- [Landing Page with CDN](#landing-page-with-cdn)
+- [Internal Corporate Portal](#internal-corporate-portal)
+
+---
+
+## React Single Page Application
+
+**Scenario:** Deploy a React app with client-side routing (React Router) and HTTPS.
+
+### Project Structure
+```
+my-react-app/
+├── src/
+├── public/
+├── build/           ← Output from 'npm run build'
+├── package.json
+└── k8s/
+    ├── Dockerfile
+    ├── deployment.yaml
+    └── deploy.sh
+```
+
+### Custom Dockerfile for React
+
+```dockerfile
+FROM public.ecr.aws/nginx/nginx:1.26-alpine
+
+# Copy React build output
+COPY build/ /usr/share/nginx/html/
+
+# SPA configuration - handle client-side routing
+RUN echo 'server { \
+    listen 80; \
+    server_name _; \
+    root /usr/share/nginx/html; \
+    index index.html; \
+    \
+    # React Router - all routes go to index.html \
+    location / { \
+        try_files $uri /index.html; \
+    } \
+    \
+    # API proxy (if your React app calls backend APIs) \
+    # location /api/ { \
+    #     proxy_pass http://backend-service.default.svc.cluster.local:8080/; \
+    #     proxy_set_header Host $host; \
+    #     proxy_set_header X-Real-IP $remote_addr; \
+    # } \
+    \
+    # Cache static assets \
+    location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2)$ { \
+        expires 1y; \
+        add_header Cache-Control "public, immutable"; \
+    } \
+    \
+    # Security headers \
+    add_header X-Frame-Options "DENY" always; \
+    add_header X-Content-Type-Options "nosniff" always; \
+    add_header Content-Security-Policy "default-src '\''self'\''; script-src '\''self'\'' '\''unsafe-inline'\''; style-src '\''self'\'' '\''unsafe-inline'\''; img-src '\''self'\'' data: https:;" always; \
+    \
+    location /health { \
+        return 200 "healthy\n"; \
+        add_header Content-Type text/plain; \
+    } \
+}' > /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+### Deployment
+
+```bash
+# Build React app
+cd my-react-app
+npm run build
+
+# Deploy with HTTPS
+../k8s/deploy.sh \
+  --name my-react-app \
+  --source ./build \
+  --namespace production \
+  --domain app.example.com \
+  --cert arn:aws:acm:us-gov-west-1:123456789:certificate/abc-123-def-456 \
+  --replicas 3
+```
+
+### Accessing
+
+```bash
+# Port forward for local testing
+kubectl port-forward svc/my-react-app -n production 8080:80
+open http://localhost:8080
+
+# Get production URL
+kubectl get ingress my-react-app-alb -n production
+# Access: https://app.example.com
+```
+
+---
+
+## Vue.js App with Environment Variables
+
+**Scenario:** Deploy a Vue app with runtime configuration via ConfigMap.
+
+### ConfigMap for Runtime Config
+
+Create `vue-config-configmap.yaml`:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vue-app-config
+  namespace: production
+data:
+  config.js: |
+    window.VUE_APP_CONFIG = {
+      API_URL: "https://api.example.com",
+      ENVIRONMENT: "production",
+      FEATURE_FLAGS: {
+        enableNewUI: true,
+        enableAnalytics: true
+      }
+    };
+```
+
+### Modified Deployment
+
+After running deploy.sh, edit the generated deployment to mount ConfigMap:
+
+```yaml
+# In deployment.yaml, add to container spec:
+volumeMounts:
+- name: config
+  mountPath: /usr/share/nginx/html/config.js
+  subPath: config.js
+  readOnly: true
+
+# Add to pod spec:
+volumes:
+- name: config
+  configMap:
+    name: vue-app-config
+```
+
+### Load Config in Vue
+
+In your `public/index.html`:
+
+```html
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>My Vue App</title>
+    <!-- Load config before Vue app -->
+    <script src="/config.js"></script>
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
+</html>
+```
+
+In your Vue code:
+
+```javascript
+// src/config.js
+export const config = window.VUE_APP_CONFIG || {
+  API_URL: 'http://localhost:8080', // fallback for local dev
+  ENVIRONMENT: 'development',
+  FEATURE_FLAGS: {}
+};
+```
+
+### Deployment
+
+```bash
+# Build Vue app
+npm run build
+
+# Apply ConfigMap first
+kubectl apply -f k8s/vue-config-configmap.yaml
+
+# Deploy app
+./deploy.sh --name vue-app --source ./dist --namespace production
+
+# Update ConfigMap without redeploying app
+kubectl edit configmap vue-app-config -n production
+kubectl rollout restart deployment/vue-app -n production
+```
+
+---
+
+## Hugo Blog with Custom Domain
+
+**Scenario:** Personal blog built with Hugo, public internet access, custom domain with HTTPS.
+
+### Hugo Site Structure
+
+```
+my-blog/
+├── content/
+├── themes/
+├── config.toml
+├── public/          ← Generated by 'hugo'
+└── k8s/
+```
+
+### Build and Deploy
+
+```bash
+# Build Hugo site
+cd my-blog
+hugo
+
+# Deploy with public access and custom domain
+./k8s/deploy.sh \
+  --name blog \
+  --source ./public \
+  --domain blog.example.com \
+  --cert arn:aws-us-gov:acm:us-gov-west-1:123456:certificate/abc-123 \
+  --public \
+  --replicas 2
+```
+
+### DNS Setup
+
+After deployment:
+
+```bash
+# Get ALB DNS name
+ALB_DNS=$(kubectl get ingress blog-alb -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+# Create CNAME record in Route53
+aws route53 change-resource-record-sets \
+  --hosted-zone-id Z1234567890ABC \
+  --change-batch '{
+    "Changes": [{
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "blog.example.com",
+        "Type": "CNAME",
+        "TTL": 300,
+        "ResourceRecords": [{"Value": "'$ALB_DNS'"}]
+      }
+    }]
+  }'
+```
+
+### Update Blog
+
+```bash
+# Write new post
+vim content/posts/new-post.md
+
+# Rebuild
+hugo
+
+# Deploy new version (tag with date)
+TAG=$(date +%Y%m%d-%H%M)
+./k8s/deploy.sh --name blog --source ./public --tag $TAG
+```
+
+---
+
+## Angular App - Multi-Environment
+
+**Scenario:** Deploy Angular app to multiple environments (dev, staging, prod) with different configurations.
+
+### Angular Build for Each Environment
+
+```bash
+# Development
+ng build --configuration=development --output-path=dist/dev
+
+# Staging
+ng build --configuration=staging --output-path=dist/staging
+
+# Production
+ng build --configuration=production --output-path=dist/prod
+```
+
+### Deploy to Each Environment
+
+```bash
+# Dev (no HTTPS, internal only)
+./deploy.sh \
+  --name angular-app \
+  --source ./dist/dev \
+  --namespace development \
+  --tag dev-$(git rev-parse --short HEAD) \
+  --replicas 1
+
+# Staging (with HTTPS, internal)
+./deploy.sh \
+  --name angular-app \
+  --source ./dist/staging \
+  --namespace staging \
+  --domain staging.myapp.com \
+  --cert arn:aws:acm:us-gov-west-1:123456:certificate/staging-cert \
+  --tag staging-$(git rev-parse --short HEAD) \
+  --replicas 2
+
+# Production (with HTTPS, public, high availability)
+./deploy.sh \
+  --name angular-app \
+  --source ./dist/prod \
+  --namespace production \
+  --domain www.myapp.com \
+  --cert arn:aws:acm:us-gov-west-1:123456:certificate/prod-cert \
+  --tag v$(node -p "require('./package.json').version") \
+  --replicas 5 \
+  --public
+```
+
+### CI/CD Pipeline (GitHub Actions Example)
+
+`.github/workflows/deploy.yml`:
+
+```yaml
+name: Deploy Angular App
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+      - develop
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            ng build --configuration=production
+            ENV="production"
+          elif [ "${{ github.ref }}" == "refs/heads/staging" ]; then
+            ng build --configuration=staging
+            ENV="staging"
+          else
+            ng build --configuration=development
+            ENV="development"
+          fi
+          echo "DEPLOY_ENV=$ENV" >> $GITHUB_ENV
+      
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-gov-west-1
+      
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+      
+      - name: Deploy
+        run: |
+          ./k8s/deploy.sh \
+            --name angular-app \
+            --source ./dist/${{ env.DEPLOY_ENV }} \
+            --namespace ${{ env.DEPLOY_ENV }} \
+            --tag ${{ github.sha }}
+```
+
+---
+
+## Documentation Site (MkDocs/Docusaurus)
+
+**Scenario:** Internal documentation site with search, version control.
+
+### MkDocs Example
+
+```bash
+# Build MkDocs site
+mkdocs build
+
+# Deploy internally (no internet access)
+./deploy.sh \
+  --name docs \
+  --source ./site \
+  --domain docs.internal.company.com \
+  --namespace documentation \
+  --replicas 2
+```
+
+### Docusaurus Example
+
+```bash
+# Build Docusaurus
+cd my-docs
+npm run build
+
+# Deploy with versioning support
+./deploy.sh \
+  --name company-docs \
+  --source ./build \
+  --domain docs.company.com \
+  --cert arn:aws:acm:us-gov-west-1:123456:certificate/abc \
+  --namespace docs \
+  --tag v2.1.0
+```
+
+### Add Basic Auth for Sensitive Docs
+
+Create auth secret:
+
+```bash
+# Generate htpasswd
+htpasswd -c auth admin
+# Enter password when prompted
+
+# Create secret
+kubectl create secret generic docs-auth \
+  --from-file=auth \
+  --namespace documentation
+```
+
+Update Ingress annotations:
+
+```yaml
+annotations:
+  alb.ingress.kubernetes.io/auth-type: cognito  # Or use nginx-ingress with basic auth
+  # For nginx-ingress:
+  # nginx.ingress.kubernetes.io/auth-type: basic
+  # nginx.ingress.kubernetes.io/auth-secret: docs-auth
+  # nginx.ingress.kubernetes.io/auth-realm: "Authentication Required"
+```
+
+---
+
+## Landing Page with CDN
+
+**Scenario:** Marketing landing page with CloudFront CDN in front of ALB.
+
+### Deploy App
+
+```bash
+./deploy.sh \
+  --name landing-page \
+  --domain origin.landingpage.com \
+  --cert arn:aws:acm:us-east-1:123456:certificate/abc \
+  --public \
+  --replicas 3
+```
+
+### Create CloudFront Distribution
+
+```bash
+# Get ALB DNS
+ALB_DNS=$(kubectl get ingress landing-page-alb -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+# Create CloudFront distribution pointing to ALB
+aws cloudfront create-distribution --distribution-config '{
+  "CallerReference": "'$(date +%s)'",
+  "Comment": "Landing page CDN",
+  "Origins": {
+    "Quantity": 1,
+    "Items": [{
+      "Id": "ALB",
+      "DomainName": "'$ALB_DNS'",
+      "CustomOriginConfig": {
+        "HTTPPort": 80,
+        "HTTPSPort": 443,
+        "OriginProtocolPolicy": "https-only"
+      }
+    }]
+  },
+  "DefaultRootObject": "index.html",
+  "DefaultCacheBehavior": {
+    "TargetOriginId": "ALB",
+    "ViewerProtocolPolicy": "redirect-to-https",
+    "Compress": true,
+    "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6"
+  },
+  "Enabled": true
+}'
+```
+
+---
+
+## Internal Corporate Portal
+
+**Scenario:** Employee portal, private subnets only, uses existing NLB.
+
+### Deploy with NLB
+
+```bash
+./deploy.sh \
+  --name employee-portal \
+  --namespace corporate \
+  --nlb \
+  --replicas 4
+```
+
+### Use Existing NLB
+
+Edit `deployment.yaml` before deploying:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: employee-portal-nlb
+  annotations:
+    # Use existing NLB
+    service.beta.kubernetes.io/aws-load-balancer-type: "external"
+    # Specify the NLB ARN
+    service.beta.kubernetes.io/aws-load-balancer-name: "existing-nlb-name"
+```
+
+---
+
+## Advanced: Blue-Green Deployment
+
+Deploy two versions side-by-side and switch traffic:
+
+```bash
+# Deploy blue version
+./deploy.sh --name myapp-blue --tag v1.0.0 --replicas 3
+
+# Deploy green version
+./deploy.sh --name myapp-green --tag v2.0.0 --replicas 3
+
+# Switch Ingress to point to green
+kubectl patch ingress myapp-alb -p '{
+  "spec": {
+    "rules": [{
+      "http": {
+        "paths": [{
+          "backend": {
+            "service": {
+              "name": "myapp-green"
+            }
+          }
+        }]
+      }
+    }]
+  }
+}'
+
+# If all good, scale down blue
+kubectl scale deployment/myapp-blue --replicas=0
+
+# If issues, rollback to blue
+kubectl patch ingress myapp-alb -p '{...use myapp-blue...}'
+```
+
+---
+
+## Next Steps
+
+- Review [README.md](README.md) for full documentation
+- Check [deployment.yaml](deployment.yaml) for all configuration options
+- See [Troubleshooting](#troubleshooting) section in README
+
+**Need help?** Open an issue or check Kubernetes/EKS documentation.
