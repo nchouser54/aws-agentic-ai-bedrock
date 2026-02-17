@@ -11,6 +11,7 @@ locals {
   webapp_private_only               = local.webapp_ec2_enabled && var.webapp_private_only
   webapp_tls_enabled                = local.webapp_ec2_enabled && var.webapp_tls_enabled
   webapp_bucket_name                = trimspace(var.webapp_bucket_name) != "" ? trimspace(var.webapp_bucket_name) : "${local.name_prefix}-${data.aws_caller_identity.current.account_id}-chatbot-webapp"
+  webapp_asset_version              = sha256(join("", [for filename in sort(keys(local.webapp_files)) : filesha256(local.webapp_files[filename].source)]))
   webapp_files = {
     "index.html" = {
       source       = "${path.module}/../../webapp/index.html"
@@ -481,13 +482,13 @@ resource "aws_s3_bucket" "kb_sync_documents" {
 }
 
 resource "aws_s3_bucket" "webapp" {
-  count         = local.webapp_s3_enabled ? 1 : 0
+  count         = local.webapp_hosting_enabled ? 1 : 0
   bucket        = local.webapp_bucket_name
   force_destroy = true
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "webapp" {
-  count  = local.webapp_s3_enabled ? 1 : 0
+  count  = local.webapp_hosting_enabled ? 1 : 0
   bucket = aws_s3_bucket.webapp[0].id
 
   rule {
@@ -498,12 +499,12 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "webapp" {
 }
 
 resource "aws_s3_bucket_public_access_block" "webapp" {
-  count                   = local.webapp_s3_enabled ? 1 : 0
+  count                   = local.webapp_hosting_enabled ? 1 : 0
   bucket                  = aws_s3_bucket.webapp[0].id
-  block_public_acls       = false
-  block_public_policy     = false
-  ignore_public_acls      = false
-  restrict_public_buckets = false
+  block_public_acls       = !local.webapp_s3_enabled
+  block_public_policy     = !local.webapp_s3_enabled
+  ignore_public_acls      = !local.webapp_s3_enabled
+  restrict_public_buckets = !local.webapp_s3_enabled
 }
 
 resource "aws_s3_bucket_website_configuration" "webapp" {
@@ -540,7 +541,7 @@ resource "aws_s3_bucket_policy" "webapp_public_read" {
 }
 
 resource "aws_s3_object" "webapp_files" {
-  for_each = local.webapp_s3_enabled ? local.webapp_files : {}
+  for_each = local.webapp_hosting_enabled ? local.webapp_files : {}
 
   bucket       = aws_s3_bucket.webapp[0].id
   key          = each.key
@@ -570,6 +571,63 @@ resource "aws_security_group" "webapp_ec2" {
   }
 }
 
+resource "aws_iam_role" "webapp_ec2" {
+  count = local.webapp_ec2_enabled ? 1 : 0
+  name  = "${local.name_prefix}-webapp-ec2-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "ec2.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_policy" "webapp_ec2_assets" {
+  count = local.webapp_ec2_enabled ? 1 : 0
+  name  = "${local.name_prefix}-webapp-ec2-assets-policy"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket"
+        ]
+        Resource = [
+          aws_s3_bucket.webapp[0].arn,
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject"
+        ]
+        Resource = [
+          "${aws_s3_bucket.webapp[0].arn}/*"
+        ]
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "webapp_ec2_assets" {
+  count      = local.webapp_ec2_enabled ? 1 : 0
+  role       = aws_iam_role.webapp_ec2[0].name
+  policy_arn = aws_iam_policy.webapp_ec2_assets[0].arn
+}
+
+resource "aws_iam_instance_profile" "webapp" {
+  count = local.webapp_ec2_enabled ? 1 : 0
+  name  = "${local.name_prefix}-webapp-ec2-profile"
+  role  = aws_iam_role.webapp_ec2[0].name
+}
+
 resource "aws_instance" "webapp" {
   count                       = local.webapp_ec2_enabled ? 1 : 0
   ami                         = trimspace(var.webapp_ec2_ami_id) != "" ? trimspace(var.webapp_ec2_ami_id) : data.aws_ssm_parameter.webapp_ami[0].value
@@ -577,6 +635,7 @@ resource "aws_instance" "webapp" {
   subnet_id                   = var.webapp_ec2_subnet_id
   private_ip                  = trimspace(var.webapp_ec2_private_ip) != "" ? trimspace(var.webapp_ec2_private_ip) : null
   key_name                    = trimspace(var.webapp_ec2_key_name) != "" ? trimspace(var.webapp_ec2_key_name) : null
+  iam_instance_profile        = aws_iam_instance_profile.webapp[0].name
   vpc_security_group_ids      = [aws_security_group.webapp_ec2[0].id]
   associate_public_ip_address = !local.webapp_private_only
 
@@ -585,116 +644,27 @@ resource "aws_instance" "webapp" {
     set -euxo pipefail
     yum update -y
     amazon-linux-extras install nginx1 -y || yum install -y nginx
+    yum install -y awscli || true
     mkdir -p /usr/share/nginx/html
-    cat > /usr/share/nginx/html/index.html <<'HTML'
-    <!doctype html>
-    <html lang="en">
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Private Chatbot UI</title>
-        <style>
-          body { font-family: Arial, sans-serif; margin: 24px; max-width: 980px; }
-          .row { display: flex; gap: 8px; margin-bottom: 10px; }
-          input, select, textarea, button { padding: 8px; font-size: 14px; }
-          input, select, textarea { flex: 1; }
-          textarea { min-height: 120px; }
-          .out { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 12px; white-space: pre-wrap; }
-          .muted { color: #57606a; font-size: 12px; }
-        </style>
-      </head>
-      <body>
-        <h2>Private Chatbot UI</h2>
-        <p class="muted">Compact EC2 UI (optimized to stay under EC2 user-data size limits).</p>
+    echo "WEBAPP_ASSET_VERSION=${local.webapp_asset_version}" > /etc/webapp-assets-version
+    aws s3 sync "s3://${aws_s3_bucket.webapp[0].bucket}" /usr/share/nginx/html \
+      --delete \
+      --exclude "*" \
+      --include "*.html" \
+      --include "*.js" \
+      --include "*.css"
 
-        <div class="row">
-          <label for="chatbotUrl">Chatbot URL</label>
-          <input id="chatbotUrl" type="text" />
-        </div>
-        <div class="row">
-          <label for="authMode">Auth Mode</label>
-          <select id="authMode">
-            <option value="token">token (X-Api-Token)</option>
-            <option value="bearer">bearer (Authorization)</option>
-            <option value="none">none</option>
-          </select>
-          <input id="authValue" type="password" placeholder="token or bearer value" />
-        </div>
-        <div class="row">
-          <input id="jiraJql" type="text" placeholder="Optional JQL" />
-          <input id="confluenceCql" type="text" placeholder="Optional CQL" />
-        </div>
-        <div class="row">
-          <textarea id="query" placeholder="Ask your Jira/Confluence question..."></textarea>
-        </div>
-        <div class="row">
-          <button id="sendBtn" type="button">Send</button>
-        </div>
-
-        <h3>Answer</h3>
-        <div id="answer" class="out">No response yet.</div>
-
-        <h3>Raw Response</h3>
-        <div id="raw" class="out">{}</div>
-
-        <script src="config.js"></script>
-        <script>
-          const defaults = (window.WEBAPP_DEFAULTS || {});
-          const el = (id) => document.getElementById(id);
-
-          el('chatbotUrl').value = defaults.chatbotUrl || '';
-          el('authMode').value = defaults.authMode || 'token';
-
-          async function sendQuery() {
-            const url = el('chatbotUrl').value.trim();
-            const authMode = el('authMode').value;
-            const authValue = el('authValue').value.trim();
-            const query = el('query').value.trim();
-            const jiraJql = el('jiraJql').value.trim();
-            const confluenceCql = el('confluenceCql').value.trim();
-
-            if (!url || !query) {
-              alert('Chatbot URL and query are required.');
-              return;
-            }
-
-            const headers = { 'Content-Type': 'application/json' };
-            if (authMode === 'token' && authValue) headers['X-Api-Token'] = authValue;
-            if (authMode === 'bearer' && authValue) headers['Authorization'] = `Bearer $${authValue}`;
-
-            const body = { query };
-            if (jiraJql) body.jira_jql = jiraJql;
-            if (confluenceCql) body.confluence_cql = confluenceCql;
-
-            el('answer').textContent = 'Loading...';
-            el('raw').textContent = '{}';
-
-            try {
-              const resp = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
-              const payload = await resp.json().catch(() => ({}));
-              if (!resp.ok) {
-                el('answer').textContent = 'HTTP ' + String(resp.status) + ': ' + String(payload.error || 'request_failed');
-              } else {
-                el('answer').textContent = payload.answer || '(no answer field)';
-              }
-              el('raw').textContent = JSON.stringify(payload, null, 2);
-            } catch (err) {
-              el('answer').textContent = 'Request failed: ' + String(err);
-            }
-          }
-
-          el('sendBtn').addEventListener('click', sendQuery);
-        </script>
-      </body>
-    </html>
-    HTML
+    if [ ! -f /usr/share/nginx/html/index.html ]; then
+      echo "webapp index.html was not synced from S3" >&2
+      exit 1
+    fi
 
     cat > /usr/share/nginx/html/config.js <<'JS'
     window.WEBAPP_DEFAULTS = ${jsonencode(local.webapp_default_config)};
     JS
 
     chown -R nginx:nginx /usr/share/nginx/html
-    chmod 0644 /usr/share/nginx/html/index.html /usr/share/nginx/html/config.js
+    chmod 0644 /usr/share/nginx/html/index.html /usr/share/nginx/html/config.js /usr/share/nginx/html/app.js /usr/share/nginx/html/styles.css || true
     systemctl enable nginx
     systemctl restart nginx
   EOT
@@ -704,6 +674,11 @@ resource "aws_instance" "webapp" {
   tags = {
     Name = "${local.name_prefix}-chatbot-webapp"
   }
+
+  depends_on = [
+    aws_s3_object.webapp_files,
+    aws_iam_role_policy_attachment.webapp_ec2_assets,
+  ]
 }
 
 resource "aws_eip" "webapp" {

@@ -591,6 +591,13 @@ Fixed-IP mode for firewall allowlisting:
 - `webapp_ec2_allowed_cidrs = ["203.0.113.10/32"]` (recommended restrictive ingress)
 - Optional: `webapp_ec2_instance_type`, `webapp_ec2_key_name`, `webapp_ec2_ami_id`
 
+EC2 hosting behavior (important):
+
+- Terraform uploads `webapp/index.html`, `webapp/app.js`, `webapp/styles.css`, and `webapp/config.js` to the webapp S3 bucket.
+- EC2 bootstrapping (user-data) syncs those assets from S3 into nginx document root.
+- Default runtime values are injected by overwriting `config.js` on-instance with Terraform-rendered defaults.
+- Manual SSH edits are not recommended because they are overwritten by code-driven deployments.
+
 Private-only VPC mode (no public IPs at all):
 
 - `webapp_hosting_mode = "ec2_eip"`
@@ -623,6 +630,15 @@ For strict private-only mode:
 - `webapp_url` returns a private address
 - `webapp_static_ip` is empty
 - `webapp_tls_static_ips` is empty
+
+Website update workflow (EC2 mode, no SSH required):
+
+1. Update files under `webapp/` in this repo.
+2. Run `terraform plan` and `terraform apply`.
+3. Terraform detects asset hash changes and replaces the EC2 webapp instance (`user_data_replace_on_change=true`).
+4. New instance boots, pulls latest assets from S3, and serves updated UI through nginx.
+
+This keeps updates reproducible and avoids snowflake drift from in-place SSH edits.
 
 Then set your chatbot API URL and auth values in the web UI settings page.
 
