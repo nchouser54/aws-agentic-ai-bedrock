@@ -674,9 +674,19 @@ resource "aws_instance" "webapp" {
     chmod 0644 /usr/share/nginx/html/index.html /usr/share/nginx/html/config.js /usr/share/nginx/html/app.js /usr/share/nginx/html/styles.css || true
     systemctl enable nginx
     systemctl restart nginx
+
+    # Auto-sync webapp files from S3 every 5 minutes
+    cat > /etc/cron.d/webapp-sync <<'CRON'
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+*/5 * * * * root aws s3 sync "s3://${aws_s3_bucket.webapp[0].bucket}" /usr/share/nginx/html --delete --exclude "*" --include "*.html" --include "*.js" --include "*.css" && chown -R nginx:nginx /usr/share/nginx/html && chmod 0644 /usr/share/nginx/html/*.html /usr/share/nginx/html/*.js /usr/share/nginx/html/*.css 2>&1 | logger -t webapp-sync
+CRON
+    chmod 0644 /etc/cron.d/webapp-sync
   EOT
 
-  user_data_replace_on_change = true
+  lifecycle {
+    ignore_changes = [user_data]
+  }
 
   tags = {
     Name = "${local.name_prefix}-chatbot-webapp"
