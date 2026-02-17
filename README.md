@@ -134,7 +134,8 @@ Assistant mode behavior:
 Provider behavior:
 
 - `bedrock`: uses Bedrock runtime and supports model override (including enabled Amazon-hosted Bedrock models).
-- `anthropic_direct`: optional direct Anthropic API path using your own API key.
+
+This deployment is configured as **Bedrock-only** (no direct third-party LLM API path).
 
 Anthropic direct configuration (optional):
 

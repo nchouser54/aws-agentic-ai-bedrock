@@ -36,7 +36,7 @@ const DEFAULT_SETTINGS = {
   authValue: "",
   retrievalMode: APP_DEFAULTS.retrievalMode || "hybrid",
   assistantMode: APP_DEFAULTS.assistantMode || "contextual",
-  llmProvider: APP_DEFAULTS.llmProvider || "bedrock",
+  llmProvider: "bedrock",
   modelId: "",
   conversationId: "",
   streamMode: APP_DEFAULTS.streamMode || "true",
@@ -69,7 +69,7 @@ function loadSettings() {
   ids.authValue.value = resolved.authValue || "";
   ids.retrievalMode.value = resolved.retrievalMode || "hybrid";
   ids.assistantMode.value = resolved.assistantMode || "contextual";
-  ids.llmProvider.value = resolved.llmProvider || "bedrock";
+  ids.llmProvider.value = "bedrock";
   ids.modelId.value = resolved.modelId || "";
   ids.conversationId.value = resolved.conversationId || "";
   ids.streamMode.value = resolved.streamMode || "true";
@@ -87,7 +87,7 @@ function saveSettings() {
     authValue: ids.authValue.value,
     retrievalMode: ids.retrievalMode.value,
     assistantMode: ids.assistantMode.value,
-    llmProvider: ids.llmProvider.value,
+    llmProvider: "bedrock",
     modelId: ids.modelId.value.trim(),
     conversationId: ids.conversationId.value.trim(),
     streamMode: ids.streamMode.value,
@@ -367,7 +367,7 @@ async function askChatbot() {
   const payload = {
     query,
     assistant_mode: ids.assistantMode.value,
-    llm_provider: ids.llmProvider.value,
+    llm_provider: "bedrock",
     retrieval_mode: ids.retrievalMode.value,
     stream: ids.streamMode.value === "true",
     stream_chunk_chars: 140,

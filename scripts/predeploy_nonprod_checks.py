@@ -196,9 +196,21 @@ def main() -> int:
     managed_kb_opensearch_collection_arn = tfvars.get("managed_bedrock_kb_opensearch_collection_arn", "")
     managed_kb_opensearch_vector_index_name = tfvars.get("managed_bedrock_kb_opensearch_vector_index_name", "")
     managed_kb_opensearch_collection_name = tfvars.get("managed_bedrock_kb_opensearch_collection_name", "")
+    chatbot_enable_anthropic_direct = tfvars.get("chatbot_enable_anthropic_direct", "false").lower() == "true"
+    chatbot_llm_provider = tfvars.get("chatbot_llm_provider", "bedrock").strip().lower()
+    chatbot_allowed_llm_providers_raw = tfvars.get("chatbot_allowed_llm_providers", "")
 
     if environment == "prod" and chatbot_auth_mode == "token":
         failures.append("environment=prod with chatbot_auth_mode=token is not allowed (use jwt or github_oauth)")
+
+    if chatbot_enable_anthropic_direct:
+        failures.append("chatbot_enable_anthropic_direct=true is not allowed in Bedrock-only deployments")
+
+    if chatbot_llm_provider != "bedrock":
+        failures.append("chatbot_llm_provider must be bedrock for Bedrock-only deployments")
+
+    if "anthropic_direct" in chatbot_allowed_llm_providers_raw.lower():
+        failures.append("chatbot_allowed_llm_providers must not include anthropic_direct in Bedrock-only deployments")
 
     if chatbot_auth_mode == "token" and webapp_default_auth_mode != "token":
         warnings.append(
