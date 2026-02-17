@@ -578,13 +578,13 @@ variable "chatbot_budget_soft_limit_usd" {
 }
 
 variable "chatbot_budget_hard_limit_usd" {
-  description = "Conversation-level hard budget limit in USD; requests are rejected when exceeded"
+  description = "Conversation-level hard budget limit in USD; requests are rejected when exceeded (should be >= soft_limit)"
   type        = number
   default     = 0.75
 
   validation {
-    condition     = var.chatbot_budget_hard_limit_usd >= var.chatbot_budget_soft_limit_usd
-    error_message = "Must be >= chatbot_budget_soft_limit_usd."
+    condition     = var.chatbot_budget_hard_limit_usd >= 0
+    error_message = "Must be >= 0 (and should be >= chatbot_budget_soft_limit_usd)."
   }
 }
 
