@@ -15,8 +15,6 @@ venv/
 *.tfstate
 *.tfstate.*
 crash.log
-*.tfvars
-*.tfvars.json
 
 # OS/editor
 .DS_Store
