@@ -96,6 +96,19 @@ These resources are required by all features and are always created by Terraform
 - Required: AWS credentials with permissions to create IAM roles, Lambda, SQS, DynamoDB, Secrets Manager, API Gateway, KMS, CloudWatch, S3
 - Terraform >= 1.6.0
 
+#### GovCloud Bedrock Model Availability
+
+**FedRAMP/IL4/5 Authorized Models** (as of February 2026):
+- ✅ **Claude Sonnet 4.5** - Latest, best quality
+- ✅ **Claude 3.7 Sonnet** - High quality
+- ✅ **Claude 3.5 Sonnet v1** (`anthropic.claude-3-5-sonnet-20240620-v1:0`) - **Default, recommended**
+- ✅ **All Amazon Titan Models** - Lower cost options
+- ❌ **NOT Available**: Claude 3 Sonnet, Claude 3 Haiku, Llama models
+
+**Important**: Verify models are enabled in your Bedrock console at `us-gov-west-1` before deployment.
+
+See: [AWS GovCloud Bedrock Documentation](https://docs.aws.amazon.com/govcloud-us/latest/UserGuide/govcloud-bedrock.html)
+
 ### 1.1 Local Toolchain (recommended to avoid drift)
 
 This repo pins recommended local versions in:
@@ -218,7 +231,7 @@ terraform output webhook_url
 
 | Variable | Description | Default |
 |---|---|---|
-| `bedrock_model_id` | Bedrock model for PR review | `anthropic.claude-3-sonnet-20240229-v1:0` |
+| `bedrock_model_id` | Bedrock model for PR review (GovCloud: use 3.5/3.7/4.5 Sonnet) | `anthropic.claude-3-5-sonnet-20240620-v1:0` |
 | `bedrock_agent_id` | Optional Bedrock Agent (tried first) | `""` |
 | `bedrock_agent_alias_id` | Agent alias ID | `""` |
 | `dry_run` | `true` = log reviews without posting | `true` |
@@ -795,8 +808,9 @@ Find these in your GitHub App settings.
 
 ### Bedrock: Model not available
 
-- Verify the model is enabled in your GovCloud account at the Bedrock console
-- Check `us-gov-west-1` region support for your chosen model ID
+- **GovCloud users**: Only Claude 3.5 Sonnet v1, Claude 3.7 Sonnet, Claude Sonnet 4.5, and Titan models have FedRAMP/IL4/5 authorization
+- Verify the model is enabled in your GovCloud Bedrock console at `us-gov-west-1`
+- Check that your model ID matches: `anthropic.claude-3-5-sonnet-20240620-v1:0` (default)
 - Ensure IAM policy includes `bedrock:InvokeModel` permission
 
 ### Lambda: Timeout

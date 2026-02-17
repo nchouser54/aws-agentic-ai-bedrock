@@ -44,7 +44,7 @@ webapp_default_github_scope          = "read:user read:org"
 # ── Bedrock AI ───────────────────────────────────────────────────────────
 bedrock_agent_id       = ""               # Optional: Bedrock Agent ID
 bedrock_agent_alias_id = ""               # Optional: Bedrock Agent Alias
-bedrock_model_id       = "anthropic.claude-3-sonnet-20240229-v1:0"
+bedrock_model_id       = "anthropic.claude-3-5-sonnet-20240620-v1:0"  # GovCloud FedRAMP/IL4/5 authorized
 bedrock_guardrail_id      = ""            # Optional: global Bedrock guardrail ID
 bedrock_guardrail_version = ""            # Guardrail version (number or DRAFT)
 bedrock_guardrail_trace   = "DISABLED"    # ENABLED | DISABLED | ENABLED_FULL
@@ -60,12 +60,12 @@ review_comment_mode   = "inline_best_effort"
 
 # ── Chatbot ──────────────────────────────────────────────────────────────
 chatbot_enabled  = true
-chatbot_model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
+chatbot_model_id = "anthropic.claude-3-5-sonnet-20240620-v1:0"  # GovCloud FedRAMP/IL4/5 authorized
 chatbot_guardrail_id      = ""            # Optional: chatbot-specific guardrail ID
 chatbot_guardrail_version = ""            # Guardrail version (number or DRAFT)
 chatbot_guardrail_trace   = "disabled"    # enabled | disabled
 chatbot_allowed_llm_providers = ["bedrock"]
-chatbot_allowed_model_ids = ["anthropic.claude-3-sonnet-20240229-v1:0"]
+chatbot_allowed_model_ids = ["anthropic.claude-3-5-sonnet-20240620-v1:0"]  # GovCloud compatible models only
 chatbot_atlassian_user_auth_enabled = false
 chatbot_atlassian_session_broker_enabled = false
 chatbot_atlassian_session_ttl_seconds = 3600

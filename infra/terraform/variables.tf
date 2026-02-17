@@ -47,9 +47,9 @@ variable "bedrock_agent_alias_id" {
 }
 
 variable "bedrock_model_id" {
-  description = "Fallback Bedrock model ID"
+  description = "Fallback Bedrock model ID (GovCloud: use Claude 3.5 Sonnet v1, 3.7 Sonnet, or Sonnet 4.5)"
   type        = string
-  default     = "anthropic.claude-3-sonnet-20240229-v1:0"
+  default     = "anthropic.claude-3-5-sonnet-20240620-v1:0"
 }
 
 variable "bedrock_guardrail_id" {
@@ -117,9 +117,9 @@ variable "chatbot_enabled" {
 }
 
 variable "chatbot_model_id" {
-  description = "Bedrock model ID for Jira/Confluence chatbot"
+  description = "Bedrock model ID for Jira/Confluence chatbot (GovCloud: use Claude 3.5 Sonnet v1, 3.7 Sonnet, or Sonnet 4.5)"
   type        = string
-  default     = "anthropic.claude-3-sonnet-20240229-v1:0"
+  default     = "anthropic.claude-3-5-sonnet-20240620-v1:0"
 }
 
 variable "chatbot_guardrail_id" {

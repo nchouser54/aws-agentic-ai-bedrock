@@ -13,7 +13,7 @@ github_allowed_repos = [
 # Bedrock config
 bedrock_agent_id       = ""
 bedrock_agent_alias_id = ""
-bedrock_model_id       = "anthropic.claude-3-sonnet-20240229-v1:0"
+bedrock_model_id       = "anthropic.claude-3-5-sonnet-20240620-v1:0"  # GovCloud FedRAMP/IL4/5 authorized
 bedrock_guardrail_id      = ""
 bedrock_guardrail_version = ""
 bedrock_guardrail_trace   = "DISABLED"
@@ -29,7 +29,7 @@ review_comment_mode   = "inline_best_effort"
 
 # Jira/Confluence chatbot service
 chatbot_enabled         = true
-chatbot_model_id        = "anthropic.claude-3-sonnet-20240229-v1:0"
+chatbot_model_id        = "anthropic.claude-3-5-sonnet-20240620-v1:0"  # GovCloud FedRAMP/IL4/5 authorized
 chatbot_guardrail_id    = ""
 chatbot_guardrail_version = ""
 chatbot_guardrail_trace = "disabled"
