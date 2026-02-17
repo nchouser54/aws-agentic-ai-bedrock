@@ -49,35 +49,35 @@ locals {
 }
 
 locals {
-  webapp_tls_subnet_map = local.webapp_tls_enabled ? { for idx, subnet_id in var.webapp_tls_subnet_ids : tostring(idx) => subnet_id } : {}
+  webapp_tls_subnet_map     = local.webapp_tls_enabled ? { for idx, subnet_id in var.webapp_tls_subnet_ids : tostring(idx) => subnet_id } : {}
   webapp_tls_private_ip_map = local.webapp_tls_enabled && local.webapp_private_only && length(var.webapp_tls_private_ips) > 0 ? { for idx, ip in var.webapp_tls_private_ips : tostring(idx) => ip } : {}
-  lambda_tracing_mode   = var.lambda_tracing_enabled ? "Active" : "PassThrough"
-  worker_concurrency    = var.lambda_reserved_concurrency_worker >= 0 ? var.lambda_reserved_concurrency_worker : null
-  chatbot_concurrency   = var.lambda_reserved_concurrency_chatbot >= 0 ? var.lambda_reserved_concurrency_chatbot : null
+  lambda_tracing_mode       = var.lambda_tracing_enabled ? "Active" : "PassThrough"
+  worker_concurrency        = var.lambda_reserved_concurrency_worker >= 0 ? var.lambda_reserved_concurrency_worker : null
+  chatbot_concurrency       = var.lambda_reserved_concurrency_chatbot >= 0 ? var.lambda_reserved_concurrency_chatbot : null
 
-  manage_secrets_in_terraform     = var.create_secrets_manager_secrets
-  github_webhook_secret_arn       = local.manage_secrets_in_terraform ? aws_secretsmanager_secret.github_webhook_secret[0].arn : trimspace(var.existing_github_webhook_secret_arn)
+  manage_secrets_in_terraform       = var.create_secrets_manager_secrets
+  github_webhook_secret_arn         = local.manage_secrets_in_terraform ? aws_secretsmanager_secret.github_webhook_secret[0].arn : trimspace(var.existing_github_webhook_secret_arn)
   github_app_private_key_secret_arn = local.manage_secrets_in_terraform ? aws_secretsmanager_secret.github_app_private_key_pem[0].arn : trimspace(var.existing_github_app_private_key_secret_arn)
-  github_app_ids_secret_arn       = local.manage_secrets_in_terraform ? aws_secretsmanager_secret.github_app_ids[0].arn : trimspace(var.existing_github_app_ids_secret_arn)
-  atlassian_credentials_secret_arn = local.manage_secrets_in_terraform ? aws_secretsmanager_secret.atlassian_credentials[0].arn : trimspace(var.existing_atlassian_credentials_secret_arn)
-  chatbot_api_token_secret_arn    = local.manage_secrets_in_terraform ? (var.chatbot_enabled ? aws_secretsmanager_secret.chatbot_api_token[0].arn : "") : trimspace(var.existing_chatbot_api_token_secret_arn)
-  teams_adapter_token_secret_arn  = local.manage_secrets_in_terraform ? (var.chatbot_enabled && var.teams_adapter_enabled ? aws_secretsmanager_secret.teams_adapter_token[0].arn : "") : trimspace(var.existing_teams_adapter_token_secret_arn)
+  github_app_ids_secret_arn         = local.manage_secrets_in_terraform ? aws_secretsmanager_secret.github_app_ids[0].arn : trimspace(var.existing_github_app_ids_secret_arn)
+  atlassian_credentials_secret_arn  = local.manage_secrets_in_terraform ? aws_secretsmanager_secret.atlassian_credentials[0].arn : trimspace(var.existing_atlassian_credentials_secret_arn)
+  chatbot_api_token_secret_arn      = local.manage_secrets_in_terraform ? (var.chatbot_enabled ? aws_secretsmanager_secret.chatbot_api_token[0].arn : "") : trimspace(var.existing_chatbot_api_token_secret_arn)
+  teams_adapter_token_secret_arn    = local.manage_secrets_in_terraform ? (var.chatbot_enabled && var.teams_adapter_enabled ? aws_secretsmanager_secret.teams_adapter_token[0].arn : "") : trimspace(var.existing_teams_adapter_token_secret_arn)
 
-  manage_bedrock_kb_in_terraform = var.create_bedrock_kb_resources
-  manage_bedrock_kb_role_in_terraform = var.create_managed_bedrock_kb_role
-  manage_bedrock_kb_collection_in_terraform = var.create_managed_bedrock_kb_opensearch_collection
-  effective_managed_bedrock_kb_role_arn = local.manage_bedrock_kb_role_in_terraform ? aws_iam_role.managed_bedrock_kb[0].arn : trimspace(var.managed_bedrock_kb_role_arn)
+  manage_bedrock_kb_in_terraform                         = var.create_bedrock_kb_resources
+  manage_bedrock_kb_role_in_terraform                    = var.create_managed_bedrock_kb_role
+  manage_bedrock_kb_collection_in_terraform              = var.create_managed_bedrock_kb_opensearch_collection
+  effective_managed_bedrock_kb_role_arn                  = local.manage_bedrock_kb_role_in_terraform ? aws_iam_role.managed_bedrock_kb[0].arn : trimspace(var.managed_bedrock_kb_role_arn)
   effective_managed_bedrock_kb_opensearch_collection_arn = local.manage_bedrock_kb_collection_in_terraform ? aws_opensearchserverless_collection.managed_bedrock_kb[0].arn : trimspace(var.managed_bedrock_kb_opensearch_collection_arn)
-  effective_bedrock_knowledge_base_id = local.manage_bedrock_kb_in_terraform ? aws_bedrockagent_knowledge_base.managed[0].id : trimspace(var.bedrock_knowledge_base_id)
-  effective_bedrock_kb_data_source_id = local.manage_bedrock_kb_in_terraform ? aws_bedrockagent_data_source.managed[0].id : trimspace(var.bedrock_kb_data_source_id)
-  effective_github_kb_data_source_id  = trimspace(var.github_kb_data_source_id) != "" ? trimspace(var.github_kb_data_source_id) : local.effective_bedrock_kb_data_source_id
+  effective_bedrock_knowledge_base_id                    = local.manage_bedrock_kb_in_terraform ? aws_bedrockagent_knowledge_base.managed[0].id : trimspace(var.bedrock_knowledge_base_id)
+  effective_bedrock_kb_data_source_id                    = local.manage_bedrock_kb_in_terraform ? aws_bedrockagent_data_source.managed[0].id : trimspace(var.bedrock_kb_data_source_id)
+  effective_github_kb_data_source_id                     = trimspace(var.github_kb_data_source_id) != "" ? trimspace(var.github_kb_data_source_id) : local.effective_bedrock_kb_data_source_id
 
   manage_bedrock_guardrail_in_terraform = var.create_bedrock_guardrail_resources
   manage_chatbot_guardrail_in_terraform = var.create_chatbot_guardrail_resources
-  effective_bedrock_guardrail_id      = local.manage_bedrock_guardrail_in_terraform ? aws_bedrock_guardrail.reviewer[0].guardrail_id : trimspace(var.bedrock_guardrail_id)
-  effective_bedrock_guardrail_version = local.manage_bedrock_guardrail_in_terraform ? aws_bedrock_guardrail_version.reviewer[0].version : trimspace(var.bedrock_guardrail_version)
-  effective_chatbot_guardrail_id      = local.manage_chatbot_guardrail_in_terraform ? aws_bedrock_guardrail.chatbot[0].guardrail_id : trimspace(var.chatbot_guardrail_id)
-  effective_chatbot_guardrail_version = local.manage_chatbot_guardrail_in_terraform ? aws_bedrock_guardrail_version.chatbot[0].version : trimspace(var.chatbot_guardrail_version)
+  effective_bedrock_guardrail_id        = local.manage_bedrock_guardrail_in_terraform ? aws_bedrock_guardrail.reviewer[0].guardrail_id : trimspace(var.bedrock_guardrail_id)
+  effective_bedrock_guardrail_version   = local.manage_bedrock_guardrail_in_terraform ? aws_bedrock_guardrail_version.reviewer[0].version : trimspace(var.bedrock_guardrail_version)
+  effective_chatbot_guardrail_id        = local.manage_chatbot_guardrail_in_terraform ? aws_bedrock_guardrail.chatbot[0].guardrail_id : trimspace(var.chatbot_guardrail_id)
+  effective_chatbot_guardrail_version   = local.manage_chatbot_guardrail_in_terraform ? aws_bedrock_guardrail_version.chatbot[0].version : trimspace(var.chatbot_guardrail_version)
 }
 
 data "aws_caller_identity" "current" {}
@@ -1615,7 +1615,6 @@ resource "aws_lambda_function" "pr_review_worker" {
 
   environment {
     variables = {
-      AWS_REGION                        = data.aws_region.current.region
       BEDROCK_AGENT_ID                  = var.bedrock_agent_id
       BEDROCK_AGENT_ALIAS_ID            = var.bedrock_agent_alias_id
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
@@ -1668,7 +1667,6 @@ resource "aws_lambda_function" "jira_confluence_chatbot" {
 
   environment {
     variables = {
-      AWS_REGION                                     = data.aws_region.current.region
       CHATBOT_MODEL_ID                               = var.chatbot_model_id
       BEDROCK_MODEL_ID                               = var.bedrock_model_id
       BEDROCK_GUARDRAIL_ID                           = local.effective_bedrock_guardrail_id
@@ -1761,7 +1759,6 @@ resource "aws_lambda_function" "chatbot_github_oauth_authorizer" {
 
   environment {
     variables = {
-      AWS_REGION                = data.aws_region.current.region
       GITHUB_API_BASE           = var.github_api_base
       GITHUB_OAUTH_ALLOWED_ORGS = join(",", var.github_oauth_allowed_orgs)
     }
@@ -1785,7 +1782,6 @@ resource "aws_lambda_function" "teams_chatbot_adapter" {
 
   environment {
     variables = {
-      AWS_REGION                       = data.aws_region.current.region
       CHATBOT_MODEL_ID                 = var.chatbot_model_id
       BEDROCK_MODEL_ID                 = var.bedrock_model_id
       BEDROCK_GUARDRAIL_ID             = local.effective_bedrock_guardrail_id
@@ -1820,7 +1816,6 @@ resource "aws_lambda_function" "confluence_kb_sync" {
 
   environment {
     variables = {
-      AWS_REGION                       = data.aws_region.current.region
       ATLASSIAN_CREDENTIALS_SECRET_ARN = local.atlassian_credentials_secret_arn
       BEDROCK_KNOWLEDGE_BASE_ID        = local.effective_bedrock_knowledge_base_id
       BEDROCK_KB_DATA_SOURCE_ID        = local.effective_bedrock_kb_data_source_id
@@ -1850,7 +1845,6 @@ resource "aws_lambda_function" "github_kb_sync" {
 
   environment {
     variables = {
-      AWS_REGION                        = data.aws_region.current.region
       GITHUB_API_BASE                   = var.github_api_base
       GITHUB_APP_PRIVATE_KEY_SECRET_ARN = local.github_app_private_key_secret_arn
       GITHUB_APP_IDS_SECRET_ARN         = local.github_app_ids_secret_arn
@@ -2285,7 +2279,6 @@ resource "aws_lambda_function" "release_notes" {
 
   environment {
     variables = {
-      AWS_REGION                        = data.aws_region.current.region
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
       RELEASE_NOTES_MODEL_ID            = var.release_notes_model_id
       GITHUB_API_BASE                   = var.github_api_base
@@ -2414,8 +2407,6 @@ resource "aws_lambda_function" "sprint_report" {
 
   environment {
     variables = {
-      AWS_REGION                        = data.aws_region.current.region
-      BEDROCK_MODEL_ID                  = var.bedrock_model_id
       SPRINT_REPORT_MODEL_ID            = var.sprint_report_model_id
       GITHUB_API_BASE                   = var.github_api_base
       GITHUB_APP_PRIVATE_KEY_SECRET_ARN = local.github_app_private_key_secret_arn
@@ -2598,8 +2589,6 @@ resource "aws_lambda_function" "test_gen" {
 
   environment {
     variables = {
-      AWS_REGION                        = data.aws_region.current.region
-      BEDROCK_MODEL_ID                  = var.bedrock_model_id
       TEST_GEN_MODEL_ID                 = var.test_gen_model_id
       TEST_GEN_DELIVERY_MODE            = var.test_gen_delivery_mode
       TEST_GEN_MAX_FILES                = tostring(var.test_gen_max_files)
@@ -2768,9 +2757,6 @@ resource "aws_lambda_function" "pr_description" {
 
   environment {
     variables = {
-      AWS_REGION                        = data.aws_region.current.region
-      BEDROCK_MODEL_ID                  = var.bedrock_model_id
-      PR_DESCRIPTION_MODEL_ID           = var.pr_description_model_id
       GITHUB_API_BASE                   = var.github_api_base
       GITHUB_APP_PRIVATE_KEY_SECRET_ARN = local.github_app_private_key_secret_arn
       GITHUB_APP_IDS_SECRET_ARN         = local.github_app_ids_secret_arn
