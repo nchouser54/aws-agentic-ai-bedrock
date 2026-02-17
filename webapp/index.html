@@ -115,8 +115,11 @@
               <option value="false">disabled</option>
             </select>
           </label>
+          <!-- WARNING: Image generation NOT available in AWS GovCloud (us-gov-west-1)
+               No Bedrock image models available: Titan, Nova Canvas, Stability AI
+               Keep chatbot_image_enabled=false for GovCloud deployments -->
           <label>
-            Image Size
+            Image Size <span class="muted small">(GovCloud: Not Available)</span>
             <select id="imageSize">
               <option value="">default (1024x1024)</option>
               <option value="512x512">512x512</option>
@@ -228,7 +231,8 @@
           <button id="saveBtn" type="button">Save Settings</button>
           <button id="sendBtn" type="button" class="btn-primary">Ask Chatbot</button>
           <button id="cancelBtn" type="button" class="btn-danger" hidden>Cancel Request</button>
-          <button id="imageBtn" type="button">Generate Image</button>
+          <!-- WARNING: Image generation NOT available in GovCloud (us-gov-west-1) -->
+          <button id="imageBtn" type="button" title="Generate Image (Not available in GovCloud)">Generate Image</button>
         </div>
       </section>
 
@@ -239,7 +243,8 @@
         <div id="metricsBar" class="metrics-bar" hidden></div>
         <div class="response-toolbar">
           <button id="copyBtn" type="button" class="icon-btn" title="Copy response to clipboard (Ctrl/⌘+C)" aria-label="Copy response" hidden>📋 Copy</button>
-          <button id="downloadImgBtn" type="button" class="icon-btn" title="Download generated image" aria-label="Download image" hidden>⬇ Download</button>
+          <!-- Image download - NOT available in GovCloud (us-gov-west-1) -->
+          <button id="downloadImgBtn" type="button" class="icon-btn" title="Download generated image (Not available in GovCloud)" aria-label="Download image" hidden>⬇ Download</button>
           <button id="exportMdBtn" type="button" class="icon-btn" title="Export as Markdown" aria-label="Export Markdown" hidden>📄 Export MD</button>
           <button id="exportJsonBtn" type="button" class="icon-btn" title="Export as JSON" aria-label="Export JSON" hidden>💾 Export JSON</button>
           <button id="regenerateBtn" type="button" class="icon-btn" title="Regenerate response" aria-label="Regenerate" hidden>🔄 Regenerate</button>
@@ -253,6 +258,7 @@
         </div>
         <div id="citations" class="citations" hidden></div>
         <div id="sources" class="sources"></div>
+        <!-- Image preview - NOT available in GovCloud (us-gov-west-1) -->
         <div id="imageWrap" class="image-wrap" hidden>
           <img id="imagePreview" alt="Generated image preview" />
         </div>

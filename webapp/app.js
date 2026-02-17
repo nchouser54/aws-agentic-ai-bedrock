@@ -918,6 +918,15 @@ async function generateImage() {
     return;
   }
 
+  // WARNING: Image generation NOT available in AWS GovCloud (us-gov-west-1)
+  // No Bedrock image models available: Titan, Nova Canvas, Stability AI
+  if (endpoint.includes('gov-west') || endpoint.includes('.gov')) {
+    setStatus("⚠️ Image generation NOT available in AWS GovCloud (us-gov-west-1). No Bedrock image models available. Use SageMaker alternative.", "err");
+    ids.answer.innerHTML = renderMarkdown("**AWS GovCloud Limitation**: Image generation is not available because no Bedrock image models (Amazon Titan, Nova Canvas, Stability AI) are deployed in `us-gov-west-1`.\n\n**Alternative**: Deploy an open-source image model on SageMaker JumpStart with GPU instances.");
+    ids.copyBtn.hidden = false;
+    return;
+  }
+
   saveSettings();
   ids.imageBtn.disabled = true;
   ids.cancelBtn.disabled = false;
@@ -952,7 +961,9 @@ async function generateImage() {
       ids.copyBtn.hidden = false;
       ids.imageWrap.hidden = true;
       ids.downloadImgBtn.hidden = true;
-      setStatus(extractErrorMessage(body, res.status), "err");
+      const errorMsg = extractErrorMessage(body, res.status);
+      const govCloudHint = endpoint.includes('gov') ? " (Note: Image generation NOT available in GovCloud)" : "";
+      setStatus(errorMsg + govCloudHint, "err");
       scrollToResponse();
       return;
     }

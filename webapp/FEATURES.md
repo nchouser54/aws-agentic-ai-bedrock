@@ -6,6 +6,8 @@
 - **Chatbot Query** (`/chatbot/query`) - Fully wired with streaming support
 - **Model Selection** (`/chatbot/models`) - GovCloud model picker with refresh
 - **Image Generation** (`/chatbot/image`) - Generate and download images
+  - ⚠️ **GovCloud Limitation**: NOT available in AWS GovCloud (us-gov-west-1) - no Bedrock image models
+  - Commercial AWS regions only: Requires Amazon Nova Canvas, Titan, or Stability AI models
 - **Image Size Control** - Dropdown selector (512x512, 768x768, 1024x1024, 1280x1280, 2048x2048)
 - **Jira JQL Filter** - Query specific Jira issues
 - **Confluence CQL Filter** - Query specific Confluence pages
