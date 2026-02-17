@@ -70,6 +70,39 @@ def _infra_cli_version_ok(cli: str, min_major: int, min_minor: int) -> tuple[boo
     return True, f"found {major}.{minor}.{patch}"
 
 
+def _run_aws_json(args: list[str], region: str | None = None) -> tuple[bool, str]:
+    cmd = ["aws"]
+    if region:
+        cmd.extend(["--region", region])
+    cmd.extend(args)
+    try:
+        output = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
+        return True, output
+    except subprocess.CalledProcessError as exc:
+        return False, exc.output.strip()
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+
+
+def _aws_resource_exists(args: list[str], region: str | None = None) -> tuple[bool, str]:
+    ok, output = _run_aws_json(args, region=region)
+    if not ok:
+        return False, output
+    return True, output
+
+
+def _extract_quoted_items(raw_value: str) -> list[str]:
+    return [m.group(1) for m in re.finditer(r'"([^"\\]*(?:\\.[^"\\]*)*)"', raw_value)]
+
+
+def _extract_list_values_from_tfvars(path: Path, key: str) -> list[str]:
+    text = path.read_text()
+    match = re.search(rf"^\s*{re.escape(key)}\s*=\s*\[(.*?)\]", text, flags=re.DOTALL | re.MULTILINE)
+    if not match:
+        return []
+    return [v.strip() for v in _extract_quoted_items(match.group(1)) if v.strip()]
+
+
 def _read_required_terraform_version(versions_path: Path) -> tuple[int, int] | None:
     try:
         content = versions_path.read_text()
@@ -90,6 +123,16 @@ def main() -> int:
         "--tfvars",
         default="infra/terraform/terraform.nonprod.tfvars.example",
         help="Path to tfvars file to validate",
+    )
+    parser.add_argument(
+        "--aws-checks",
+        action="store_true",
+        help="When set, validate existence of selected AWS resources referenced by tfvars",
+    )
+    parser.add_argument(
+        "--aws-region",
+        default="",
+        help="Optional AWS region override for --aws-checks (defaults to tfvars aws_region or us-gov-west-1)",
     )
     args = parser.parse_args()
 
@@ -259,6 +302,102 @@ def main() -> int:
 
     if tfvars.get("teams_adapter_enabled", "").lower() == "true":
         warnings.append("teams_adapter_enabled=true (ensure this is intentional for non-prod)")
+
+    if args.aws_checks:
+        aws_region = args.aws_region.strip() or tfvars.get("aws_region", "us-gov-west-1").strip() or "us-gov-west-1"
+
+        def _check_secret(secret_arn_key: str) -> None:
+            arn = tfvars.get(secret_arn_key, "").strip()
+            if not arn or arn in placeholder_markers:
+                return
+            ok, msg = _aws_resource_exists(["secretsmanager", "describe-secret", "--secret-id", arn], region=aws_region)
+            if not ok:
+                failures.append(f"AWS check failed for {secret_arn_key}: {msg}")
+
+        for secret_key in (
+            "existing_github_webhook_secret_arn",
+            "existing_github_app_private_key_secret_arn",
+            "existing_github_app_ids_secret_arn",
+            "existing_atlassian_credentials_secret_arn",
+            "existing_chatbot_api_token_secret_arn",
+            "existing_teams_adapter_token_secret_arn",
+        ):
+            _check_secret(secret_key)
+
+        cert_arn = tfvars.get("webapp_tls_acm_certificate_arn", "").strip()
+        if cert_arn and cert_arn not in placeholder_markers:
+            ok, msg = _aws_resource_exists(["acm", "describe-certificate", "--certificate-arn", cert_arn], region=aws_region)
+            if not ok:
+                failures.append(f"AWS check failed for webapp_tls_acm_certificate_arn: {msg}")
+
+        ec2_subnet_id = tfvars.get("webapp_ec2_subnet_id", "").strip()
+        if ec2_subnet_id and ec2_subnet_id not in placeholder_markers:
+            ok, msg = _aws_resource_exists(
+                [
+                    "ec2",
+                    "describe-subnets",
+                    "--subnet-ids",
+                    ec2_subnet_id,
+                    "--query",
+                    "Subnets[0].SubnetId",
+                    "--output",
+                    "text",
+                ],
+                region=aws_region,
+            )
+            if not ok:
+                failures.append(f"AWS check failed for webapp_ec2_subnet_id: {msg}")
+
+        for subnet_id in _extract_list_values_from_tfvars(tfvars_path, "webapp_tls_subnet_ids"):
+            ok, msg = _aws_resource_exists(
+                [
+                    "ec2",
+                    "describe-subnets",
+                    "--subnet-ids",
+                    subnet_id,
+                    "--query",
+                    "Subnets[0].SubnetId",
+                    "--output",
+                    "text",
+                ],
+                region=aws_region,
+            )
+            if not ok:
+                failures.append(f"AWS check failed for webapp_tls_subnet_ids entry '{subnet_id}': {msg}")
+
+        if not create_bedrock_kb_resources:
+            if kb_id and kb_id not in placeholder_markers:
+                ok, msg = _aws_resource_exists(
+                    ["bedrock-agent", "get-knowledge-base", "--knowledge-base-id", kb_id],
+                    region=aws_region,
+                )
+                if not ok:
+                    failures.append(f"AWS check failed for bedrock_knowledge_base_id: {msg}")
+
+            if kb_data_source_id and kb_data_source_id not in placeholder_markers and kb_id and kb_id not in placeholder_markers:
+                ok, msg = _aws_resource_exists(
+                    [
+                        "bedrock-agent",
+                        "get-data-source",
+                        "--knowledge-base-id",
+                        kb_id,
+                        "--data-source-id",
+                        kb_data_source_id,
+                    ],
+                    region=aws_region,
+                )
+                if not ok:
+                    failures.append(f"AWS check failed for bedrock_kb_data_source_id: {msg}")
+
+            managed_collection_arn = tfvars.get("managed_bedrock_kb_opensearch_collection_arn", "").strip()
+            if managed_collection_arn and managed_collection_arn not in placeholder_markers:
+                collection_name = managed_collection_arn.split("/")[-1]
+                ok, msg = _aws_resource_exists(
+                    ["opensearchserverless", "batch-get-collection", "--names", collection_name],
+                    region=aws_region,
+                )
+                if not ok:
+                    failures.append(f"AWS check failed for managed_bedrock_kb_opensearch_collection_arn: {msg}")
 
     if failures:
         for msg in failures:

@@ -106,6 +106,23 @@ chatbot_websocket_default_chunk_chars = 120
 bedrock_knowledge_base_id = "<SET_KB_ID>"
 bedrock_kb_top_k        = 3
 
+# Optional managed Bedrock KB creation (advanced)
+# Set create_bedrock_kb_resources=true to let Terraform manage KB resources.
+create_bedrock_kb_resources = false
+create_managed_bedrock_kb_role = false
+managed_bedrock_kb_role_arn = ""
+managed_bedrock_kb_role_name = "bedrock-kb-service-role"
+create_managed_bedrock_kb_opensearch_collection = false
+managed_bedrock_kb_opensearch_collection_name = "bedrock-kb"
+managed_bedrock_kb_opensearch_allow_public = false
+managed_bedrock_kb_opensearch_collection_arn = ""
+managed_bedrock_kb_opensearch_vector_index_name = "bedrock-kb-default-index"
+managed_bedrock_kb_embedding_model_arn = "arn:aws-us-gov:bedrock:us-gov-west-1::foundation-model/amazon.titan-embed-text-v2:0"
+managed_bedrock_kb_vector_field = "bedrock-knowledge-base-default-vector"
+managed_bedrock_kb_text_field = "AMAZON_BEDROCK_TEXT_CHUNK"
+managed_bedrock_kb_metadata_field = "AMAZON_BEDROCK_METADATA"
+managed_bedrock_kb_data_source_name = "primary-s3"
+
 # Scheduled Confluence -> Bedrock Knowledge Base sync
 kb_sync_enabled            = true
 bedrock_kb_data_source_id  = "<SET_KB_DATA_SOURCE_ID>"

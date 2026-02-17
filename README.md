@@ -849,6 +849,15 @@ Terraform variables:
 - `bedrock_knowledge_base_id`
 - `bedrock_kb_top_k`
 
+Optional Terraform-managed KB path:
+
+- `create_bedrock_kb_resources`
+- `create_managed_bedrock_kb_role`
+- `managed_bedrock_kb_role_arn` (or Terraform-managed role)
+- `create_managed_bedrock_kb_opensearch_collection`
+- `managed_bedrock_kb_opensearch_collection_arn` (or Terraform-managed collection)
+- `managed_bedrock_kb_opensearch_vector_index_name`
+
 Response payload now includes source telemetry:
 
 - `sources.mode`

@@ -391,9 +391,10 @@ curl -X POST <release_notes_url> \
 ### Additional Setup
 
 1. Complete all [shared prerequisites](#shared-prerequisites-do-these-first)
-2. Create a Bedrock Knowledge Base with an S3 data source in GovCloud
-3. Note the **Knowledge Base ID** and **Data Source ID**
-4. Set variables in tfvars
+2. Choose one KB path:
+  - Existing KB path: create a Bedrock Knowledge Base + S3 data source, then capture IDs
+  - Managed KB path: set `create_bedrock_kb_resources=true` and optionally let Terraform create role/OpenSearch collection too
+3. Set variables in tfvars
 
 ### Key Terraform Variables
 
@@ -402,6 +403,12 @@ curl -X POST <release_notes_url> \
 | `kb_sync_enabled` | Enable scheduled sync | `false` |
 | `bedrock_knowledge_base_id` | KB ID | `""` |
 | `bedrock_kb_data_source_id` | KB data source ID | `""` |
+| `create_bedrock_kb_resources` | Terraform-manage KB + S3 data source | `false` |
+| `create_managed_bedrock_kb_role` | Terraform-manage KB IAM role | `false` |
+| `managed_bedrock_kb_role_arn` | Existing KB role ARN (if not creating role) | `""` |
+| `create_managed_bedrock_kb_opensearch_collection` | Terraform-manage OpenSearch collection | `false` |
+| `managed_bedrock_kb_opensearch_collection_arn` | Existing collection ARN (if not creating collection) | `""` |
+| `managed_bedrock_kb_opensearch_vector_index_name` | Vector index name for KB storage | `bedrock-kb-default-index` |
 | `kb_sync_schedule_expression` | EventBridge schedule | `rate(6 hours)` |
 | `kb_sync_s3_prefix` | S3 prefix for documents | `confluence` |
 | `confluence_sync_cql` | CQL to select pages | `type=page order by lastmodified desc` |
