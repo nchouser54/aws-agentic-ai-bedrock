@@ -1,0 +1,70 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: chatbot-webapp-staging
+  namespace: argocd
+  labels:
+    environment: staging
+spec:
+  project: default
+  
+  source:
+    repoURL: https://github.com/nchouser54/aws-agentic-ai-bedrock.git
+    targetRevision: release  # Track release branch for staging
+    path: helm/chatbot-webapp
+    helm:
+      valueFiles:
+        - values.yaml
+      values: |
+        webapp:
+          image:
+            repository: REPLACE_WITH_ECR_URL/chatbot-webapp
+            tag: "REPLACE_WITH_RC_VERSION"  # e.g., v1.2.3-rc1
+          
+          replicaCount: 2
+        
+        config:
+          chatbotUrl: "REPLACE_WITH_STAGING_API_URL"
+        
+        ingress:
+          enabled: true
+          className: alb
+          annotations:
+            alb.ingress.kubernetes.io/scheme: internal
+            alb.ingress.kubernetes.io/certificate-arn: REPLACE_WITH_ACM_CERT_ARN
+          hosts:
+            - host: staging-chatbot.REPLACE_WITH_DOMAIN
+              paths:
+                - path: /
+                  pathType: Prefix
+        
+        autoscaling:
+          enabled: true
+          minReplicas: 2
+          maxReplicas: 5
+          targetCPUUtilizationPercentage: 70
+        
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+  
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: chatbot-webapp-staging
+  
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+  
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas

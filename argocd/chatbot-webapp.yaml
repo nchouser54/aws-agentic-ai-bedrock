@@ -1,0 +1,83 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: chatbot-webapp
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  
+  source:
+    repoURL: https://github.com/nchouser54/aws-agentic-ai-bedrock.git
+    targetRevision: main
+    path: helm/chatbot-webapp
+    helm:
+      valueFiles:
+        - values.yaml
+      values: |
+        webapp:
+          image:
+            repository: REPLACE_WITH_ECR_URL/chatbot-webapp
+            tag: "latest"
+            pullPolicy: Always
+          
+          replicaCount: 2
+        
+        config:
+          chatbotUrl: "REPLACE_WITH_API_GATEWAY_URL"
+          bearerAuth: false
+        
+        ingress:
+          enabled: true
+          className: alb
+          annotations:
+            alb.ingress.kubernetes.io/scheme: internet-facing
+            alb.ingress.kubernetes.io/certificate-arn: REPLACE_WITH_ACM_CERT_ARN
+            alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+            alb.ingress.kubernetes.io/ssl-redirect: '443'
+          hosts:
+            - host: REPLACE_WITH_DOMAIN
+              paths:
+                - path: /
+                  pathType: Prefix
+          tls:
+            certificateArn: REPLACE_WITH_ACM_CERT_ARN
+        
+        autoscaling:
+          enabled: true
+          minReplicas: 2
+          maxReplicas: 10
+          targetCPUUtilizationPercentage: 70
+        
+        oauth2Proxy:
+          enabled: false
+        
+        keycloak:
+          enabled: false
+  
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: chatbot-webapp
+  
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+  
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas

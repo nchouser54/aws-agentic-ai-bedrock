@@ -1,0 +1,62 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: chatbot-webapp-dev
+  namespace: argocd
+  labels:
+    environment: dev
+spec:
+  project: default
+  
+  source:
+    repoURL: https://github.com/nchouser54/aws-agentic-ai-bedrock.git
+    targetRevision: develop  # Track develop branch for dev environment
+    path: helm/chatbot-webapp
+    helm:
+      valueFiles:
+        - values.yaml
+        - examples/values-dev.yaml
+      values: |
+        webapp:
+          image:
+            repository: REPLACE_WITH_ECR_URL/chatbot-webapp
+            tag: "develop-latest"
+          
+          replicaCount: 1  # Lower for dev
+        
+        config:
+          chatbotUrl: "REPLACE_WITH_DEV_API_URL"
+        
+        ingress:
+          enabled: true
+          className: alb
+          annotations:
+            alb.ingress.kubernetes.io/scheme: internal  # Internal for dev
+            alb.ingress.kubernetes.io/certificate-arn: REPLACE_WITH_ACM_CERT_ARN
+          hosts:
+            - host: dev-chatbot.REPLACE_WITH_DOMAIN
+              paths:
+                - path: /
+                  pathType: Prefix
+        
+        autoscaling:
+          enabled: false  # Manual scaling in dev
+        
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+  
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: chatbot-webapp-dev
+  
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
