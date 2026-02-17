@@ -1240,9 +1240,15 @@ variable "webapp_ec2_instance_type" {
 }
 
 variable "webapp_ec2_allowed_cidrs" {
-  description = "CIDR blocks allowed to reach EC2-hosted static webapp over HTTP"
+  description = "CIDR blocks allowed to reach EC2-hosted static webapp over HTTP (only used if webapp_ec2_security_group_id is not provided)"
   type        = list(string)
   default     = ["0.0.0.0/0"]
+}
+
+variable "webapp_ec2_security_group_id" {
+  description = "Optional existing security group ID for EC2 webapp instance. If provided, no security group will be created."
+  type        = string
+  default     = ""
 }
 
 variable "webapp_ec2_key_name" {

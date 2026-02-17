@@ -558,7 +558,7 @@ resource "aws_s3_object" "webapp_files" {
 }
 
 resource "aws_security_group" "webapp_ec2" {
-  count       = local.webapp_ec2_enabled ? 1 : 0
+  count       = local.webapp_ec2_enabled && trimspace(var.webapp_ec2_security_group_id) == "" ? 1 : 0
   name        = "${local.name_prefix}-webapp-ec2-sg"
   description = "Allow HTTP access to EC2-hosted static chatbot webapp"
   vpc_id      = data.aws_subnet.webapp[0].vpc_id
@@ -643,7 +643,7 @@ resource "aws_instance" "webapp" {
   private_ip                  = trimspace(var.webapp_ec2_private_ip) != "" ? trimspace(var.webapp_ec2_private_ip) : null
   key_name                    = trimspace(var.webapp_ec2_key_name) != "" ? trimspace(var.webapp_ec2_key_name) : null
   iam_instance_profile        = aws_iam_instance_profile.webapp[0].name
-  vpc_security_group_ids      = [aws_security_group.webapp_ec2[0].id]
+  vpc_security_group_ids      = trimspace(var.webapp_ec2_security_group_id) != "" ? [trimspace(var.webapp_ec2_security_group_id)] : [aws_security_group.webapp_ec2[0].id]
   associate_public_ip_address = !local.webapp_private_only
 
   user_data = <<-EOT

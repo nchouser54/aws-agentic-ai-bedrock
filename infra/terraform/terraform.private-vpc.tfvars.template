@@ -114,6 +114,7 @@ webapp_private_only    = true
 
 webapp_ec2_subnet_id     = "<PRIVATE_SUBNET_ID>"   # subnet-abc123
 webapp_ec2_instance_type = "t3.small"
+# webapp_ec2_security_group_id = ""               # Optional: use existing SG
 # webapp_ec2_key_name    = "<KEY_PAIR_NAME>"        # Uncomment for SSH access
 
 # ── Internal NLB + TLS (uncomment all 4 lines to enable) ────────────────

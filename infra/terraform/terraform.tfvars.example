@@ -220,6 +220,7 @@ webapp_bucket_name     = ""
 # webapp_ec2_allowed_cidrs    = ["203.0.113.10/32"]
 # webapp_ec2_key_name         = "my-keypair"
 # webapp_ec2_ami_id           = "" # optional override
+# webapp_ec2_security_group_id = "" # optional: use existing security group instead of creating one
 # webapp_tls_enabled          = true
 # webapp_tls_acm_certificate_arn = "arn:aws-us-gov:acm:us-gov-west-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 # webapp_tls_subnet_ids       = ["subnet-aaaaaaa", "subnet-bbbbbbb"]
