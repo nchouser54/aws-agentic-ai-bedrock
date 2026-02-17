@@ -455,6 +455,14 @@ Quick local consistency checks:
 - `python scripts/smoke_test_chatbot_modes.py --url <chatbot_url>`
 - `python scripts/trigger_kb_sync.py --function-name <kb_sync_function_name>`
 - `python scripts/predeploy_nonprod_checks.py --tfvars infra/terraform/terraform.tfvars`
+- `python scripts/postdeploy_operator_report.py --terraform-dir infra/terraform --auth-mode token --auth-value <token>`
+
+Post-deploy operator report notes:
+
+- Pulls Terraform/OpenTofu outputs (`webhook_url`, `chatbot_url`, `webapp_url`/`webapp_https_url`)
+- Performs endpoint reachability checks for webhook, chatbot query/models, and webapp UI
+- Returns JSON summary with per-check status (`ok`, `warn`, `fail`) and exits non-zero only on hard failures
+- Convenience target: `make postdeploy-report`
 
 ### GitHub MCP server (optional)
 

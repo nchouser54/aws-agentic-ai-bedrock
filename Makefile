@@ -1,4 +1,4 @@
-.PHONY: install install-mcp mcp-github-server mcp-atlassian-server mcp-github-release-server mcp-unified-server mcp-list mcp-dev-check mcp-ec2-bootstrap lint test check terraform-fmt-check terraform-validate verify-toolchain promptfoo-eval-pr promptfoo-eval-chatbot
+.PHONY: install install-mcp mcp-github-server mcp-atlassian-server mcp-github-release-server mcp-unified-server mcp-list mcp-dev-check mcp-ec2-bootstrap lint test check terraform-fmt-check terraform-validate verify-toolchain postdeploy-report promptfoo-eval-pr promptfoo-eval-chatbot
 
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 TERRAFORM ?= $(shell if command -v tofu >/dev/null 2>&1; then echo tofu; elif command -v terraform >/dev/null 2>&1; then echo terraform; else echo terraform; fi)
@@ -62,6 +62,9 @@ terraform-validate:
 
 verify-toolchain:
 	$(PYTHON) scripts/predeploy_nonprod_checks.py --tfvars infra/terraform/terraform.nonprod.tfvars.example
+
+postdeploy-report:
+	$(PYTHON) scripts/postdeploy_operator_report.py --terraform-dir infra/terraform
 
 promptfoo-eval-pr:
 	PROMPTFOO_AWS_REGION=$${PROMPTFOO_AWS_REGION:-us-gov-west-1} \
