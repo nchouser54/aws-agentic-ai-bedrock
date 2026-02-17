@@ -4,7 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Chatbot Console</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>" />
     <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   </head>
   <body>
     <main class="container">
@@ -28,7 +30,10 @@
           </label>
           <label>
             Auth Value
-            <input id="authValue" type="password" placeholder="token or bearer jwt" />
+            <div class="input-with-toggle">
+              <input id="authValue" type="password" placeholder="token or bearer jwt" />
+              <button id="authToggleBtn" type="button" class="icon-btn" title="Show/hide auth value" aria-label="Toggle auth value visibility">👁</button>
+            </div>
           </label>
           <label>
             Retrieval Mode
@@ -66,6 +71,17 @@
               <option value="false">disabled</option>
             </select>
           </label>
+          <label>
+            Image Size
+            <select id="imageSize">
+              <option value="">default (1024x1024)</option>
+              <option value="512x512">512x512</option>
+              <option value="768x768">768x768</option>
+              <option value="1024x1024">1024x1024</option>
+              <option value="1280x1280">1280x1280</option>
+              <option value="2048x2048">2048x2048</option>
+            </select>
+          </label>
         </div>
         <div class="actions">
           <button id="refreshModelsBtn" type="button">Refresh GovCloud Models</button>
@@ -99,14 +115,50 @@
           </div>
           <div id="githubLoginStatus" class="status muted">Not started.</div>
         </details>
+        <details class="gh-login" id="atlassianPanel">
+          <summary>Atlassian Session (optional, user-level Jira/Confluence auth)</summary>
+          <p class="muted small">
+            Provide your own Atlassian credentials to query Jira/Confluence as yourself instead of the service account.
+            Creates a server-side session so credentials are not sent on every request.
+          </p>
+          <div class="grid two">
+            <label>
+              Atlassian Email
+              <input id="atlassianEmail" type="email" placeholder="you@company.com" />
+            </label>
+            <label>
+              Atlassian API Token
+              <div class="input-with-toggle">
+                <input id="atlassianApiToken" type="password" placeholder="API token from id.atlassian.com" />
+                <button id="atlassianTokenToggleBtn" type="button" class="icon-btn" title="Show/hide token" aria-label="Toggle token visibility">👁</button>
+              </div>
+            </label>
+          </div>
+          <div class="actions">
+            <button id="atlassianLoginBtn" type="button">Create Session</button>
+            <button id="atlassianLogoutBtn" type="button">Clear Session</button>
+          </div>
+          <div id="atlassianStatus" class="status muted">No session.</div>
+        </details>
+        <details class="gh-login" id="memoryPanel">
+          <summary>Conversation Memory</summary>
+          <p class="muted small">
+            Clear stored conversation history. "Clear This" clears the current conversation ID; "Clear All" clears all your conversations.
+          </p>
+          <div class="actions">
+            <button id="memoryClearBtn" type="button">Clear This Conversation</button>
+            <button id="memoryClearAllBtn" type="button">Clear All Memory</button>
+          </div>
+          <div id="memoryStatus" class="status muted">No action taken.</div>
+        </details>
       </section>
 
       <section class="panel">
         <h2>Prompt</h2>
         <div class="grid one">
           <label>
-            Query
-            <textarea id="query" rows="4" placeholder="Ask about Jira, Confluence, or indexed GitHub docs..."></textarea>
+            Query <span class="muted small kbd-hint" id="kbdHint"></span>
+            <textarea id="query" rows="6" placeholder="Ask about Jira, Confluence, or indexed GitHub docs..."></textarea>
           </label>
           <div class="grid two">
             <label>
@@ -121,7 +173,7 @@
         </div>
         <div class="actions">
           <button id="saveBtn" type="button">Save Settings</button>
-          <button id="sendBtn" type="button">Ask Chatbot</button>
+          <button id="sendBtn" type="button" class="btn-primary">Ask Chatbot</button>
           <button id="imageBtn" type="button">Generate Image</button>
         </div>
       </section>
@@ -129,7 +181,18 @@
       <section class="panel">
         <h2>Response</h2>
         <div id="status" class="status muted">Ready.</div>
-        <pre id="answer" class="answer">No response yet.</pre>
+        <div class="response-toolbar">
+          <button id="copyBtn" type="button" class="icon-btn" title="Copy response to clipboard" aria-label="Copy response" hidden>📋 Copy</button>
+          <button id="downloadImgBtn" type="button" class="icon-btn" title="Download generated image" aria-label="Download image" hidden>⬇ Download</button>
+          <button id="clearBtn" type="button" class="icon-btn" title="Clear response" aria-label="Clear response">✕ Clear</button>
+        </div>
+        <div id="answer" class="answer">No response yet.</div>
+        <div id="feedbackBar" class="feedback-bar" hidden>
+          <span class="feedback-label">Was this helpful?</span>
+          <button id="thumbsUpBtn" type="button" class="feedback-btn" title="Thumbs up" aria-label="Positive feedback">👍</button>
+          <button id="thumbsDownBtn" type="button" class="feedback-btn" title="Thumbs down" aria-label="Negative feedback">👎</button>
+        </div>
+        <div id="citations" class="citations" hidden></div>
         <div id="sources" class="sources"></div>
         <div id="imageWrap" class="image-wrap" hidden>
           <img id="imagePreview" alt="Generated image preview" />
@@ -137,6 +200,12 @@
       </section>
     </main>
 
+    <script>
+      var isMac = (navigator.userAgentData && navigator.userAgentData.platform === "macOS") ||
+        /Mac/i.test(navigator.platform || "");
+      document.getElementById("kbdHint").textContent =
+        isMac ? "(⌘+Enter to send)" : "(Ctrl+Enter to send)";
+    </script>
     <script src="config.js"></script>
     <script src="app.js"></script>
   </body>
