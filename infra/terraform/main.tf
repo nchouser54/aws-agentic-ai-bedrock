@@ -557,6 +557,10 @@ resource "aws_s3_object" "webapp_files" {
   content_type = each.value.content_type
 }
 
+# Security group for webapp EC2 instance
+# NOTE: If switching from Terraform-managed to existing SG (webapp_ec2_security_group_id),
+# and you encounter DependencyViolation errors, manually remove from state first:
+#   terraform state rm 'aws_security_group.webapp_ec2[0]'
 resource "aws_security_group" "webapp_ec2" {
   count       = local.webapp_ec2_enabled && trimspace(var.webapp_ec2_security_group_id) == "" ? 1 : 0
   name        = "${local.name_prefix}-webapp-ec2-sg"
@@ -575,6 +579,10 @@ resource "aws_security_group" "webapp_ec2" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
 
@@ -944,10 +952,10 @@ resource "aws_iam_policy" "webhook_policy" {
       {
         Effect = "Allow"
         Action = ["sqs:SendMessage"]
-        Resource = compact([
-          aws_sqs_queue.pr_review_queue.arn,
-          var.pr_description_enabled ? aws_sqs_queue.pr_description_queue[0].arn : "",
-        ])
+        Resource = concat(
+          [aws_sqs_queue.pr_review_queue.arn],
+          var.pr_description_enabled ? [aws_sqs_queue.pr_description_queue[0].arn] : []
+        )
       },
       {
         Effect   = "Allow"
@@ -1050,13 +1058,12 @@ resource "aws_iam_policy" "chatbot_policy" {
       {
         Effect = "Allow"
         Action = ["secretsmanager:GetSecretValue"]
-        Resource = compact([
-          local.atlassian_credentials_secret_arn,
-          var.chatbot_enabled ? local.chatbot_api_token_secret_arn : "",
-          var.chatbot_enabled && var.teams_adapter_enabled ? local.teams_adapter_token_secret_arn : "",
-          var.chatbot_enabled && var.chatbot_github_live_enabled ? local.github_app_private_key_secret_arn : "",
-          var.chatbot_enabled && var.chatbot_github_live_enabled ? local.github_app_ids_secret_arn : "",
-        ])
+        Resource = concat(
+          [local.atlassian_credentials_secret_arn],
+          var.chatbot_enabled ? [local.chatbot_api_token_secret_arn] : [],
+          var.chatbot_enabled && var.teams_adapter_enabled ? [local.teams_adapter_token_secret_arn] : [],
+          var.chatbot_enabled && var.chatbot_github_live_enabled ? [local.github_app_private_key_secret_arn, local.github_app_ids_secret_arn] : []
+        )
       },
       {
         Effect = "Allow"
@@ -1135,11 +1142,10 @@ resource "aws_iam_policy" "kb_sync_policy" {
       {
         Effect = "Allow"
         Action = ["secretsmanager:GetSecretValue"]
-        Resource = compact([
-          var.kb_sync_enabled ? local.atlassian_credentials_secret_arn : "",
-          var.github_kb_sync_enabled ? local.github_app_private_key_secret_arn : "",
-          var.github_kb_sync_enabled ? local.github_app_ids_secret_arn : "",
-        ])
+        Resource = concat(
+          var.kb_sync_enabled ? [local.atlassian_credentials_secret_arn] : [],
+          var.github_kb_sync_enabled ? [local.github_app_private_key_secret_arn, local.github_app_ids_secret_arn] : []
+        )
       },
       {
         Effect = "Allow"
