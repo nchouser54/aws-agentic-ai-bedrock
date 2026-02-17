@@ -9,9 +9,53 @@
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   </head>
   <body>
+    <div id="helpModal" class="modal" hidden>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Keyboard Shortcuts</h2>
+          <button id="closeHelpBtn" class="icon-btn" aria-label="Close help">✕</button>
+        </div>
+        <div class="modal-body">
+          <table class="shortcuts-table">
+            <tr><td><kbd>Ctrl/⌘</kbd> + <kbd>Enter</kbd></td><td>Send query</td></tr>
+            <tr><td><kbd>Ctrl/⌘</kbd> + <kbd>K</kbd></td><td>Clear response</td></tr>
+            <tr><td><kbd>Ctrl/⌘</kbd> + <kbd>S</kbd></td><td>Save settings</td></tr>
+            <tr><td><kbd>Ctrl/⌘</kbd> + <kbd>E</kbd></td><td>Export conversation</td></tr>
+            <tr><td><kbd>Esc</kbd></td><td>Cancel active request</td></tr>
+            <tr><td><kbd>?</kbd></td><td>Show this help</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+    <aside id="historyPanel" class="history-panel" hidden>
+      <div class="history-header">
+        <h3>Query History</h3>
+        <button id="closeHistoryBtn" class="icon-btn" aria-label="Close history">✕</button>
+      </div>
+      <div id="historyList" class="history-list"></div>
+      <div class="history-footer">
+        <button id="clearHistoryBtn" type="button" class="small-btn">Clear All</button>
+      </div>
+    </aside>
     <main class="container">
-      <h1>AI Chatbot Console</h1>
-      <p class="subtitle">Small internal web client for <code>/chatbot/query</code>.</p>
+      <div class="top-bar">
+        <div>
+          <h1>AI Chatbot Console</h1>
+          <p class="subtitle">Small internal web client for <code>/chatbot/query</code>.</p>
+        </div>
+        <div class="top-bar-controls">
+          <div id="connectionStatus" class="connection-status offline" title="Connection status">●</div>
+          <div id="rateLimitDisplay" class="rate-limit-display" hidden>
+            <span class="rate-limit-label">Requests:</span>
+            <span id="userQuota" class="quota">-/-</span>
+            <span class="rate-limit-sep">|</span>
+            <span class="rate-limit-label">Conv:</span>
+            <span id="convQuota" class="quota">-/-</span>
+          </div>
+          <button id="toggleHistoryBtn" type="button" class="icon-btn" title="Query history">📜</button>
+          <button id="helpBtn" type="button" class="icon-btn" title="Keyboard shortcuts (?)">❓</button>
+        </div>
+      </div>
 
       <section class="panel">
         <h2>Connection</h2>
@@ -158,6 +202,15 @@
         <div class="grid one">
           <label>
             Query <span class="muted small kbd-hint" id="kbdHint"></span>
+            <div class="query-toolbar">
+              <select id="templateSelector" title="Query templates">
+                <option value="">-- Quick Templates --</option>
+                <option value="standup">Today's standup items</option>
+                <option value="bugs">Show critical bugs in PROJECT</option>
+                <option value="confluence">Recently updated Confluence pages</option>
+                <option value="custom1">User template 1</option>
+              </select>
+            </div>
             <textarea id="query" rows="6" placeholder="Ask about Jira, Confluence, or indexed GitHub docs..."></textarea>
           </label>
           <div class="grid two">
@@ -174,17 +227,23 @@
         <div class="actions">
           <button id="saveBtn" type="button">Save Settings</button>
           <button id="sendBtn" type="button" class="btn-primary">Ask Chatbot</button>
+          <button id="cancelBtn" type="button" class="btn-danger" hidden>Cancel Request</button>
           <button id="imageBtn" type="button">Generate Image</button>
         </div>
       </section>
 
       <section class="panel">
         <h2>Response</h2>
+        <div id="contextIndicators" class="context-indicators" hidden></div>
         <div id="status" class="status muted">Ready.</div>
+        <div id="metricsBar" class="metrics-bar" hidden></div>
         <div class="response-toolbar">
-          <button id="copyBtn" type="button" class="icon-btn" title="Copy response to clipboard" aria-label="Copy response" hidden>📋 Copy</button>
+          <button id="copyBtn" type="button" class="icon-btn" title="Copy response to clipboard (Ctrl/⌘+C)" aria-label="Copy response" hidden>📋 Copy</button>
           <button id="downloadImgBtn" type="button" class="icon-btn" title="Download generated image" aria-label="Download image" hidden>⬇ Download</button>
-          <button id="clearBtn" type="button" class="icon-btn" title="Clear response" aria-label="Clear response">✕ Clear</button>
+          <button id="exportMdBtn" type="button" class="icon-btn" title="Export as Markdown" aria-label="Export Markdown" hidden>📄 Export MD</button>
+          <button id="exportJsonBtn" type="button" class="icon-btn" title="Export as JSON" aria-label="Export JSON" hidden>💾 Export JSON</button>
+          <button id="regenerateBtn" type="button" class="icon-btn" title="Regenerate response" aria-label="Regenerate" hidden>🔄 Regenerate</button>
+          <button id="clearBtn" type="button" class="icon-btn" title="Clear response (Ctrl/⌘+K)" aria-label="Clear response">✕ Clear</button>
         </div>
         <div id="answer" class="answer">No response yet.</div>
         <div id="feedbackBar" class="feedback-bar" hidden>

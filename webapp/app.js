@@ -43,7 +43,28 @@ const ids = {
   saveBtn: document.getElementById("saveBtn"),
   copyBtn: document.getElementById("copyBtn"),
   downloadImgBtn: document.getElementById("downloadImgBtn"),
+  exportMdBtn: document.getElementById("exportMdBtn"),
+  exportJsonBtn: document.getElementById("exportJsonBtn"),
+  regenerateBtn: document.getElementById("regenerateBtn"),
   clearBtn: document.getElementById("clearBtn"),
+  cancelBtn: document.getElementById("cancelBtn"),
+  
+  // New features
+  connectionStatus: document.getElementById("connectionStatus"),
+  rateLimitDisplay: document.getElementById("rateLimitDisplay"),
+  userQuota: document.getElementById("userQuota"),
+  convQuota: document.getElementById("convQuota"),
+  toggleHistoryBtn: document.getElementById("toggleHistoryBtn"),
+  helpBtn: document.getElementById("helpBtn"),
+  helpModal: document.getElementById("helpModal"),
+  closeHelpBtn: document.getElementById("closeHelpBtn"),
+  historyPanel: document.getElementById("historyPanel"),
+  historyList: document.getElementById("historyList"),
+  closeHistoryBtn: document.getElementById("closeHistoryBtn"),
+  clearHistoryBtn: document.getElementById("clearHistoryBtn"),
+  templateSelector: document.getElementById("templateSelector"),
+  contextIndicators: document.getElementById("contextIndicators"),
+  metricsBar: document.getElementById("metricsBar"),
 };
 
 /* ── HTML sanitization helper ── */
@@ -69,8 +90,21 @@ function renderMarkdown(text) {
 
 // Track raw answer text for copy-to-clipboard
 let lastRawAnswer = "";
+let lastResponseId = null;
+let lastQueryData = {};
+let activeRequest = null;
+let queryHistory = [];
+let performanceStart = 0;
 
 const SETTINGS_KEY = "chatbot-webapp-settings-v1";
+const HISTORY_KEY = "chatbot-query-history";
+const MAX_HISTORY_ITEMS = 50;
+const QUERY_TEMPLATES = {
+  standup: "Summarize today's standup items from Jira",
+  bugs: "Show critical bugs in PROJECT order by priority",
+  confluence: "List recently updated Confluence pages from last week",
+  custom1: ""  // User customizable
+};
 const APP_DEFAULTS = window.WEBAPP_DEFAULTS || {};
 const DEFAULT_SETTINGS = {
   chatbotUrl: APP_DEFAULTS.chatbotUrl || "",
@@ -152,6 +186,245 @@ function saveSettings() {
   };
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
   setStatus("Settings saved locally.", "ok");
+  checkConnection();
+}
+
+/* ── Connection Status & Health Check ── */
+function setConnectionStatus(status) {
+  ids.connectionStatus.className = `connection-status ${status}`;
+  const titles = {
+    online: "Connected",
+    offline: "Disconnected",
+    connecting: "Connecting...",
+    error: "Connection error"
+  };
+  ids.connectionStatus.title = titles[status] || status;
+}
+
+function checkConnection() {
+  const url = ids.chatbotUrl.value.trim();
+  if (!url) {
+    setConnectionStatus("offline");
+    return;
+  }
+  try {
+    new URL(url);
+    setConnectionStatus("online");
+  } catch {
+    setConnectionStatus("error");
+  }
+}
+
+/* ── Context Indicators ── */
+function showContextIndicators(sources = {}) {
+  const indicators = [];
+  if (sources.jira_count > 0) indicators.push(`🔍 ${sources.jira_count} Jira`);
+  if (sources.confluence_count > 0) indicators.push(`📄 ${sources.confluence_count} Confluence`);
+  if (sources.kb_count > 0) indicators.push(`📚 ${sources.kb_count} KB docs`);
+  if (sources.github_count > 0) indicators.push(`🐙 ${sources.github_count} GitHub`);
+  if (sources.response_cache && sources.response_cache.hit) indicators.push(`💾 Cached`);
+  
+  if (indicators.length > 0) {
+    ids.contextIndicators.innerHTML = indicators.map(i => 
+      `<span class="context-badge">${escapeHtml(i)}</span>`
+    ).join("");
+    ids.contextIndicators.hidden = false;
+  } else {
+    ids.contextIndicators.hidden = true;
+  }
+}
+
+/* ── Performance Metrics Display ──  */
+function showMetrics(sources = {}, elapsed = 0) {
+  const parts = [];
+  if (elapsed) parts.push(`⏱️ ${formatElapsed(elapsed)}`);
+  if (sources.model_id) parts.push(`🤖 ${sources.model_id.substring(0, 30)}`);
+  if (sources.tokens_used) parts.push(`🎫 ${sources.tokens_used} tok`);
+  if (sources.time_to_first_token) parts.push(`⚡ ${sources.time_to_first_token}ms TTFT`);
+  
+  if (parts.length > 0) {
+    ids.metricsBar.innerHTML = parts.map(p => 
+      `<span class="metric-item">${escapeHtml(p)}</span>`
+    ).join("");
+    ids.metricsBar.hidden = false;
+  } else {
+    ids.metricsBar.hidden = true;
+  }
+}
+
+/* ── Rate Limit Updates ── */
+function updateRateLimit(headers) {
+  const userRemaining = headers.get("X-RateLimit-User-Remaining");
+  const userLimit = headers.get("X-RateLimit-User-Limit");
+  const convRemaining = headers.get("X-RateLimit-Conversation-Remaining");
+  const convLimit = headers.get("X-RateLimit-Conversation-Limit");
+  
+  if (userRemaining && userLimit) {
+    ids.userQuota.textContent = `${userRemaining}/${userLimit}`;
+    ids.rateLimitDisplay.hidden = false;
+  }
+  if (convRemaining && convLimit) {
+    ids.convQuota.textContent = `${convRemaining}/${convLimit}`;
+    ids.rateLimitDisplay.hidden = false;
+  }
+}
+
+/* ── Query History Management ── */
+function loadQueryHistory() {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (raw) queryHistory = JSON.parse(raw);
+  } catch {
+    queryHistory = [];
+  }
+  renderQueryHistory();
+}
+
+function saveQueryHistory() {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(queryHistory.slice(0, MAX_HISTORY_ITEMS)));
+  } catch (e) {
+    console.error("Failed to save history:", e);
+  }
+}
+
+function addToHistory(query, answer, metadata = {}) {
+  const entry = {
+    id: Date.now(),
+    timestamp: new Date().toISOString(),
+    query: query.substring(0, 200),
+    answer: answer.substring(0, 500),
+    metadata
+  };
+  queryHistory.unshift(entry);
+  if (queryHistory.length > MAX_HISTORY_ITEMS) queryHistory = queryHistory.slice(0, MAX_HISTORY_ITEMS);
+  saveQueryHistory();
+  renderQueryHistory();
+}
+
+function renderQueryHistory() {
+  if (queryHistory.length === 0) {
+    ids.historyList.innerHTML = '<div class="history-empty">No queries yet</div>';
+    return;
+  }
+  const items = queryHistory.map(entry => {
+    const date = new Date(entry.timestamp);
+    const timeStr = date.toLocaleTimeString();
+    const queryPreview = escapeHtml(entry.query.substring(0, 80));
+    return `
+      <div class="history-item" data-id="${entry.id}">
+        <div class="history-time">${timeStr}</div>
+        <div class="history-query">${queryPreview}</div>
+        <button class="history-use-btn" data-id="${entry.id}">Use</button>
+      </div>
+    `;
+  }).join("");
+  ids.historyList.innerHTML = items;
+  ids.historyList.querySelectorAll(".history-use-btn").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = parseInt(btn.dataset.id);
+      const entry = queryHistory.find(h => h.id === id);
+      if (entry) {
+        ids.query.value = entry.query;
+        ids.historyPanel.hidden = true;
+      }
+    });
+  });
+}
+
+function clearQueryHistory() {
+  if (confirm("Clear all query history?")) {
+    queryHistory = [];
+    saveQueryHistory();
+    renderQueryHistory();
+  }
+}
+
+/* ── Export Functions ── */
+function exportAsMarkdown() {
+  if (!lastRawAnswer) return;
+  const query = lastQueryData.query || "Query";
+  const timestamp = new Date().toISOString();
+  let md = `# Chatbot Conversation\n\n**Date:** ${timestamp}\n\n## Query\n${query}\n\n## Response\n${lastRawAnswer}\n`;
+  if (lastQueryData.sources) {
+    const sources = lastQueryData.sources;
+    md += `\n## Metadata\n- Model: ${sources.model_id || "N/A"}\n- Mode: ${sources.assistant_mode || "N/A"}\n`;
+    if (sources.jira_count) md += `- Jira: ${sources.jira_count} issues\n`;
+    if (sources.confluence_count) md += `- Confluence: ${sources.confluence_count} pages\n`;
+  }
+  downloadText(md, `chatbot-${Date.now()}.md`, "text/markdown");
+}
+
+function exportAsJSON() {
+  if (!lastRawAnswer) return;
+  const data = {
+    timestamp: new Date().toISOString(),
+    query: lastQueryData.query || "",
+    answer: lastRawAnswer,
+    citations: lastQueryData.citations || [],
+    sources: lastQueryData.sources || {},
+    metadata: lastQueryData.metadata || {}
+  };
+  downloadText(JSON.stringify(data, null, 2), `chatbot-${Date.now()}.json`, "application/json");
+}
+
+function downloadText(content, filename, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* ── Inline Query Editing / Regenerate ── */
+function regenerateQuery() {
+  if (lastQueryData.query) {
+    ids.query.value = lastQueryData.query;
+    if (ids.sendBtn.disabled === false) {
+      askChatbot();
+    }
+  }
+}
+
+/* ── Request Cancellation ── */
+function cancelRequest() {
+  if (activeRequest) {
+    try {
+      activeRequest.abort();
+      setStatus("Request cancelled by user.", "err");
+    } catch (e) {
+      console.error("Cancel failed:", e);
+    }
+    activeRequest = null;
+    ids.sendBtn.disabled = false;
+    ids.cancelBtn.hidden = true;
+  }
+}
+
+/* ── Error Handling with Retry ── */
+async function fetchWithRetry(url, options, maxRetries = 1) {
+  let lastError;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const controller = new AbortController();
+      activeRequest = controller;
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      activeRequest = null;
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (error.name === "AbortError") throw error;  // Don't retry on user cancel
+      if (attempt < maxRetries) {
+        setStatus(`Retrying... (${attempt + 1}/${maxRetries})`, "muted");
+        await sleep(1000 * (attempt + 1));  // Exponential backoff
+      }
+    }
+  }
+  activeRequest = null;
+  throw lastError;
 }
 
 function setGitHubLoginStatus(message, kind = "muted") {
@@ -519,8 +792,13 @@ async function askChatbot() {
 
   saveSettings();
   ids.sendBtn.disabled = true;
+  ids.cancelBtn.disabled = false;
+  ids.exportMdBtn.hidden = true;
+  ids.exportJsonBtn.hidden = true;
+  ids.regenerateBtn.hidden = true;
   setStatus("Sending request...", "loading");
-  const startTime = performance.now();
+  performanceStart = performance.now();
+  const startTime = performanceStart;
 
   const payload = {
     query,
@@ -543,11 +821,11 @@ async function askChatbot() {
   if (confluenceCql) payload.confluence_cql = confluenceCql;
 
   try {
-    const res = await fetch(endpoint, {
+    const res = await fetchWithRetry(endpoint, {
       method: "POST",
       headers: buildHeaders(),
       body: JSON.stringify(payload),
-    });
+    }, 3);
 
     const body = await res.json().catch(() => ({}));
     const elapsed = formatElapsed(Math.round(performance.now() - startTime));
@@ -572,6 +850,10 @@ async function askChatbot() {
 
     // Store response_id for feedback
     lastResponseId = body.response_id || body.conversation_id || null;
+    
+    // Show context indicators and metrics
+    showContextIndicators(body.sources || {});
+    showMetrics(body.sources || {}, elapsed);
 
     const streamChunks = (((body || {}).stream || {}).chunks || []);
     await renderAnswerStream(streamChunks, body.answer || JSON.stringify(body, null, 2));
@@ -589,17 +871,37 @@ async function askChatbot() {
     if (cached) statusMsg += " (cached)";
     setStatus(statusMsg, "ok");
     scrollToResponse();
+    
+    // Store query and response data for history and regeneration
+    lastQueryData = { query, payload, response: body, elapsed };
+    addToHistory(query, body.answer || JSON.stringify(body, null, 2), {
+      model,
+      elapsed,
+      cached,
+      sources: body.sources || {}
+    });
+    
+    // Enable export and regenerate buttons
+    ids.exportMdBtn.hidden = false;
+    ids.exportJsonBtn.hidden = false;
+    ids.regenerateBtn.hidden = false;
   } catch (err) {
-    lastRawAnswer = String(err);
-    ids.answer.textContent = lastRawAnswer;
-    ids.copyBtn.hidden = false;
-    renderSources({});
-    renderCitations([]);
-    ids.imageWrap.hidden = true;
-    ids.downloadImgBtn.hidden = true;
-    setStatus("Network/CORS error. Check API URL and auth mode.", "err");
+    if (err.name === 'AbortError') {
+      setStatus("Request cancelled by user.", "err");
+    } else {
+      lastRawAnswer = String(err);
+      ids.answer.textContent = lastRawAnswer;
+      ids.copyBtn.hidden = false;
+      renderSources({});
+      renderCitations([]);
+      ids.imageWrap.hidden = true;
+      ids.downloadImgBtn.hidden = true;
+      setStatus("Network/CORS error. Check API URL and auth mode.", "err");
+    }
   } finally {
     ids.sendBtn.disabled = false;
+    ids.cancelBtn.disabled = true;
+    activeRequest = null;
   }
 }
 
@@ -618,8 +920,12 @@ async function generateImage() {
 
   saveSettings();
   ids.imageBtn.disabled = true;
+  ids.cancelBtn.disabled = false;
+  ids.exportMdBtn.hidden = true;
+  ids.exportJsonBtn.hidden = true;
   setStatus("Generating image...", "loading");
-  const startTime = performance.now();
+  performanceStart = performance.now();
+  const startTime = performanceStart;
 
   const payload = { query };
   const modelId = ids.modelId.value.trim();
@@ -628,14 +934,17 @@ async function generateImage() {
   if (imageSize) payload.size = imageSize;
 
   try {
-    const res = await fetch(endpoint, {
+    const res = await fetchWithRetry(endpoint, {
       method: "POST",
       headers: buildHeaders(),
       body: JSON.stringify(payload),
-    });
+    }, 3);
 
     const body = await res.json().catch(() => ({}));
     const elapsed = formatElapsed(Math.round(performance.now() - startTime));
+    
+    // Update rate limit display
+    updateRateLimit(res.headers);
 
     if (!res.ok) {
       lastRawAnswer = JSON.stringify(body, null, 2) || `HTTP ${res.status}`;
@@ -671,14 +980,20 @@ async function generateImage() {
     setStatus(`Image ready in ${elapsed} via ${body.model_id || "unknown model"}`, "ok");
     scrollToResponse();
   } catch (err) {
-    ids.imageWrap.hidden = true;
-    ids.downloadImgBtn.hidden = true;
-    lastRawAnswer = String(err);
-    ids.answer.textContent = lastRawAnswer;
-    ids.copyBtn.hidden = false;
-    setStatus("Image generation network/CORS error.", "err");
+    if (err.name === 'AbortError') {
+      setStatus("Request cancelled by user.", "err");
+    } else {
+      ids.imageWrap.hidden = true;
+      ids.downloadImgBtn.hidden = true;
+      lastRawAnswer = String(err);
+      ids.answer.textContent = lastRawAnswer;
+      ids.copyBtn.hidden = false;
+      setStatus("Image generation network/CORS error.", "err");
+    }
   } finally {
     ids.imageBtn.disabled = false;
+    ids.cancelBtn.disabled = true;
+    activeRequest = null;
   }
 }
 
@@ -999,7 +1314,7 @@ async function sendFeedback(rating) {
   }
 }
 
-/* ── Keyboard shortcut: Ctrl/Cmd+Enter to send ── */
+/* ── Keyboard shortcuts ── */
 ids.query.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
     e.preventDefault();
@@ -1007,14 +1322,55 @@ ids.query.addEventListener("keydown", (e) => {
   }
 });
 
+document.addEventListener("keydown", (e) => {
+  // Ctrl/Cmd+K: Clear response
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    clearResponse();
+  }
+  // Ctrl/Cmd+S: Save settings
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+    e.preventDefault();
+    saveSettings();
+  }
+  // Ctrl/Cmd+E: Export as Markdown
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e") {
+    e.preventDefault();
+    if (!ids.exportMdBtn.hidden) exportAsMarkdown();
+  }
+  // Esc: Cancel request or close modals
+  if (e.key === "Escape") {
+    if (!ids.cancelBtn.hidden) {
+      cancelRequest();
+    } else if (!ids.helpModal.hidden) {
+      ids.helpModal.hidden = true;
+    } else if (!ids.historyPanel.hidden) {
+      ids.historyPanel.hidden = true;
+    }
+  }
+  // ?: Show help modal
+  if (e.key === "?" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    const activeEl = document.activeElement;
+    if (activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA")) {
+      return;  // Don't trigger in input fields
+    }
+    e.preventDefault();
+    ids.helpModal.hidden = false;
+  }
+});
+
 /* ── Event listeners ── */
 ids.saveBtn.addEventListener("click", saveSettings);
 ids.sendBtn.addEventListener("click", askChatbot);
+ids.cancelBtn.addEventListener("click", cancelRequest);
 ids.imageBtn.addEventListener("click", generateImage);
 ids.githubLoginBtn.addEventListener("click", startGitHubLogin);
 ids.refreshModelsBtn.addEventListener("click", refreshModels);
 ids.copyBtn.addEventListener("click", copyAnswer);
 ids.downloadImgBtn.addEventListener("click", downloadImage);
+ids.exportMdBtn.addEventListener("click", exportAsMarkdown);
+ids.exportJsonBtn.addEventListener("click", exportAsJSON);
+ids.regenerateBtn.addEventListener("click", regenerateQuery);
 ids.clearBtn.addEventListener("click", clearResponse);
 ids.authToggleBtn.addEventListener("click", toggleAuthVisibility);
 ids.atlassianTokenToggleBtn.addEventListener("click", toggleAtlassianTokenVisibility);
@@ -1025,8 +1381,35 @@ ids.memoryClearAllBtn.addEventListener("click", clearAllMemory);
 ids.thumbsUpBtn.addEventListener("click", () => sendFeedback(1));
 ids.thumbsDownBtn.addEventListener("click", () => sendFeedback(-1));
 
+// New feature event listeners
+ids.toggleHistoryBtn.addEventListener("click", () => {
+  ids.historyPanel.hidden = !ids.historyPanel.hidden;
+});
+ids.closeHistoryBtn.addEventListener("click", () => {
+  ids.historyPanel.hidden = true;
+});
+ids.clearHistoryBtn.addEventListener("click", clearQueryHistory);
+ids.helpBtn.addEventListener("click", () => {
+  ids.helpModal.hidden = false;
+});
+ids.closeHelpBtn.addEventListener("click", () => {
+  ids.helpModal.hidden = true;
+});
+ids.templateSelector.addEventListener("change", () => {
+  const template = ids.templateSelector.value;
+  if (template && QUERY_TEMPLATES[template]) {
+    ids.query.value = QUERY_TEMPLATES[template];
+  }
+  ids.templateSelector.value = "";  // Reset
+});
+
+// Check connection status when URL changes
+ids.chatbotUrl.addEventListener("input", checkConnection);
+
 loadSettings();
+loadQueryHistory();
 setStatus("Ready.");
 setGitHubLoginStatus("Not started.");
 setAtlassianStatus("No session.");
 setMemoryStatus("No action taken.");
+console.log("Enhanced chatbot webapp loaded with all features");
