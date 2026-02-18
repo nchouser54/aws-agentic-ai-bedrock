@@ -99,7 +99,7 @@ output "webapp_url" {
   description = "Public URL for the hosted static chatbot web UI (S3 website or EC2 Elastic IP)"
   value = !var.webapp_hosting_enabled ? "" : (
     var.webapp_hosting_mode == "s3" ? "http://${aws_s3_bucket_website_configuration.webapp[0].website_endpoint}" : (
-      var.webapp_private_only ? "http://${aws_instance.webapp[0].private_ip}" : "http://${aws_eip.webapp[0].public_ip}"
+      var.webapp_private_only ? "http://${local.webapp_ec2_byo ? data.aws_instance.webapp_byo[0].private_ip : aws_instance.webapp[0].private_ip}" : "http://${aws_eip.webapp[0].public_ip}"
     )
   )
 }
@@ -121,17 +121,44 @@ output "webapp_https_url" {
 
 output "webapp_instance_id" {
   description = "EC2 instance ID hosting the static chatbot web UI in ec2_eip mode"
-  value       = var.webapp_hosting_enabled && var.webapp_hosting_mode == "ec2_eip" ? aws_instance.webapp[0].id : ""
+  value       = var.webapp_hosting_enabled && var.webapp_hosting_mode == "ec2_eip" ? local.webapp_instance_id : ""
 }
 
 output "webapp_private_ip" {
   description = "Private IP address of the EC2-hosted static chatbot web UI in ec2_eip mode"
-  value       = var.webapp_hosting_enabled && var.webapp_hosting_mode == "ec2_eip" ? aws_instance.webapp[0].private_ip : ""
+  value       = var.webapp_hosting_enabled && var.webapp_hosting_mode == "ec2_eip" ? (
+    local.webapp_ec2_byo ? data.aws_instance.webapp_byo[0].private_ip : aws_instance.webapp[0].private_ip
+  ) : ""
 }
 
 output "webapp_configured_private_ip" {
-  description = "Configured fixed private IP for EC2 webapp instance (empty when auto-assigned)"
-  value       = var.webapp_hosting_enabled && var.webapp_hosting_mode == "ec2_eip" ? trimspace(var.webapp_ec2_private_ip) : ""
+  description = "Configured fixed private IP for EC2 webapp instance (empty when auto-assigned or BYO)"
+  value       = var.webapp_hosting_enabled && var.webapp_hosting_mode == "ec2_eip" && !local.webapp_ec2_byo ? trimspace(var.webapp_ec2_private_ip) : ""
+}
+
+output "webapp_setup_script" {
+  description = "One-time setup script to run on a BYO EC2 instance (only populated when webapp_ec2_instance_id is set)"
+  sensitive   = false
+  value = !local.webapp_ec2_byo ? "" : <<-SCRIPT
+    #!/bin/bash
+    # Run this once on your EC2 instance (Amazon Linux 2 / RHEL) as root or via sudo.
+    set -euxo pipefail
+    yum update -y
+    amazon-linux-extras install nginx1 -y || yum install -y nginx
+    yum install -y awscli || true
+    mkdir -p /usr/share/nginx/html
+    aws s3 sync "s3://${local.webapp_ec2_byo ? aws_s3_bucket.webapp[0].bucket : ""}" /usr/share/nginx/html \
+      --delete --exclude "*" --include "*.html" --include "*.js" --include "*.css"
+    chown -R nginx:nginx /usr/share/nginx/html
+    systemctl enable nginx && systemctl restart nginx
+    # Optional: auto-sync every 5 minutes
+    cat > /etc/cron.d/webapp-sync <<'CRON'
+    SHELL=/bin/bash
+    PATH=/usr/local/bin:/usr/bin:/bin
+    */5 * * * * root aws s3 sync "s3://${local.webapp_ec2_byo ? aws_s3_bucket.webapp[0].bucket : ""}" /usr/share/nginx/html --delete --exclude "*" --include "*.html" --include "*.js" --include "*.css" && chown -R nginx:nginx /usr/share/nginx/html 2>&1 | logger -t webapp-sync
+    CRON
+    chmod 0644 /etc/cron.d/webapp-sync
+  SCRIPT
 }
 
 output "webapp_https_private_ips" {

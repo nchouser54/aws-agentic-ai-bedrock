@@ -1227,8 +1227,19 @@ variable "webapp_bucket_name" {
   default     = ""
 }
 
+variable "webapp_ec2_instance_id" {
+  description = <<-DESC
+    ID of an existing (BYO) EC2 instance to use as the webapp host instead of having Terraform create one.
+    When set, Terraform skips creating the EC2 instance, IAM instance profile, and managed security group.
+    You are responsible for installing nginx and granting the instance read access to the webapp S3 bucket.
+    Use the `webapp_setup_script` output for a ready-made setup script to run on your instance.
+  DESC
+  type        = string
+  default     = ""
+}
+
 variable "webapp_ec2_subnet_id" {
-  description = "Subnet ID for EC2 static webapp instance when webapp_hosting_mode=ec2_eip"
+  description = "Subnet ID for EC2 static webapp instance when webapp_hosting_mode=ec2_eip. Not required when webapp_ec2_instance_id is set."
   type        = string
   default     = ""
 }

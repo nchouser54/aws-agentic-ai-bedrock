@@ -8,6 +8,13 @@ locals {
   webapp_hosting_mode               = trimspace(var.webapp_hosting_mode)
   webapp_s3_enabled                 = local.webapp_hosting_enabled && local.webapp_hosting_mode == "s3"
   webapp_ec2_enabled                = local.webapp_hosting_enabled && local.webapp_hosting_mode == "ec2_eip"
+  # When webapp_ec2_instance_id is provided the user manages their own EC2; Terraform
+  # skips creating the instance, IAM profile, and managed security group, and instead
+  # attaches the EIP / S3 read policy to the caller-supplied instance.
+  webapp_ec2_byo                    = local.webapp_ec2_enabled && trimspace(var.webapp_ec2_instance_id) != ""
+  webapp_ec2_create                 = local.webapp_ec2_enabled && !local.webapp_ec2_byo
+  # Unified instance-id used by EIP, NLB target, and outputs
+  webapp_instance_id                = local.webapp_ec2_byo ? trimspace(var.webapp_ec2_instance_id) : (local.webapp_ec2_create ? aws_instance.webapp[0].id : "")
   webapp_private_only               = local.webapp_ec2_enabled && var.webapp_private_only
   webapp_tls_enabled                = local.webapp_ec2_enabled && var.webapp_tls_enabled
   webapp_bucket_name                = trimspace(var.webapp_bucket_name) != "" ? trimspace(var.webapp_bucket_name) : "${local.name_prefix}-${data.aws_caller_identity.current.account_id}-chatbot-webapp"
@@ -101,13 +108,19 @@ data "aws_iam_policy" "xray_write" {
 }
 
 data "aws_subnet" "webapp" {
-  count = local.webapp_ec2_enabled ? 1 : 0
+  count = local.webapp_ec2_enabled && length(trimspace(var.webapp_ec2_subnet_id)) > 0 ? 1 : 0
   id    = var.webapp_ec2_subnet_id
 }
 
 data "aws_ssm_parameter" "webapp_ami" {
-  count = local.webapp_ec2_enabled && trimspace(var.webapp_ec2_ami_id) == "" ? 1 : 0
+  count = local.webapp_ec2_create && trimspace(var.webapp_ec2_ami_id) == "" ? 1 : 0
   name  = "/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2"
+}
+
+# When using an existing (BYO) EC2 instance, look it up so subnet/VPC are available
+data "aws_instance" "webapp_byo" {
+  count       = local.webapp_ec2_byo ? 1 : 0
+  instance_id = trimspace(var.webapp_ec2_instance_id)
 }
 
 check "chatbot_jwt_settings" {
@@ -226,9 +239,12 @@ check "webapp_ec2_settings" {
   assert {
     condition = (
       !local.webapp_ec2_enabled ||
+      # BYO mode: only the instance ID is required (subnet derived from the data source)
+      local.webapp_ec2_byo ||
+      # Terraform-managed mode: subnet is required so the instance can be placed
       length(trimspace(var.webapp_ec2_subnet_id)) > 0
     )
-    error_message = "When webapp_hosting_enabled=true and webapp_hosting_mode=ec2_eip, set webapp_ec2_subnet_id."
+    error_message = "When webapp_hosting_enabled=true and webapp_hosting_mode=ec2_eip, set either webapp_ec2_instance_id (BYO) or webapp_ec2_subnet_id (Terraform-managed)."
   }
 }
 
@@ -602,11 +618,12 @@ resource "aws_s3_object" "webapp_config_js" {
 }
 
 # Security group for webapp EC2 instance
-# NOTE: If switching from Terraform-managed to existing SG (webapp_ec2_security_group_id),
+# NOTE: Only created when Terraform manages the EC2 (webapp_ec2_instance_id is empty).
+# If switching from Terraform-managed to existing SG (webapp_ec2_security_group_id),
 # and you encounter DependencyViolation errors, manually remove from state first:
 #   terraform state rm 'aws_security_group.webapp_ec2[0]'
 resource "aws_security_group" "webapp_ec2" {
-  count       = local.webapp_ec2_enabled && trimspace(var.webapp_ec2_security_group_id) == "" ? 1 : 0
+  count       = local.webapp_ec2_create && trimspace(var.webapp_ec2_security_group_id) == "" ? 1 : 0
   name        = "${local.name_prefix}-webapp-ec2-sg"
   description = "Allow HTTP access to EC2-hosted static chatbot webapp"
   vpc_id      = data.aws_subnet.webapp[0].vpc_id
@@ -631,7 +648,7 @@ resource "aws_security_group" "webapp_ec2" {
 }
 
 resource "aws_iam_role" "webapp_ec2" {
-  count = local.webapp_ec2_enabled ? 1 : 0
+  count = local.webapp_ec2_create ? 1 : 0
   name  = "${local.name_prefix}-webapp-ec2-role"
 
   assume_role_policy = jsonencode({
@@ -647,7 +664,7 @@ resource "aws_iam_role" "webapp_ec2" {
 }
 
 resource "aws_iam_policy" "webapp_ec2_assets" {
-  count = local.webapp_ec2_enabled ? 1 : 0
+  count = local.webapp_ec2_create ? 1 : 0
   name  = "${local.name_prefix}-webapp-ec2-assets-policy"
 
   policy = jsonencode({
@@ -676,19 +693,19 @@ resource "aws_iam_policy" "webapp_ec2_assets" {
 }
 
 resource "aws_iam_role_policy_attachment" "webapp_ec2_assets" {
-  count      = local.webapp_ec2_enabled ? 1 : 0
+  count      = local.webapp_ec2_create ? 1 : 0
   role       = aws_iam_role.webapp_ec2[0].name
   policy_arn = aws_iam_policy.webapp_ec2_assets[0].arn
 }
 
 resource "aws_iam_instance_profile" "webapp" {
-  count = local.webapp_ec2_enabled ? 1 : 0
+  count = local.webapp_ec2_create ? 1 : 0
   name  = "${local.name_prefix}-webapp-ec2-profile"
   role  = aws_iam_role.webapp_ec2[0].name
 }
 
 resource "aws_instance" "webapp" {
-  count                       = local.webapp_ec2_enabled ? 1 : 0
+  count                       = local.webapp_ec2_create ? 1 : 0
   ami                         = trimspace(var.webapp_ec2_ami_id) != "" ? trimspace(var.webapp_ec2_ami_id) : data.aws_ssm_parameter.webapp_ami[0].value
   instance_type               = var.webapp_ec2_instance_type
   subnet_id                   = var.webapp_ec2_subnet_id
@@ -754,9 +771,9 @@ CRON
 resource "aws_eip" "webapp" {
   count    = local.webapp_ec2_enabled && !local.webapp_private_only ? 1 : 0
   domain   = "vpc"
-  instance = aws_instance.webapp[0].id
+  instance = local.webapp_instance_id
 
-  depends_on = [aws_instance.webapp]
+  depends_on = [aws_instance.webapp, data.aws_instance.webapp_byo]
 }
 
 resource "aws_eip" "webapp_tls" {
@@ -806,7 +823,7 @@ resource "aws_lb_target_group" "webapp" {
 resource "aws_lb_target_group_attachment" "webapp" {
   count            = local.webapp_tls_enabled ? 1 : 0
   target_group_arn = aws_lb_target_group.webapp[0].arn
-  target_id        = aws_instance.webapp[0].id
+  target_id        = local.webapp_instance_id
   port             = 80
 }
 
