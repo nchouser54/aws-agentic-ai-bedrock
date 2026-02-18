@@ -248,6 +248,16 @@ check "webapp_ec2_settings" {
   }
 }
 
+check "webapp_ec2_byo_iam_role" {
+  assert {
+    condition = (
+      !local.webapp_ec2_byo ||
+      trimspace(var.webapp_ec2_iam_role_name) != ""
+    )
+    error_message = "BYO EC2 mode: set webapp_ec2_iam_role_name to the IAM role name attached to your instance so Terraform can grant it S3 read access to the webapp bucket. Without this the nginx sync will fail with Access Denied."
+  }
+}
+
 check "webapp_private_only_settings" {
   assert {
     condition = (
@@ -698,6 +708,30 @@ resource "aws_iam_role_policy_attachment" "webapp_ec2_assets" {
   policy_arn = aws_iam_policy.webapp_ec2_assets[0].arn
 }
 
+# BYO mode: attach an inline policy granting S3 read access to the caller-supplied role.
+# Only created when webapp_ec2_iam_role_name is set.
+resource "aws_iam_role_policy" "webapp_byo_s3_read" {
+  count = local.webapp_ec2_byo && trimspace(var.webapp_ec2_iam_role_name) != "" ? 1 : 0
+  name  = "${local.name_prefix}-webapp-s3-read"
+  role  = trimspace(var.webapp_ec2_iam_role_name)
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = [aws_s3_bucket.webapp[0].arn]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = ["${aws_s3_bucket.webapp[0].arn}/*"]
+      }
+    ]
+  })
+}
+
 resource "aws_iam_instance_profile" "webapp" {
   count = local.webapp_ec2_create ? 1 : 0
   name  = "${local.name_prefix}-webapp-ec2-profile"
@@ -811,7 +845,9 @@ resource "aws_lb_target_group" "webapp" {
   port        = 80
   protocol    = "TCP"
   target_type = "instance"
-  vpc_id      = data.aws_subnet.webapp[0].vpc_id
+  # In BYO mode webapp_ec2_subnet_id may be empty, so resolve VPC from the
+  # data-sourced BYO instance instead of from the subnet data source.
+  vpc_id      = local.webapp_ec2_byo ? data.aws_instance.webapp_byo[0].vpc_id : data.aws_subnet.webapp[0].vpc_id
 
   health_check {
     protocol = "HTTP"

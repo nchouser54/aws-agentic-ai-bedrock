@@ -1238,6 +1238,16 @@ variable "webapp_ec2_instance_id" {
   default     = ""
 }
 
+variable "webapp_ec2_iam_role_name" {
+  description = <<-DESC
+    Name (not ARN) of the IAM role currently attached to the BYO EC2 instance (webapp_ec2_instance_id).
+    When provided, Terraform attaches an inline policy granting the role S3 read access to the webapp bucket
+    so the nginx sync cron can pull files. Required in BYO mode — without it the sync will fail with Access Denied.
+  DESC
+  type        = string
+  default     = ""
+}
+
 variable "webapp_ec2_subnet_id" {
   description = "Subnet ID for EC2 static webapp instance when webapp_hosting_mode=ec2_eip. Not required when webapp_ec2_instance_id is set."
   type        = string

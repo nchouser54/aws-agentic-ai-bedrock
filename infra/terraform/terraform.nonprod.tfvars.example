@@ -206,6 +206,11 @@ webapp_bucket_name     = ""
 # webapp_ec2_key_name         = "my-keypair"
 # webapp_ec2_ami_id           = "" # optional override
 # webapp_ec2_security_group_id = "" # optional: use existing security group instead of creating one
+#
+# Bring-Your-Own EC2: set instance_id + iam_role_name to skip Terraform-managed EC2 creation.
+# webapp_ec2_instance_id      = "i-0abc1234def567890"  # your existing EC2 instance
+# webapp_ec2_iam_role_name    = "my-ec2-instance-role" # IAM role name attached to that instance
+#
 # webapp_tls_enabled          = true
 # webapp_tls_acm_certificate_arn = "arn:aws-us-gov:acm:us-gov-west-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 # webapp_tls_subnet_ids       = ["subnet-aaaaaaa", "subnet-bbbbbbb"]
