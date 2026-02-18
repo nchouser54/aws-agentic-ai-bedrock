@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import importlib.resources
 import json
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 import boto3
+import jsonschema
 from botocore.client import BaseClient
 
 
@@ -116,3 +118,121 @@ class BedrockReviewClient:
         if start == -1 or end == -1 or end <= start:
             raise ValueError("Bedrock response did not contain a JSON object")
         return json.loads(stripped[start : end + 1])
+
+    # -- 2-stage planner / reviewer --------------------------------------------
+
+    def invoke_planner(
+        self,
+        context: dict[str, Any],
+        model_id: Optional[str] = None,
+        system: Optional[str] = None,
+        max_tokens: int = 1024,
+    ) -> dict[str, Any]:
+        """Stage-1: call the light model to produce a triage plan.
+
+        ``context`` is the PR context dict.
+        ``model_id`` overrides the instance model (use BEDROCK_MODEL_LIGHT).
+        ``system`` is the system prompt; defaults to planner_prompt.PLANNER_SYSTEM.
+        Validates output against planner.schema.json.
+        """
+        from worker.prompts.planner_prompt import PLANNER_SYSTEM, build_planner_messages
+
+        effective_model = model_id or self._model_id
+        messages = build_planner_messages(context)
+        sys_prompt = system or PLANNER_SYSTEM
+        raw = self._invoke_model_with_system(sys_prompt, messages, effective_model, max_tokens=max_tokens)
+        plan = self._parse_text_to_json(raw)
+        validate_against_schema(plan, "planner.schema.json")
+        return plan
+
+    def invoke_reviewer(
+        self,
+        context: dict[str, Any],
+        plan: dict[str, Any],
+        model_id: Optional[str] = None,
+        system: Optional[str] = None,
+        max_tokens: int = 4096,
+    ) -> dict[str, Any]:
+        """Stage-2: call the heavy model to produce the full review.
+
+        ``context`` is the PR context dict.
+        ``plan`` is the output of ``invoke_planner``.
+        ``model_id`` overrides the instance model (use BEDROCK_MODEL_HEAVY).
+        ``system`` is the system prompt; defaults to review_prompt.REVIEWER_SYSTEM.
+        Validates output against review.schema.json.
+        """
+        from worker.prompts.review_prompt import REVIEWER_SYSTEM, build_reviewer_messages
+
+        effective_model = model_id or self._model_id
+        messages = build_reviewer_messages(context, plan)
+        sys_prompt = system or REVIEWER_SYSTEM
+        raw = self._invoke_model_with_system(sys_prompt, messages, effective_model, max_tokens=max_tokens)
+        review = self._parse_text_to_json(raw)
+        validate_against_schema(review, "review.schema.json")
+        return review
+
+    def _invoke_model_with_system(
+        self,
+        system: str,
+        messages: list[dict],
+        model_id: str,
+        max_tokens: int = 2048,
+    ) -> str:
+        """Invoke Bedrock with an explicit system prompt and messages list."""
+        body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": max_tokens,
+            "temperature": 0.1,
+            "system": system,
+            "messages": messages,
+        }
+
+        invoke_kwargs: dict = {
+            "modelId": model_id,
+            "contentType": "application/json",
+            "accept": "application/json",
+            "body": json.dumps(body),
+        }
+        if self._guardrail_identifier and self._guardrail_version:
+            invoke_kwargs["guardrailIdentifier"] = self._guardrail_identifier
+            invoke_kwargs["guardrailVersion"] = self._guardrail_version
+            if self._guardrail_trace:
+                invoke_kwargs["trace"] = self._guardrail_trace
+
+        response = self._bedrock_runtime.invoke_model(**invoke_kwargs)
+        payload = json.loads(response["body"].read())
+        content = payload.get("content", [])
+        if not content:
+            return json.dumps(payload)
+        text = content[0].get("text")
+        if not text:
+            return json.dumps(payload)
+        return text
+
+
+# ---------------------------------------------------------------------------
+# Schema validation helper (module-level so tests can import directly)
+# ---------------------------------------------------------------------------
+
+_SCHEMA_CACHE: dict[str, dict] = {}
+
+
+def _load_schema(schema_filename: str) -> dict:
+    """Load a JSON schema from shared/schemas/, caching after first read."""
+    if schema_filename not in _SCHEMA_CACHE:
+        import pathlib
+
+        schema_path = pathlib.Path(__file__).parent / "schemas" / schema_filename
+        with open(schema_path, encoding="utf-8") as fh:
+            _SCHEMA_CACHE[schema_filename] = json.load(fh)
+    return _SCHEMA_CACHE[schema_filename]
+
+
+def validate_against_schema(data: dict, schema_filename: str) -> None:
+    """Validate ``data`` against the named schema file.
+
+    Raises ``jsonschema.ValidationError`` on failure. The worker catches this
+    and transitions the check run to 'completed / neutral' with an error message.
+    """
+    schema = _load_schema(schema_filename)
+    jsonschema.validate(instance=data, schema=schema)

@@ -323,6 +323,84 @@ class GitHubClient:
         )
         return response.json()
 
+    # -- check runs ------------------------------------------------------------
+
+    def create_check_run(
+        self,
+        owner: str,
+        repo: str,
+        head_sha: str,
+        name: str,
+        status: str = "queued",
+        started_at: Optional[str] = None,
+        conclusion: Optional[str] = None,
+        output: Optional[dict] = None,
+        external_id: Optional[str] = None,
+    ) -> dict:
+        """Create a Check Run on the given commit SHA.
+
+        ``status`` must be one of: queued, in_progress, completed.
+        ``conclusion`` is required when status == "completed" and must be one of:
+        action_required, cancelled, failure, neutral, success, skipped, stale, timed_out.
+        ``output`` may contain ``title``, ``summary``, and ``text`` keys.
+        ``started_at`` and ``completed_at`` are ISO 8601 strings.
+        """
+        payload: dict = {
+            "name": name,
+            "head_sha": head_sha,
+            "status": status,
+        }
+        if started_at:
+            payload["started_at"] = started_at
+        if conclusion:
+            payload["conclusion"] = conclusion
+        if output:
+            payload["output"] = output
+        if external_id:
+            payload["external_id"] = external_id
+
+        response = self._request(
+            "POST",
+            f"/repos/{owner}/{repo}/check-runs",
+            json=payload,
+            headers={"Accept": "application/vnd.github+json"},
+        )
+        return response.json()
+
+    def update_check_run(
+        self,
+        owner: str,
+        repo: str,
+        check_run_id: int,
+        status: Optional[str] = None,
+        conclusion: Optional[str] = None,
+        completed_at: Optional[str] = None,
+        output: Optional[dict] = None,
+    ) -> dict:
+        """Update an existing Check Run (e.g., mark completed with conclusion).
+
+        ``check_run_id`` is the integer id returned by ``create_check_run``.
+        ``conclusion`` must be provided when ``status == "completed"``.
+        ``completed_at`` should be an ISO 8601 string.
+        """
+        payload: dict = {}
+        if status:
+            payload["status"] = status
+        if conclusion:
+            payload["conclusion"] = conclusion
+        if completed_at:
+            payload["completed_at"] = completed_at
+        if output:
+            payload["output"] = output
+
+        response = self._request(
+            "PATCH",
+            f"/repos/{owner}/{repo}/check-runs/{check_run_id}",
+            json=payload,
+            headers={"Accept": "application/vnd.github+json"},
+        )
+        return response.json()
+
     def create_issue_comment(
         self, owner: str, repo: str, issue_number: int, body: str,
     ) -> dict:

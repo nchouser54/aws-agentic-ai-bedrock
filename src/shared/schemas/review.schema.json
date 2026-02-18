@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "review.schema.json",
+  "title": "ReviewOutput",
+  "description": "Stage-2 full review produced by the heavy model.",
+  "type": "object",
+  "required": ["summary", "overall_risk", "findings", "suggested_tests", "risk_hotspots", "files_reviewed", "files_skipped"],
+  "additionalProperties": false,
+  "properties": {
+    "summary": { "type": "string", "minLength": 10 },
+    "overall_risk": { "type": "string", "enum": ["low", "medium", "high"] },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["priority", "type", "file", "message", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "priority": { "type": "integer", "minimum": 0, "maximum": 2 },
+          "type": {
+            "type": "string",
+            "enum": ["bug", "security", "performance", "style", "tests", "docs"]
+          },
+          "file": { "type": "string" },
+          "start_line": { "type": ["integer", "null"] },
+          "end_line": { "type": ["integer", "null"] },
+          "message": { "type": "string", "minLength": 5 },
+          "evidence": { "type": "string", "minLength": 5 },
+          "suggested_patch": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "suggested_tests": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "risk_hotspots": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "files_reviewed": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "files_skipped": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "truncation_note": { "type": ["string", "null"] },
+    "not_reviewed": { "type": ["string", "null"] }
+  }
+}

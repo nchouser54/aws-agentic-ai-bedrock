@@ -1,0 +1,28 @@
+{
+  "name": "webhook-receiver",
+  "version": "1.0.0",
+  "description": "GHES GitHub App webhook receiver — Lambda function for GovCloud PR AI Reviewer",
+  "main": "dist/handler.js",
+  "scripts": {
+    "build": "tsc --noEmit false",
+    "test": "jest",
+    "lint": "eslint src --ext .ts",
+    "package": "npm run build && cd dist && zip -r ../function.zip ."
+  },
+  "dependencies": {
+    "@aws-sdk/client-sqs": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.0",
+    "@types/jest": "^29.0.0",
+    "@types/node": "^20.0.0",
+    "jest": "^29.0.0",
+    "ts-jest": "^29.0.0",
+    "typescript": "^5.0.0"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "roots": ["<rootDir>/src"]
+  }
+}

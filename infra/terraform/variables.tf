@@ -1358,3 +1358,62 @@ variable "chatbot_lambda_memory_size" {
     error_message = "Must be at least 128."
   }
 }
+
+# ---------------------------------------------------------------------------
+# 2-stage Bedrock model configuration
+# ---------------------------------------------------------------------------
+
+variable "bedrock_model_light" {
+  description = "Stage-1 (planner) Bedrock model ID — light/fast model. Leave empty to use bedrock_model_id for both stages."
+  type        = string
+  default     = ""
+}
+
+variable "bedrock_model_heavy" {
+  description = "Stage-2 (reviewer) Bedrock model ID — full/heavy model. Leave empty to use bedrock_model_id for both stages."
+  type        = string
+  default     = ""
+}
+
+# ---------------------------------------------------------------------------
+# Check Run + context configuration
+# ---------------------------------------------------------------------------
+
+variable "check_run_name" {
+  description = "Name displayed on GitHub Check Runs created by the AI reviewer."
+  type        = string
+  default     = "AI PR Reviewer"
+}
+
+variable "max_review_files" {
+  description = "Maximum number of PR files to include in the review context."
+  type        = number
+  default     = 30
+}
+
+variable "max_diff_bytes" {
+  description = "Maximum diff bytes per file before truncation."
+  type        = number
+  default     = 8000
+}
+
+variable "skip_patterns" {
+  description = "Comma-separated glob patterns for files to skip during review (appended to built-in defaults)."
+  type        = string
+  default     = ""
+}
+
+# ---------------------------------------------------------------------------
+# TypeScript webhook receiver toggle
+# ---------------------------------------------------------------------------
+
+variable "webhook_receiver_runtime" {
+  description = "Lambda runtime for the webhook receiver. Use 'python3.12' for the existing Python receiver or 'nodejs20.x' for the TypeScript receiver."
+  type        = string
+  default     = "python3.12"
+
+  validation {
+    condition     = contains(["python3.12", "nodejs20.x"], var.webhook_receiver_runtime)
+    error_message = "Must be python3.12 or nodejs20.x."
+  }
+}

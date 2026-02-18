@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "planner.schema.json",
+  "title": "PlannerOutput",
+  "description": "Stage-1 triage plan produced by the light model.",
+  "type": "object",
+  "required": ["risk_ranking", "hotspots", "file_clusters", "skip_files", "overall_risk_estimate"],
+  "additionalProperties": false,
+  "properties": {
+    "risk_ranking": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "File paths ordered highest → lowest risk."
+    },
+    "hotspots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "file": { "type": "string" },
+          "reason": { "type": "string", "minLength": 10 }
+        }
+      }
+    },
+    "file_clusters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["cluster_label", "files", "token_budget"],
+        "additionalProperties": false,
+        "properties": {
+          "cluster_label": { "type": "string" },
+          "files": { "type": "array", "items": { "type": "string" } },
+          "token_budget": { "type": "integer", "minimum": 100 }
+        }
+      }
+    },
+    "skip_files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Files to skip with inline reason appended after ' — '."
+    },
+    "overall_risk_estimate": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    }
+  }
+}

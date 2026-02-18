@@ -143,3 +143,27 @@ output "webapp_tls_static_ips" {
   description = "Static Elastic IPs attached to the HTTPS NLB (use for firewall allowlists)"
   value       = var.webapp_hosting_enabled && var.webapp_hosting_mode == "ec2_eip" && var.webapp_tls_enabled && !var.webapp_private_only ? [for ip in aws_eip.webapp_tls : ip.public_ip] : []
 }
+
+# ---------------------------------------------------------------------------
+# 2-stage Bedrock + Check Run outputs
+# ---------------------------------------------------------------------------
+
+output "bedrock_model_light_effective" {
+  description = "Effective stage-1 (planner) Bedrock model ID in use."
+  value       = coalesce(var.bedrock_model_light, var.bedrock_model_id)
+}
+
+output "bedrock_model_heavy_effective" {
+  description = "Effective stage-2 (reviewer) Bedrock model ID in use."
+  value       = coalesce(var.bedrock_model_heavy, var.bedrock_model_id)
+}
+
+output "check_run_name" {
+  description = "GitHub Check Run name created by the AI reviewer."
+  value       = var.check_run_name
+}
+
+output "webhook_receiver_runtime" {
+  description = "Lambda runtime selected for the webhook receiver."
+  value       = var.webhook_receiver_runtime
+}

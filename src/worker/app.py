@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
@@ -17,7 +18,9 @@ from shared.github_app_auth import GitHubAppAuth
 from shared.github_client import GitHubClient
 from shared.logging import get_logger
 from shared.schema import Finding, ReviewResult, parse_review_result
+from worker.build_context import build_pr_context
 from worker.patch_apply import PatchApplyError, apply_unified_patch
+from worker.render_markdown import render_check_run_body, render_pr_review_body
 from worker.review_mapper import map_new_line_to_diff_position
 
 logger = get_logger("pr_review_worker")
@@ -31,6 +34,9 @@ IDEMPOTENCY_TTL_SECONDS = int(os.getenv("IDEMPOTENCY_TTL_SECONDS", str(7 * 24 * 
 AUTO_PR_MAX_FILES = int(os.getenv("AUTO_PR_MAX_FILES", "5"))
 AUTO_PR_BRANCH_PREFIX = os.getenv("AUTO_PR_BRANCH_PREFIX", "ai-autofix")
 REVIEW_COMMENT_MODE = os.getenv("REVIEW_COMMENT_MODE", "inline_best_effort")
+CHECK_RUN_NAME = os.getenv("CHECK_RUN_NAME", "AI PR Reviewer")
+BEDROCK_MODEL_LIGHT = os.getenv("BEDROCK_MODEL_LIGHT", "")
+BEDROCK_MODEL_HEAVY = os.getenv("BEDROCK_MODEL_HEAVY", "")
 
 
 _JIRA_KEY_RE = re.compile(r"\b([A-Z][A-Z0-9_]+-\d+)\b")
@@ -143,6 +149,7 @@ def _build_prompt(
     files: list[dict[str, Any]],
     jira_issues: list[dict[str, Any]] | None = None,
 ) -> str:
+    """Legacy single-stage prompt builder (kept for backwards compat / fallback)."""
     patch_budget = SAFE_PATCH_CHAR_BUDGET
     selected_files = []
 
@@ -226,6 +233,7 @@ def _sanitize_findings(findings: list[Finding]) -> list[Finding]:
 
 
 def _format_review_body(result: ReviewResult) -> str:
+    """Format a ReviewResult (legacy schema) into a markdown review body."""
     grouped: dict[str, list[Finding]] = defaultdict(list)
     for finding in result.findings:
         grouped[f"{finding.severity}:{finding.type}"].append(finding)
@@ -258,6 +266,11 @@ def _format_review_body(result: ReviewResult) -> str:
                 lines.append("  - Suggested patch omitted from body; see inline comment when available.")
 
     return "\n".join(lines)
+
+
+def _format_review_body_from_dict(review: dict[str, Any]) -> str:
+    """Format a validated review dict (new 2-stage schema) for PR review body."""
+    return render_pr_review_body(review)
 
 
 def _build_inline_comments(
@@ -468,15 +481,32 @@ def _enqueue_test_gen(
         local_logger.warning("test_gen_enqueue_failed", extra={"extra": {"pr_number": pr_number}})
 
 
+def _now_iso() -> str:
+    return datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+import contextlib
+
+
+@contextlib.contextmanager
+def _suppress_check_run_errors(log):
+    """Suppress and log check-run update failures so they never block the review."""
+    try:
+        yield
+    except Exception:  # noqa: BLE001
+        log.warning("check_run_update_failed")
+
+
 def _process_record(record: dict[str, Any]) -> None:
     started = time.time()
     message = json.loads(record["body"])
 
-    repo_full_name = message["repo_full_name"]
-    pr_number = int(message["pr_number"])
-    head_sha = message["head_sha"]
-    delivery_id = message.get("delivery_id", "unknown")
-    installation_id = message.get("installation_id")
+    # Support both legacy flat schema and new nested schema from TS receiver
+    repo_full_name = message.get("repo_full_name") or (message.get("repo") or {}).get("fullName") or ""
+    pr_number = int(message.get("pr_number") or (message.get("pr") or {}).get("number") or 0)
+    head_sha = message.get("head_sha") or (message.get("pr") or {}).get("headSha") or ""
+    delivery_id = message.get("delivery_id") or message.get("deliveryId") or "unknown"
+    installation_id = message.get("installation_id") or message.get("installationId")
 
     local_logger = get_logger(
         "pr_review_worker",
@@ -508,7 +538,26 @@ def _process_record(record: dict[str, Any]) -> None:
     pr = gh.get_pull_request(owner, repo, pr_number)
     files = gh.get_pull_request_files(owner, repo, pr_number)
 
-    # Enrich prompt with linked Jira issue context
+    dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+
+    # -- Create Check Run: in_progress ----------------------------------------
+    check_run_id: int | None = None
+    if not dry_run:
+        try:
+            cr = gh.create_check_run(
+                owner=owner,
+                repo=repo,
+                head_sha=head_sha,
+                name=CHECK_RUN_NAME,
+                status="in_progress",
+                started_at=_now_iso(),
+            )
+            check_run_id = cr.get("id")
+            local_logger.info("check_run_created", extra={"extra": {"check_run_id": check_run_id}})
+        except Exception:  # noqa: BLE001
+            local_logger.warning("check_run_create_failed")
+
+    # -- Jira context ---------------------------------------------------------
     jira_issues: list[dict[str, Any]] = []
     atlassian_secret_arn = os.getenv("ATLASSIAN_CREDENTIALS_SECRET_ARN", "")
     if atlassian_secret_arn:
@@ -517,8 +566,7 @@ def _process_record(record: dict[str, Any]) -> None:
             local_logger.info("jira_keys_detected", extra={"extra": {"keys": jira_keys}})
             jira_issues = _fetch_jira_context(jira_keys, atlassian_secret_arn)
 
-    prompt = _build_prompt(pr, files, jira_issues=jira_issues or None)
-
+    # -- Run 2-stage Bedrock review -------------------------------------------
     bedrock = BedrockReviewClient(
         region=os.getenv("AWS_REGION", DEFAULT_REGION),
         model_id=os.environ["BEDROCK_MODEL_ID"],
@@ -528,45 +576,167 @@ def _process_record(record: dict[str, Any]) -> None:
         guardrail_version=os.getenv("BEDROCK_GUARDRAIL_VERSION") or None,
         guardrail_trace=os.getenv("BEDROCK_GUARDRAIL_TRACE") or None,
     )
-    result = parse_review_result(bedrock.analyze_pr(prompt))
-    result.findings = _sanitize_findings(result.findings)
 
-    body = _format_review_body(result)
+    model_light = BEDROCK_MODEL_LIGHT or os.environ.get("BEDROCK_MODEL_ID", "")
+    model_heavy = BEDROCK_MODEL_HEAVY or os.environ.get("BEDROCK_MODEL_ID", "")
+
+    two_stage_enabled = bool(BEDROCK_MODEL_LIGHT and BEDROCK_MODEL_HEAVY)
+    review_dict: dict[str, Any] | None = None
+
+    try:
+        context, reviewed_files, skipped_files = build_pr_context(pr, files, jira_issues=jira_issues or None)
+
+        if two_stage_enabled:
+            local_logger.info("two_stage_review_start")
+            plan = bedrock.invoke_planner(context, model_id=model_light)
+            local_logger.info("planner_complete", extra={"extra": {"risk": plan.get("overall_risk_estimate")}})
+            review_dict = bedrock.invoke_reviewer(context, plan, model_id=model_heavy)
+            local_logger.info("reviewer_complete", extra={"extra": {"risk": review_dict.get("overall_risk")}})
+
+            # Inject file lists into review for rendering
+            if "files_reviewed" not in review_dict or not review_dict["files_reviewed"]:
+                review_dict["files_reviewed"] = reviewed_files
+            if "files_skipped" not in review_dict or not review_dict["files_skipped"]:
+                review_dict["files_skipped"] = skipped_files
+
+    except Exception as exc:  # noqa: BLE001
+        local_logger.exception("two_stage_review_failed", extra={"extra": {"error": str(exc)}})
+        review_dict = None
+
+    # -- Fallback to legacy single-stage if 2-stage failed or not configured --
+    if review_dict is None:
+        local_logger.info("falling_back_to_single_stage")
+        prompt = _build_prompt(pr, files, jira_issues=jira_issues or None)
+        legacy_result = parse_review_result(bedrock.analyze_pr(prompt))
+        legacy_result.findings = _sanitize_findings(legacy_result.findings)
+
+        body = _format_review_body(legacy_result)
+        files_by_name = {f.get("filename"): f for f in files}
+        inline_comments = _select_inline_comments(legacy_result.findings, files_by_name, REVIEW_COMMENT_MODE)
+
+        conclusion = "neutral"
+        check_output = {
+            "title": f"{CHECK_RUN_NAME} (fallback mode)",
+            "summary": legacy_result.summary or "Review complete.",
+            "text": body,
+        }
+
+        review_payload = {
+            "repo": repo_full_name,
+            "pr_number": pr_number,
+            "body": body,
+            "inline_comments_count": len(inline_comments),
+            "mode": "legacy",
+        }
+
+        if dry_run:
+            local_logger.info("dry_run_review", extra={"extra": review_payload})
+        else:
+            gh.create_pull_review(
+                owner=owner, repo=repo, pull_number=pr_number,
+                body=body, commit_id=head_sha, comments=inline_comments or None,
+            )
+            local_logger.info("review_posted", extra={"extra": review_payload})
+
+            if check_run_id:
+                with _suppress_check_run_errors(local_logger):
+                    gh.update_check_run(
+                        owner=owner, repo=repo, check_run_id=check_run_id,
+                        status="completed", conclusion=conclusion,
+                        completed_at=_now_iso(), output=check_output,
+                    )
+
+        _create_autofix_pr(gh=gh, owner=owner, repo=repo, pr=pr,
+                           findings=legacy_result.findings, local_logger=local_logger, dry_run=dry_run)
+        _enqueue_test_gen(repo_full_name, pr_number, head_sha, pr, local_logger)
+        _emit_metric("reviews_success", 1)
+        _emit_metric("duration_ms", (time.time() - started) * 1000, unit="Milliseconds")
+        return
+
+    # -- 2-stage path: render and post ----------------------------------------
+    body = render_check_run_body(review_dict)
+    summary_text = review_dict.get("summary") or "Review complete."
+    overall_risk = review_dict.get("overall_risk", "unknown")
+    finding_count = len(review_dict.get("findings") or [])
+
+    # Build inline comments from 2-stage findings
     files_by_name = {f.get("filename"): f for f in files}
-    inline_comments = _select_inline_comments(result.findings, files_by_name, REVIEW_COMMENT_MODE)
+    inline_comments_2stage: list[dict[str, Any]] = []
+    for finding in (review_dict.get("findings") or []):
+        file_data = files_by_name.get(finding.get("file", ""))
+        if not file_data:
+            continue
+        patch = file_data.get("patch")
+        if not patch or finding.get("start_line") is None:
+            continue
+        if _is_sensitive_file(finding.get("file", "")):
+            continue
+        position = map_new_line_to_diff_position(patch, finding["start_line"])
+        if position is None:
+            continue
+        comment_body = finding.get("message", "")
+        if finding.get("suggested_patch"):
+            comment_body += f"\n\nSuggested patch:\n```diff\n{finding['suggested_patch']}\n```"
+        inline_comments_2stage.append({
+            "path": finding["file"],
+            "position": position,
+            "body": comment_body,
+        })
+
+    if REVIEW_COMMENT_MODE == "summary_only":
+        inline_comments_2stage = []
+
+    check_output = {
+        "title": f"{CHECK_RUN_NAME} · risk={overall_risk} · {finding_count} finding(s)",
+        "summary": summary_text[:65000],
+        "text": body,
+    }
 
     review_payload = {
         "repo": repo_full_name,
         "pr_number": pr_number,
-        "body": body,
-        "inline_comments_count": len(inline_comments),
+        "risk": overall_risk,
+        "findings": finding_count,
+        "inline_comments": len(inline_comments_2stage),
+        "mode": "two_stage",
     }
 
-    dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
     if dry_run:
         local_logger.info("dry_run_review", extra={"extra": review_payload})
     else:
         gh.create_pull_review(
-            owner=owner,
-            repo=repo,
-            pull_number=pr_number,
-            body=body,
-            commit_id=head_sha,
-            comments=inline_comments or None,
+            owner=owner, repo=repo, pull_number=pr_number,
+            body=body[:65000], commit_id=head_sha,
+            comments=inline_comments_2stage or None,
         )
         local_logger.info("review_posted", extra={"extra": review_payload})
 
-    _create_autofix_pr(
-        gh=gh,
-        owner=owner,
-        repo=repo,
-        pr=pr,
-        findings=result.findings,
-        local_logger=local_logger,
-        dry_run=dry_run,
-    )
+        if check_run_id:
+            with _suppress_check_run_errors(local_logger):
+                gh.update_check_run(
+                    owner=owner, repo=repo, check_run_id=check_run_id,
+                    status="completed", conclusion="neutral",
+                    completed_at=_now_iso(), output=check_output,
+                )
 
-    # Chain: enqueue test generation if enabled
+    # Adapt review_dict findings to Finding objects for autofix/test-gen
+    adapted_findings: list[Finding] = []
+    for f in (review_dict.get("findings") or []):
+        try:
+            adapted_findings.append(Finding(
+                type=f.get("type", "bug"),
+                severity="high" if f.get("priority", 2) == 0 else ("medium" if f.get("priority", 2) == 1 else "low"),
+                file=f.get("file", ""),
+                start_line=f.get("start_line"),
+                end_line=f.get("end_line"),
+                message=f.get("message", ""),
+                suggested_patch=f.get("suggested_patch"),
+            ))
+        except Exception:  # noqa: BLE001
+            pass
+
+    _create_autofix_pr(gh=gh, owner=owner, repo=repo, pr=pr,
+                       findings=adapted_findings, local_logger=local_logger, dry_run=dry_run)
     _enqueue_test_gen(repo_full_name, pr_number, head_sha, pr, local_logger)
 
     duration_ms = (time.time() - started) * 1000

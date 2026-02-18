@@ -1634,6 +1634,8 @@ resource "aws_lambda_function" "pr_review_worker" {
       BEDROCK_AGENT_ID                  = var.bedrock_agent_id
       BEDROCK_AGENT_ALIAS_ID            = var.bedrock_agent_alias_id
       BEDROCK_MODEL_ID                  = var.bedrock_model_id
+      BEDROCK_MODEL_LIGHT               = var.bedrock_model_light
+      BEDROCK_MODEL_HEAVY               = var.bedrock_model_heavy
       BEDROCK_GUARDRAIL_ID              = local.effective_bedrock_guardrail_id
       BEDROCK_GUARDRAIL_VERSION         = local.effective_bedrock_guardrail_version
       BEDROCK_GUARDRAIL_TRACE           = var.bedrock_guardrail_trace
@@ -1649,6 +1651,10 @@ resource "aws_lambda_function" "pr_review_worker" {
       REVIEW_COMMENT_MODE               = var.review_comment_mode
       ATLASSIAN_CREDENTIALS_SECRET_ARN  = local.atlassian_credentials_secret_arn
       TEST_GEN_QUEUE_URL                = var.test_gen_enabled ? aws_sqs_queue.test_gen_queue[0].id : ""
+      CHECK_RUN_NAME                    = var.check_run_name
+      MAX_REVIEW_FILES                  = tostring(var.max_review_files)
+      MAX_DIFF_BYTES                    = tostring(var.max_diff_bytes)
+      SKIP_PATTERNS                     = var.skip_patterns
     }
   }
 
@@ -2889,6 +2895,75 @@ resource "aws_cloudwatch_metric_alarm" "dlq_messages" {
 
   dimensions = {
     QueueName = aws_sqs_queue.pr_review_dlq.name
+  }
+
+  alarm_actions = [var.alarm_sns_topic_arn]
+  ok_actions    = [var.alarm_sns_topic_arn]
+}
+
+# -- PR review queue age alarm (detect stalled processing) -------------------
+
+resource "aws_cloudwatch_metric_alarm" "review_queue_age" {
+  count               = var.alarm_sns_topic_arn != "" ? 1 : 0
+  alarm_name          = "${local.name_prefix}-review-queue-age"
+  alarm_description   = "PR review queue messages are older than 10 minutes — worker may be stalled"
+  namespace           = "AWS/SQS"
+  metric_name         = "ApproximateAgeOfOldestMessage"
+  statistic           = "Maximum"
+  period              = 300
+  evaluation_periods  = 2
+  threshold           = 600
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    QueueName = aws_sqs_queue.pr_review_queue.name
+  }
+
+  alarm_actions = [var.alarm_sns_topic_arn]
+  ok_actions    = [var.alarm_sns_topic_arn]
+}
+
+# -- Worker Lambda errors alarm -----------------------------------------------
+
+resource "aws_cloudwatch_metric_alarm" "worker_errors" {
+  count               = var.alarm_sns_topic_arn != "" ? 1 : 0
+  alarm_name          = "${local.name_prefix}-worker-errors"
+  alarm_description   = "PR review worker Lambda has recorded errors"
+  namespace           = "AWS/Lambda"
+  metric_name         = "Errors"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.pr_review_worker.function_name
+  }
+
+  alarm_actions = [var.alarm_sns_topic_arn]
+  ok_actions    = [var.alarm_sns_topic_arn]
+}
+
+# -- Webhook receiver Lambda errors alarm -------------------------------------
+
+resource "aws_cloudwatch_metric_alarm" "receiver_errors" {
+  count               = var.alarm_sns_topic_arn != "" ? 1 : 0
+  alarm_name          = "${local.name_prefix}-receiver-errors"
+  alarm_description   = "Webhook receiver Lambda has recorded errors"
+  namespace           = "AWS/Lambda"
+  metric_name         = "Errors"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.webhook_receiver.function_name
   }
 
   alarm_actions = [var.alarm_sns_topic_arn]
