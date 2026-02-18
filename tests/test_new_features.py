@@ -1187,3 +1187,42 @@ class TestReviewHistoryEnrichment:
         ):
             result = _get_review_history("org/repo", 1)
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Bug fix: _derive_conclusion threshold parameter
+# ---------------------------------------------------------------------------
+
+class TestDeriveConclusion_ThresholdParam:
+    """_derive_conclusion must honour the per-repo failure_on_severity override."""
+
+    def _findings(self, severity: str) -> list[dict]:
+        return [{"severity": severity, "message": "x", "type": "bug"}]
+
+    def test_global_high_threshold_passes_medium(self):
+        from worker.app import _derive_conclusion
+        conclusion, _ = _derive_conclusion(self._findings("medium"))
+        # default global FAILURE_ON_SEVERITY = "high" → medium finding should not fail
+        assert conclusion != "failure"
+
+    def test_per_repo_medium_threshold_fails_medium(self):
+        from worker.app import _derive_conclusion
+        conclusion, _ = _derive_conclusion(self._findings("medium"), threshold="medium")
+        assert conclusion == "failure"
+
+    def test_none_threshold_never_fails(self):
+        from worker.app import _derive_conclusion
+        conclusion, _ = _derive_conclusion(self._findings("high"), threshold="none")
+        assert conclusion == "neutral"
+
+    def test_high_threshold_fails_high(self):
+        from worker.app import _derive_conclusion
+        conclusion, _ = _derive_conclusion(self._findings("high"), threshold="high")
+        assert conclusion == "failure"
+
+    def test_default_threshold_uses_global(self):
+        """When threshold=None, fall back to the module-level FAILURE_ON_SEVERITY."""
+        from worker.app import _derive_conclusion
+        with patch("worker.app.FAILURE_ON_SEVERITY", "medium"):
+            conclusion, _ = _derive_conclusion(self._findings("medium"), threshold=None)
+        assert conclusion == "failure"

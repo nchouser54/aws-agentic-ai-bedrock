@@ -423,7 +423,7 @@ def _should_skip_review(
 # Structured verdict derivation
 # ---------------------------------------------------------------------------
 
-def _derive_conclusion(findings: list[dict[str, Any]]) -> tuple[str, str]:
+def _derive_conclusion(findings: list[dict[str, Any]], threshold: str | None = None) -> tuple[str, str]:
     """Map review findings to a GitHub Check Run conclusion and a verdict string.
 
     Returns (conclusion, verdict_line) where conclusion is one of:
@@ -441,10 +441,10 @@ def _derive_conclusion(findings: list[dict[str, Any]]) -> tuple[str, str]:
         elif is_medium:
             medium_count += 1
 
-    threshold = FAILURE_ON_SEVERITY.lower()
-    if threshold == "none":
+    effective_threshold = (threshold or FAILURE_ON_SEVERITY).lower()
+    if effective_threshold == "none":
         conclusion = "neutral"
-    elif threshold == "medium" and (high_count > 0 or medium_count > 0):
+    elif effective_threshold == "medium" and (high_count > 0 or medium_count > 0):
         conclusion = "failure"
     elif high_count > 0:
         conclusion = "failure"
@@ -1049,7 +1049,7 @@ def _process_record(record: dict[str, Any]) -> None:
             {"severity": f.severity, "type": f.type, "message": f.message}
             for f in legacy_result.findings
         ]
-        conclusion, verdict = _derive_conclusion(legacy_findings_dicts)
+        conclusion, verdict = _derive_conclusion(legacy_findings_dicts, threshold=effective_failure_on_severity)
         incremental_prefix = "[Incremental] " if is_incremental else ""
         check_output = {
             "title": f"{incremental_prefix}{CHECK_RUN_NAME} {verdict} (fallback mode)",
@@ -1093,7 +1093,7 @@ def _process_record(record: dict[str, Any]) -> None:
 
     # -- 2-stage path: render and post ----------------------------------------
     findings_for_verdict = list(review_dict.get("findings") or [])
-    conclusion, verdict = _derive_conclusion(findings_for_verdict)
+    conclusion, verdict = _derive_conclusion(findings_for_verdict, threshold=effective_failure_on_severity)
     body = render_check_run_body(review_dict, verdict=verdict)
     summary_text = review_dict.get("summary") or "Review complete."
     overall_risk = review_dict.get("overall_risk", "unknown")
