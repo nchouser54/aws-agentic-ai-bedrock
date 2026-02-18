@@ -39,17 +39,18 @@ class BedrockReviewClient:
         self._agent_runtime = agent_runtime or boto3.client("bedrock-agent-runtime", region_name=region)
         self._bedrock_runtime = bedrock_runtime or boto3.client("bedrock-runtime", region_name=region)
 
-    def analyze_pr(self, prompt: str) -> dict:
+    def analyze_pr(self, prompt: str) -> tuple[dict, int, int]:
+        """Invoke the model (or agent) and return (review_dict, input_tokens, output_tokens)."""
         if self._agent_id and self._agent_alias_id:
             try:
                 agent_result = self._invoke_agent(prompt)
-                return self._parse_text_to_json(agent_result)
+                return self._parse_text_to_json(agent_result), 0, 0
             except Exception:  # noqa: BLE001
                 # Fall back to direct model invocation.
                 pass
 
-        model_result = self._invoke_model(prompt)
-        return self._parse_text_to_json(model_result)
+        model_result, in_tok, out_tok = self._invoke_model(prompt)
+        return self._parse_text_to_json(model_result), in_tok, out_tok
 
     def _invoke_agent(self, prompt: str) -> str:
         response = self._agent_runtime.invoke_agent(
@@ -72,7 +73,7 @@ class BedrockReviewClient:
 
         return "".join(chunks)
 
-    def _invoke_model(self, prompt: str) -> str:
+    def _invoke_model(self, prompt: str) -> tuple[str, int, int]:
         body = {
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": 1500,
@@ -99,13 +100,16 @@ class BedrockReviewClient:
 
         response = self._bedrock_runtime.invoke_model(**invoke_kwargs)
         payload = json.loads(response["body"].read())
+        usage = payload.get("usage") or {}
+        in_tok: int = int(usage.get("input_tokens") or 0)
+        out_tok: int = int(usage.get("output_tokens") or 0)
         content = payload.get("content", [])
         if not content:
-            return json.dumps(payload)
+            return json.dumps(payload), in_tok, out_tok
         text = content[0].get("text")
         if not text:
-            return json.dumps(payload)
-        return text
+            return json.dumps(payload), in_tok, out_tok
+        return text, in_tok, out_tok
 
     @staticmethod
     def _parse_text_to_json(text: str) -> dict:

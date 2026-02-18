@@ -1038,8 +1038,13 @@ def _process_record(record: dict[str, Any]) -> None:
     if review_dict is None:
         local_logger.info("falling_back_to_single_stage")
         prompt = _build_prompt(pr, files, jira_issues=jira_issues or None, kb_passages=kb_passages or None)
-        legacy_result = parse_review_result(bedrock.analyze_pr(prompt))
+        legacy_parsed, leg_in_tok, leg_out_tok = bedrock.analyze_pr(prompt)
+        legacy_result = parse_review_result(legacy_parsed)
         legacy_result.findings = _sanitize_findings(legacy_result.findings)
+        total_input_tokens += leg_in_tok
+        total_output_tokens += leg_out_tok
+        if total_input_tokens or total_output_tokens:
+            local_logger.info("token_usage", extra={"extra": {"total_input": total_input_tokens, "total_output": total_output_tokens}})
 
         body = _format_review_body(legacy_result)
         files_by_name = {f.get("filename"): f for f in files}
@@ -1085,8 +1090,33 @@ def _process_record(record: dict[str, Any]) -> None:
         _create_autofix_pr(gh=gh, owner=owner, repo=repo, pr=pr,
                            findings=legacy_result.findings, local_logger=local_logger, dry_run=dry_run)
         _enqueue_test_gen(repo_full_name, pr_number, head_sha, pr, local_logger)
+        if not dry_run and effective_post_comment:
+            try:
+                comment_lines = [
+                    f"**{CHECK_RUN_NAME}** — {verdict}",
+                    "",
+                    f"{len(legacy_result.findings)} finding(s)",
+                    "",
+                    legacy_result.summary or "",
+                ]
+                gh.create_issue_comment(
+                    owner=owner, repo=repo, issue_number=pr_number,
+                    body="\n".join(comment_lines).strip(),
+                )
+                local_logger.info("review_comment_posted")
+            except Exception:  # noqa: BLE001
+                local_logger.warning("review_comment_post_failed")
+        if total_input_tokens or total_output_tokens:
+            _emit_metric("bedrock_input_tokens", total_input_tokens)
+            _emit_metric("bedrock_output_tokens", total_output_tokens)
         if PR_REVIEW_STATE_TABLE:
-            _set_last_reviewed_sha(repo_full_name, pr_number, head_sha)
+            _set_last_reviewed_sha(
+                repo_full_name, pr_number, head_sha,
+                finding_count=len(legacy_result.findings),
+                verdict=verdict,
+                input_tokens=total_input_tokens,
+                output_tokens=total_output_tokens,
+            )
         _emit_metric("reviews_success", 1)
         _emit_metric("duration_ms", (time.time() - started) * 1000, unit="Milliseconds")
         return

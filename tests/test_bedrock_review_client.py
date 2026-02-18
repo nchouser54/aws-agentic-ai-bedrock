@@ -18,7 +18,7 @@ def _review_text_payload() -> dict:
         "overall_risk": "low",
         "findings": [],
     }
-    return {"content": [{"text": json.dumps(review)}]}
+    return {"content": [{"text": json.dumps(review)}], "usage": {"input_tokens": 10, "output_tokens": 5}}
 
 
 def test_review_client_without_guardrail_omits_guardrail_fields() -> None:
@@ -31,9 +31,11 @@ def test_review_client_without_guardrail_omits_guardrail_fields() -> None:
         agent_runtime=MagicMock(),
         bedrock_runtime=runtime,
     )
-    result = client.analyze_pr("prompt")
+    result, in_tok, out_tok = client.analyze_pr("prompt")
 
     assert result["overall_risk"] == "low"
+    assert isinstance(in_tok, int)
+    assert isinstance(out_tok, int)
     kwargs = runtime.invoke_model.call_args.kwargs
     assert "guardrailIdentifier" not in kwargs
     assert "guardrailVersion" not in kwargs
@@ -53,7 +55,7 @@ def test_review_client_with_guardrail_adds_invoke_model_fields() -> None:
         agent_runtime=MagicMock(),
         bedrock_runtime=runtime,
     )
-    result = client.analyze_pr("prompt")
+    result, in_tok, out_tok = client.analyze_pr("prompt")
 
     assert result["summary"] == "ok"
     kwargs = runtime.invoke_model.call_args.kwargs
