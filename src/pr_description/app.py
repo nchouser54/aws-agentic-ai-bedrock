@@ -170,9 +170,14 @@ def generate_description(
     atlassian_secret_arn: str,
     model_id: str,
     region: str,
+    pr: dict[str, Any] | None = None,
 ) -> str:
-    """Generate an AI PR description from diff + commits + Jira context."""
-    pr = gh.get_pull_request(owner, repo, pr_number)
+    """Generate an AI PR description from diff + commits + Jira context.
+
+    Pass ``pr`` if you already have the PR dict to avoid a redundant API call.
+    """
+    if pr is None:
+        pr = gh.get_pull_request(owner, repo, pr_number)
     files = gh.get_pull_request_files(owner, repo, pr_number)
 
     # Get commit messages
@@ -248,13 +253,13 @@ def _process_sqs_record(record: dict[str, Any]) -> None:
     )
     gh = GitHubClient(token_provider=lambda: token, api_base=os.getenv("GITHUB_API_BASE", "https://api.github.com"))
 
-    description = generate_description(gh, owner, repo, pr_number, atlassian_secret_arn, model_id, region)
+    pr = gh.get_pull_request(owner, repo, pr_number)
+    description = generate_description(gh, owner, repo, pr_number, atlassian_secret_arn, model_id, region, pr=pr)
 
     if dry_run:
         logger.info("dry_run_pr_description", extra={"extra": {"pr_number": pr_number}})
         return
 
-    pr = gh.get_pull_request(owner, repo, pr_number)
     _update_pr_body(gh, owner, repo, pr_number, pr.get("body") or "", description)
 
 

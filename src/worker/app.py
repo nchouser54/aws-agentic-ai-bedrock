@@ -13,7 +13,6 @@ import boto3
 from botocore.exceptions import ClientError
 
 from shared.atlassian_client import AtlassianClient
-from shared.bedrock_chat import BedrockChatClient
 from shared.bedrock_client import BedrockReviewClient
 from shared.bedrock_kb import BedrockKnowledgeBaseClient
 from shared.constants import DEFAULT_REGION
@@ -23,7 +22,7 @@ from shared.logging import get_logger
 from shared.schema import Finding, ReviewResult, parse_review_result
 from worker.build_context import build_pr_context
 from worker.patch_apply import PatchApplyError, apply_unified_patch
-from worker.render_markdown import render_check_run_body, render_pr_review_body
+from worker.render_markdown import render_check_run_body
 from worker.review_mapper import map_new_line_to_diff_position
 
 logger = get_logger("pr_review_worker")
@@ -592,11 +591,6 @@ def _format_review_body(result: ReviewResult) -> str:
     return "\n".join(lines)
 
 
-def _format_review_body_from_dict(review: dict[str, Any]) -> str:
-    """Format a validated review dict (new 2-stage schema) for PR review body."""
-    return render_pr_review_body(review)
-
-
 def _build_inline_comments(
     findings: list[Finding],
     files_by_name: dict[str, dict[str, Any]],
@@ -1045,6 +1039,16 @@ def _process_record(record: dict[str, Any]) -> None:
         total_output_tokens += leg_out_tok
         if total_input_tokens or total_output_tokens:
             local_logger.info("token_usage", extra={"extra": {"total_input": total_input_tokens, "total_output": total_output_tokens}})
+
+        # Apply the same per-repo filter knobs as the 2-stage path
+        legacy_filtered = list(legacy_result.findings)
+        if not effective_require_security:
+            legacy_filtered = [f for f in legacy_filtered if f.type != "security"]
+        if not effective_require_tests:
+            legacy_filtered = [f for f in legacy_filtered if f.type != "tests"]
+        if effective_num_max_findings > 0:
+            legacy_filtered = legacy_filtered[:effective_num_max_findings]
+        legacy_result.findings = legacy_filtered
 
         body = _format_review_body(legacy_result)
         files_by_name = {f.get("filename"): f for f in files}

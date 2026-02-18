@@ -8,8 +8,14 @@ from botocore.client import BaseClient
 
 
 def _normalize_guardrail_trace(value: str | None) -> str | None:
+    """Normalise a guardrail trace value to the casing accepted by Bedrock Converse.
+
+    Valid values accepted by the API: ``enabled``, ``disabled``, ``enabled_with_raw_response``.
+    The ``invoke_model`` API additionally accepts ``ENABLED_FULL``; for consistency we
+    normalise all inputs to lowercase so callers don't need to worry about casing.
+    """
     normalized = (value or "").strip().lower()
-    if normalized in {"enabled", "disabled"}:
+    if normalized in {"enabled", "disabled", "enabled_with_raw_response", "enabled_full"}:
         return normalized
     return None
 

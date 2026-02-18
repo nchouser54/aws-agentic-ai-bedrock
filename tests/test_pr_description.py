@@ -139,6 +139,29 @@ def test_generate_description(mock_jira: MagicMock, mock_chat_cls: MagicMock) ->
     mock_chat.answer.assert_called_once()
 
 
+@patch("pr_description.app.BedrockChatClient")
+@patch("pr_description.app._fetch_jira_context")
+def test_generate_description_reuses_pr_dict(mock_jira: MagicMock, mock_chat_cls: MagicMock) -> None:
+    """When a pr dict is passed, generate_description must not call get_pull_request again."""
+    mock_chat = MagicMock()
+    mock_chat.answer.return_value = "## Summary"
+    mock_chat_cls.return_value = mock_chat
+    mock_jira.return_value = []
+
+    pr = {
+        "number": 7, "title": "chore: bump deps", "body": "",
+        "head": {"ref": "dep-bump", "sha": "def"}, "base": {"ref": "main"},
+    }
+
+    gh = MagicMock()
+    gh.get_pull_request_files.return_value = []
+    gh.list_pull_commits.return_value = []
+
+    generate_description(gh, "o", "r", 7, "", "claude", "us-gov-west-1", pr=pr)
+
+    gh.get_pull_request.assert_not_called()
+
+
 # -- Lambda handler tests ------------------------------------------------------
 
 

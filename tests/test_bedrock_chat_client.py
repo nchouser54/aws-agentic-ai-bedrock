@@ -78,6 +78,41 @@ def test_bedrock_chat_client_ignores_invalid_trace() -> None:
     }
 
 
+def test_bedrock_chat_client_enabled_full_trace_accepted() -> None:
+    """ENABLED_FULL is a valid guardrail trace value and must not be silently dropped."""
+    runtime = _FakeRuntime()
+    client = BedrockChatClient(
+        region="us-gov-west-1",
+        model_id="anthropic.model",
+        guardrail_identifier="gr-123",
+        guardrail_version="1",
+        guardrail_trace="ENABLED_FULL",
+        bedrock_runtime=runtime,
+    )
+
+    _ = client.answer("system", "user")
+
+    assert runtime.last_kwargs is not None
+    assert runtime.last_kwargs["guardrailConfig"].get("trace") == "enabled_full"
+
+
+def test_bedrock_chat_client_enabled_with_raw_response_trace_accepted() -> None:
+    runtime = _FakeRuntime()
+    client = BedrockChatClient(
+        region="us-gov-west-1",
+        model_id="anthropic.model",
+        guardrail_identifier="gr-123",
+        guardrail_version="1",
+        guardrail_trace="enabled_with_raw_response",
+        bedrock_runtime=runtime,
+    )
+
+    _ = client.answer("system", "user")
+
+    assert runtime.last_kwargs is not None
+    assert runtime.last_kwargs["guardrailConfig"].get("trace") == "enabled_with_raw_response"
+
+
 def test_bedrock_chat_streaming_with_callback_and_telemetry() -> None:
     runtime = _FakeStreamingRuntime()
     client = BedrockChatClient(

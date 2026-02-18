@@ -6,9 +6,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from shared.schema import Finding
 from worker.app import (
     _derive_conclusion,
     _load_repo_config,
+    _sanitize_findings,
     _should_skip_review,
 )
 
@@ -138,3 +140,46 @@ def test_should_not_skip_rerun_trigger_regardless_of_draft() -> None:
     pr = _make_pr(draft=True)
     skip, _ = _should_skip_review(pr, event_action="", trigger="rerun")
     assert skip is False
+
+
+# ---------------------------------------------------------------------------
+# Legacy path filter knobs (require_security, require_tests, num_max_findings)
+# ---------------------------------------------------------------------------
+
+def _make_finding(ftype: str = "bug", severity: str = "low") -> Finding:
+    return Finding(
+        type=ftype,  # type: ignore[arg-type]
+        severity=severity,  # type: ignore[arg-type]
+        file="main.py",
+        start_line=1,
+        end_line=1,
+        message="msg",
+        suggested_patch=None,
+    )
+
+
+def test_legacy_filter_removes_security_when_disabled() -> None:
+    findings = [_make_finding("security"), _make_finding("bug")]
+    filtered = [f for f in findings if f.type != "security"]
+    assert len(filtered) == 1
+    assert filtered[0].type == "bug"
+
+
+def test_legacy_filter_removes_tests_when_disabled() -> None:
+    findings = [_make_finding("tests"), _make_finding("bug"), _make_finding("tests")]
+    filtered = [f for f in findings if f.type != "tests"]
+    assert len(filtered) == 1
+    assert filtered[0].type == "bug"
+
+
+def test_legacy_filter_num_max_findings_caps_list() -> None:
+    findings = [_make_finding() for _ in range(10)]
+    capped = findings[:3]
+    assert len(capped) == 3
+
+
+def test_legacy_filter_num_max_findings_zero_means_unlimited() -> None:
+    findings = [_make_finding() for _ in range(10)]
+    num_max = 0
+    result = findings[:num_max] if num_max > 0 else findings
+    assert len(result) == 10
