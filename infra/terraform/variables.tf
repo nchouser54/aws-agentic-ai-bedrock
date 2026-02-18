@@ -1417,3 +1417,9 @@ variable "webhook_receiver_runtime" {
     error_message = "Must be python3.12 or nodejs20.x."
   }
 }
+
+variable "webhook_receiver_ts_zip_path" {
+  description = "Path to the pre-built TypeScript webhook receiver function.zip. Required when webhook_receiver_runtime = 'nodejs20.x'. Build with: cd services/webhook-receiver && npm ci && npm run build && npm run package"
+  type        = string
+  default     = "../../services/webhook-receiver/function.zip"
+}

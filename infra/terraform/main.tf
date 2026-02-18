@@ -1594,22 +1594,41 @@ resource "aws_bedrockagent_data_source" "managed" {
   depends_on = [aws_s3_bucket.kb_sync_documents, aws_bedrockagent_knowledge_base.managed]
 }
 
+# Webhook receiver — supports both Python (python3.12) and TypeScript (nodejs20.x) runtimes.
+# Set var.webhook_receiver_runtime = "nodejs20.x" to deploy the TypeScript receiver from
+# services/webhook-receiver/. The TS bundle must be built first:
+#   cd services/webhook-receiver && npm ci && npm run build && npm run package
+# then set webhook_receiver_ts_zip_path to the resulting function.zip path.
+
+locals {
+  webhook_is_ts         = var.webhook_receiver_runtime == "nodejs20.x"
+  webhook_ts_zip        = var.webhook_receiver_ts_zip_path
+  webhook_filename      = local.webhook_is_ts ? local.webhook_ts_zip : data.archive_file.lambda_bundle.output_path
+  webhook_source_hash   = local.webhook_is_ts ? filebase64sha256(local.webhook_ts_zip) : data.archive_file.lambda_bundle.output_base64sha256
+  webhook_handler       = local.webhook_is_ts ? "handler.handler" : "webhook_receiver.app.lambda_handler"
+  # The TS receiver reads the raw webhook secret directly; the Python receiver reads it from Secrets Manager.
+  # Both paths need SQS_QUEUE_URL (TS) or QUEUE_URL (Python) and WEBHOOK_SECRET_ARN.
+}
+
 resource "aws_lambda_function" "webhook_receiver" {
   function_name    = "${local.name_prefix}-webhook-receiver"
   role             = aws_iam_role.webhook_lambda.arn
-  runtime          = "python3.12"
-  handler          = "webhook_receiver.app.lambda_handler"
-  filename         = data.archive_file.lambda_bundle.output_path
-  source_code_hash = data.archive_file.lambda_bundle.output_base64sha256
+  runtime          = var.webhook_receiver_runtime
+  handler          = local.webhook_handler
+  filename         = local.webhook_filename
+  source_code_hash = local.webhook_source_hash
   timeout          = 10
   memory_size      = 256
 
   environment {
     variables = {
-      QUEUE_URL                = aws_sqs_queue.pr_review_queue.id
+      # Shared by both runtimes
       WEBHOOK_SECRET_ARN       = local.github_webhook_secret_arn
       GITHUB_ALLOWED_REPOS     = join(",", var.github_allowed_repos)
       PR_DESCRIPTION_QUEUE_URL = var.pr_description_enabled ? aws_sqs_queue.pr_description_queue[0].id : ""
+      # Python receiver uses QUEUE_URL; TS receiver uses SQS_QUEUE_URL
+      QUEUE_URL                = aws_sqs_queue.pr_review_queue.id
+      SQS_QUEUE_URL            = aws_sqs_queue.pr_review_queue.id
     }
   }
 
