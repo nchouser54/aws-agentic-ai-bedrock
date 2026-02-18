@@ -1809,6 +1809,7 @@ resource "aws_lambda_function" "pr_review_worker" {
       IGNORE_PR_SOURCE_BRANCHES         = join(",", var.ignore_pr_source_branches)
       IGNORE_PR_TARGET_BRANCHES         = join(",", var.ignore_pr_target_branches)
       REVIEW_TRIGGER_LABELS             = join(",", var.review_trigger_labels)
+      SKIP_DRAFT_PRS                    = tostring(var.skip_draft_prs)
       # P2-B: findings controls
       NUM_MAX_FINDINGS                  = tostring(var.num_max_findings)
       REQUIRE_SECURITY_REVIEW           = tostring(var.require_security_review)
@@ -1816,6 +1817,11 @@ resource "aws_lambda_function" "pr_review_worker" {
       # P3: structured verdict
       FAILURE_ON_SEVERITY               = var.failure_on_severity
       REVIEW_EFFORT_ESTIMATE            = tostring(var.review_effort_estimate)
+      # KB-augmented review
+      BEDROCK_KB_REVIEW_ENABLED         = tostring(var.bedrock_kb_review_enabled)
+      BEDROCK_KB_REVIEW_TOP_K           = tostring(var.bedrock_kb_review_top_k)
+      BEDROCK_KB_REVIEW_MAX_CHARS       = tostring(var.bedrock_kb_review_max_chars)
+      BEDROCK_KNOWLEDGE_BASE_ID         = local.effective_bedrock_knowledge_base_id
     }
   }
 

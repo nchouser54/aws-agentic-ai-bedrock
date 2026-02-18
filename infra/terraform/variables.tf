@@ -1579,3 +1579,35 @@ variable "review_effort_estimate" {
   type        = bool
   default     = false
 }
+
+# ---------------------------------------------------------------------------
+# Draft PR skip
+# ---------------------------------------------------------------------------
+
+variable "skip_draft_prs" {
+  description = "When true (default), draft PRs are skipped for automatic review. Manual /review triggers and check-run reruns still work on drafts regardless of this setting."
+  type        = bool
+  default     = true
+}
+
+# ---------------------------------------------------------------------------
+# KB-augmented reviews
+# ---------------------------------------------------------------------------
+
+variable "bedrock_kb_review_enabled" {
+  description = "When true, the PR reviewer retrieves relevant passages from the Bedrock Knowledge Base (org coding standards, architecture docs, etc.) and includes them as context in the review prompt. Requires bedrock_knowledge_base_id or create_bedrock_kb_resources=true."
+  type        = bool
+  default     = false
+}
+
+variable "bedrock_kb_review_top_k" {
+  description = "Number of KB passages to retrieve per review. Higher values give more context but increase cost."
+  type        = number
+  default     = 5
+}
+
+variable "bedrock_kb_review_max_chars" {
+  description = "Maximum total characters of KB context to include in the review prompt."
+  type        = number
+  default     = 8000
+}

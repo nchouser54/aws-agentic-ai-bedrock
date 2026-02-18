@@ -87,6 +87,7 @@ def build_pr_context(
     pr: dict[str, Any],
     files: list[dict[str, Any]],
     jira_issues: list[dict[str, Any]] | None = None,
+    kb_passages: list[dict[str, Any]] | None = None,
     skip_patterns: list[str] | None = None,
     max_files: int | None = None,
     max_diff_bytes: int | None = None,
@@ -182,6 +183,8 @@ def build_pr_context(
     context: dict[str, Any] = {"pull_request": pr_meta}
     if jira_issues:
         context["linked_jira_issues"] = jira_issues
+    if kb_passages:
+        context["org_knowledge_base"] = kb_passages
     if truncation_note:
         context["truncation_note"] = truncation_note
 

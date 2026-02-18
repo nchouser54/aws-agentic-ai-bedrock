@@ -639,3 +639,181 @@ class TestReviewTriggerLabelsWorkerFilter:
         fn = self._get_fn("needs-ai-review")
         skip, _ = fn(self._pr([]), "rerequested", "rerun")
         assert not skip
+
+
+# ===========================================================================
+# Skip draft PRs
+# ===========================================================================
+
+class TestSkipDraftPRs:
+    def _get_fn(self, skip_draft_prs="true", extra_env=None):
+        env = {
+            "FAILURE_ON_SEVERITY": "high",
+            "PR_REVIEW_STATE_TABLE": "",
+            "IDEMPOTENCY_TABLE": "x",
+            "SKIP_DRAFT_PRS": skip_draft_prs,
+        }
+        if extra_env:
+            env.update(extra_env)
+        mod = _reload_module("worker.app", env)
+        return mod._should_skip_review
+
+    def _pr(self, draft=False):
+        return {"draft": draft, "labels": []}
+
+    def test_draft_pr_skipped_by_default(self):
+        fn = self._get_fn("true")
+        skip, reason = fn(self._pr(draft=True), "opened", "auto")
+        assert skip
+        assert "draft" in reason.lower()
+
+    def test_non_draft_pr_not_skipped(self):
+        fn = self._get_fn("true")
+        skip, _ = fn(self._pr(draft=False), "opened", "auto")
+        assert not skip
+
+    def test_draft_skip_disabled_allows_draft(self):
+        fn = self._get_fn("false")
+        skip, _ = fn(self._pr(draft=True), "opened", "auto")
+        assert not skip
+
+    def test_manual_trigger_bypasses_draft_skip(self):
+        fn = self._get_fn("true")
+        skip, _ = fn(self._pr(draft=True), "opened", "manual")
+        assert not skip
+
+    def test_rerun_trigger_bypasses_draft_skip(self):
+        fn = self._get_fn("true")
+        skip, _ = fn(self._pr(draft=True), "rerequested", "rerun")
+        assert not skip
+
+
+# ===========================================================================
+# KB-augmented reviews
+# ===========================================================================
+
+class TestFetchKbContext:
+    """Unit tests for _fetch_kb_context in worker.app."""
+
+    def _get_fn(self):
+        mod = _reload_module("worker.app", {
+            "FAILURE_ON_SEVERITY": "high",
+            "PR_REVIEW_STATE_TABLE": "",
+            "IDEMPOTENCY_TABLE": "x",
+        })
+        return mod._fetch_kb_context
+
+    def test_empty_query_returns_empty(self):
+        fn = self._get_fn()
+        result = fn("", "us-east-1", "kb-123")
+        assert result == []
+
+    def test_empty_kb_id_returns_empty(self):
+        fn = self._get_fn()
+        result = fn("some query", "us-east-1", "")
+        assert result == []
+
+    def test_kb_results_returned_and_trimmed(self):
+        fn = self._get_fn()
+        mock_kb = MagicMock()
+        mock_kb.retrieve.return_value = [
+            {"text": "Use dependency injection everywhere.", "uri": "s3://docs/standards.md", "score": 0.9},
+            {"text": "All SQL queries must use parameterized statements.", "uri": "s3://docs/security.md", "score": 0.85},
+        ]
+        with patch("worker.app.BedrockKnowledgeBaseClient", return_value=mock_kb):
+            result = fn("add user auth", "us-east-1", "kb-123", top_k=5, max_chars=1000)
+        assert len(result) == 2
+        assert result[0]["text"] == "Use dependency injection everywhere."
+        assert result[0]["uri"] == "s3://docs/standards.md"
+
+    def test_kb_results_clipped_to_max_chars(self):
+        fn = self._get_fn()
+        mock_kb = MagicMock()
+        long_text = "x" * 200
+        mock_kb.retrieve.return_value = [
+            {"text": long_text, "uri": "s3://docs/a.md", "score": 0.9},
+            {"text": long_text, "uri": "s3://docs/b.md", "score": 0.8},
+        ]
+        with patch("worker.app.BedrockKnowledgeBaseClient", return_value=mock_kb):
+            result = fn("query", "us-east-1", "kb-123", top_k=5, max_chars=250)
+        total_chars = sum(len(r["text"]) for r in result)
+        assert total_chars <= 250
+
+    def test_kb_exception_returns_empty(self):
+        fn = self._get_fn()
+        mock_kb = MagicMock()
+        mock_kb.retrieve.side_effect = RuntimeError("throttled")
+        with patch("worker.app.BedrockKnowledgeBaseClient", return_value=mock_kb):
+            result = fn("query", "us-east-1", "kb-123")
+        assert result == []
+
+
+class TestBuildContextKbPassages:
+    """build_pr_context should embed kb_passages into the returned context."""
+
+    def _build(self, kb_passages=None):
+        import importlib
+        mod = importlib.import_module("worker.build_context")
+        pr = {
+            "title": "Add OAuth2 login",
+            "body": "Closes PROJ-42",
+            "base": {"ref": "main"},
+            "head": {"ref": "feature/oauth"},
+        }
+        files = [{"filename": "auth.py", "status": "modified", "additions": 20, "deletions": 5, "changes": 25, "patch": "@@ -1,5 +1,6 @@\n+import jwt"}]
+        return mod.build_pr_context(pr, files, kb_passages=kb_passages)
+
+    def test_no_kb_passages_not_in_context(self):
+        context, _, _ = self._build(kb_passages=None)
+        assert "org_knowledge_base" not in context
+
+    def test_empty_kb_passages_not_in_context(self):
+        context, _, _ = self._build(kb_passages=[])
+        assert "org_knowledge_base" not in context
+
+    def test_kb_passages_embedded_in_context(self):
+        passages = [{"text": "Use parameterized queries.", "uri": "s3://docs/sql.md", "score": 0.9}]
+        context, _, _ = self._build(kb_passages=passages)
+        assert "org_knowledge_base" in context
+        assert context["org_knowledge_base"][0]["text"] == "Use parameterized queries."
+
+    def test_kb_passages_alongside_jira(self):
+        passages = [{"text": "Rate limit all endpoints.", "uri": "s3://docs/ratelimit.md", "score": 0.8}]
+        import importlib
+        mod = importlib.import_module("worker.build_context")
+        pr = {"title": "T", "body": "", "base": {"ref": "main"}, "head": {"ref": "feat"}}
+        files = [{"filename": "api.py", "status": "modified", "additions": 1, "deletions": 0, "changes": 1, "patch": "+pass"}]
+        jira = [{"key": "PROJ-1", "summary": "Rate limiting", "status": "In Progress", "type": "Story", "description": ""}]
+        context, _, _ = mod.build_pr_context(pr, files, jira_issues=jira, kb_passages=passages)
+        assert "linked_jira_issues" in context
+        assert "org_knowledge_base" in context
+
+
+class TestBuildPromptKbPassages:
+    """_build_prompt should embed kb_passages as org_knowledge_base."""
+
+    def _get_fn(self):
+        mod = _reload_module("worker.app", {
+            "FAILURE_ON_SEVERITY": "high",
+            "PR_REVIEW_STATE_TABLE": "",
+            "IDEMPOTENCY_TABLE": "x",
+        })
+        return mod._build_prompt
+
+    def test_no_kb_passages_no_key(self):
+        import json
+        fn = self._get_fn()
+        pr = {"title": "T", "body": "", "base": {"ref": "main"}, "head": {"ref": "feat"}}
+        result = json.loads(fn(pr, []))
+        assert "org_knowledge_base" not in result
+
+    def test_kb_passages_included(self):
+        import json
+        fn = self._get_fn()
+        pr = {"title": "T", "body": "", "base": {"ref": "main"}, "head": {"ref": "feat"}}
+        passages = [{"text": "Always use HTTPS.", "uri": "s3://docs/sec.md", "score": 0.95}]
+        result = json.loads(fn(pr, [], kb_passages=passages))
+        assert "org_knowledge_base" in result
+        assert result["org_knowledge_base"][0]["text"] == "Always use HTTPS."
+        # hard_rules should mention the KB
+        assert any("org_knowledge_base" in rule or "coding standards" in rule for rule in result["hard_rules"])

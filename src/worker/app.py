@@ -12,7 +12,9 @@ import boto3
 from botocore.exceptions import ClientError
 
 from shared.atlassian_client import AtlassianClient
+from shared.bedrock_chat import BedrockChatClient
 from shared.bedrock_client import BedrockReviewClient
+from shared.bedrock_kb import BedrockKnowledgeBaseClient
 from shared.constants import DEFAULT_REGION
 from shared.github_app_auth import GitHubAppAuth
 from shared.github_client import GitHubClient
@@ -40,6 +42,7 @@ BEDROCK_MODEL_HEAVY = os.getenv("BEDROCK_MODEL_HEAVY", "")
 INCREMENTAL_REVIEW_ENABLED = os.getenv("INCREMENTAL_REVIEW_ENABLED", "true").lower() == "true"
 PR_REVIEW_STATE_TABLE = os.getenv("PR_REVIEW_STATE_TABLE", "")
 # Config filter knobs (pr-agent style)
+SKIP_DRAFT_PRS = os.getenv("SKIP_DRAFT_PRS", "true").lower() == "true"
 IGNORE_PR_AUTHORS = {a.strip() for a in os.getenv("IGNORE_PR_AUTHORS", "").split(",") if a.strip()}
 IGNORE_PR_LABELS = {lb.strip() for lb in os.getenv("IGNORE_PR_LABELS", "").split(",") if lb.strip()}
 # When non-empty, auto-reviews only run if the PR already has one of these labels.
@@ -54,6 +57,13 @@ REQUIRE_SECURITY_REVIEW = os.getenv("REQUIRE_SECURITY_REVIEW", "true").lower() =
 REQUIRE_TESTS_REVIEW = os.getenv("REQUIRE_TESTS_REVIEW", "true").lower() == "true"
 REVIEW_EFFORT_ESTIMATE = os.getenv("REVIEW_EFFORT_ESTIMATE", "false").lower() == "true"
 FAILURE_ON_SEVERITY = os.getenv("FAILURE_ON_SEVERITY", "high")  # "high", "medium", or "none"
+
+# KB-augmented review: retrieve relevant docs from Bedrock Knowledge Base before review.
+# Set BEDROCK_KB_REVIEW_ENABLED=true and ensure BEDROCK_KNOWLEDGE_BASE_ID is populated.
+BEDROCK_KB_REVIEW_ENABLED = os.getenv("BEDROCK_KB_REVIEW_ENABLED", "false").lower() == "true"
+BEDROCK_KB_REVIEW_TOP_K = int(os.getenv("BEDROCK_KB_REVIEW_TOP_K", "5"))
+# Max characters of KB context to include in the review prompt (default ~8 KB)
+BEDROCK_KB_REVIEW_MAX_CHARS = int(os.getenv("BEDROCK_KB_REVIEW_MAX_CHARS", "8000"))
 
 
 _JIRA_KEY_RE = re.compile(r"\b([A-Z][A-Z0-9_]+-\d+)\b")
@@ -101,6 +111,51 @@ def _fetch_jira_context(
         except Exception:  # noqa: BLE001
             logger.warning("jira_fetch_failed", extra={"extra": {"key": key}})
     return issues
+
+
+def _fetch_kb_context(
+    query: str,
+    region: str,
+    knowledge_base_id: str,
+    top_k: int = 5,
+    max_chars: int = 8000,
+) -> list[dict[str, Any]]:
+    """Retrieve relevant KB passages for the given query.
+
+    Returns a list of {text, uri, score} dicts, truncated to max_chars total.
+    Failures are silently suppressed — KB enrichment is best-effort.
+    """
+    if not knowledge_base_id or not query:
+        return []
+    try:
+        kb = BedrockKnowledgeBaseClient(
+            region=region,
+            knowledge_base_id=knowledge_base_id,
+            top_k=top_k,
+        )
+        results = kb.retrieve(query)
+        # Trim to fit within the prompt budget
+        selected: list[dict[str, Any]] = []
+        chars_used = 0
+        for item in results:
+            text = str(item.get("text") or "")
+            if not text:
+                continue
+            remaining = max_chars - chars_used
+            if remaining <= 0:
+                break
+            if len(text) > remaining:
+                text = text[:remaining]
+            selected.append({
+                "text": text,
+                "uri": item.get("uri") or "",
+                "score": item.get("score"),
+            })
+            chars_used += len(text)
+        return selected
+    except Exception:  # noqa: BLE001
+        logger.warning("kb_context_fetch_failed")
+        return []
 
 
 SENSITIVE_FILE_PATTERNS = (
@@ -221,6 +276,10 @@ def _should_skip_review(pr: dict[str, Any], event_action: str, trigger: str) -> 
     if trigger in {"manual", "rerun"}:
         return False, ""
 
+    # Skip draft PRs (configurable; defaults to True)
+    if SKIP_DRAFT_PRS and pr.get("draft"):
+        return True, "PR is a draft (SKIP_DRAFT_PRS=true)"
+
     # Require a specific label before reviewing (opt-in mode)
     if REVIEW_TRIGGER_LABELS:
         labels = {str(lbl.get("name") or "") for lbl in (pr.get("labels") or [])}
@@ -303,6 +362,7 @@ def _build_prompt(
     pr: dict[str, Any],
     files: list[dict[str, Any]],
     jira_issues: list[dict[str, Any]] | None = None,
+    kb_passages: list[dict[str, Any]] | None = None,
 ) -> str:
     """Legacy single-stage prompt builder (kept for backwards compat / fallback)."""
     patch_budget = SAFE_PATCH_CHAR_BUDGET
@@ -339,6 +399,11 @@ def _build_prompt(
             "Verify code changes align with the linked Jira ticket requirements. "
             "Flag any discrepancies between the ticket scope and the actual changes."
         )
+    if kb_passages:
+        hard_rules.append(
+            "Use the provided org_knowledge_base passages as authoritative coding standards and "
+            "architecture guidance. Flag violations as findings."
+        )
 
     instruction: dict[str, Any] = {
         "task": "Review this pull request and return only strict JSON that matches the requested schema.",
@@ -369,6 +434,8 @@ def _build_prompt(
 
     if jira_issues:
         instruction["linked_jira_issues"] = jira_issues
+    if kb_passages:
+        instruction["org_knowledge_base"] = kb_passages
 
     return json.dumps(instruction)
 
@@ -769,6 +836,24 @@ def _process_record(record: dict[str, Any]) -> None:
             local_logger.info("jira_keys_detected", extra={"extra": {"keys": jira_keys}})
             jira_issues = _fetch_jira_context(jira_keys, atlassian_secret_arn)
 
+    # -- KB context (org standards, architecture docs, etc.) ------------------
+    kb_passages: list[dict[str, Any]] = []
+    if BEDROCK_KB_REVIEW_ENABLED:
+        kb_id = os.getenv("BEDROCK_KNOWLEDGE_BASE_ID", "")
+        if kb_id:
+            pr_title = pr.get("title") or ""
+            pr_body = (pr.get("body") or "")[:500]
+            kb_query = f"{pr_title}\n{pr_body}".strip()
+            kb_passages = _fetch_kb_context(
+                query=kb_query,
+                region=os.getenv("AWS_REGION", DEFAULT_REGION),
+                knowledge_base_id=kb_id,
+                top_k=BEDROCK_KB_REVIEW_TOP_K,
+                max_chars=BEDROCK_KB_REVIEW_MAX_CHARS,
+            )
+            if kb_passages:
+                local_logger.info("kb_context_fetched", extra={"extra": {"passages": len(kb_passages)}})
+
     # -- Run 2-stage Bedrock review -------------------------------------------
     bedrock = BedrockReviewClient(
         region=os.getenv("AWS_REGION", DEFAULT_REGION),
@@ -787,7 +872,9 @@ def _process_record(record: dict[str, Any]) -> None:
     review_dict: dict[str, Any] | None = None
 
     try:
-        context, reviewed_files, skipped_files = build_pr_context(pr, files, jira_issues=jira_issues or None)
+        context, reviewed_files, skipped_files = build_pr_context(
+            pr, files, jira_issues=jira_issues or None, kb_passages=kb_passages or None
+        )
 
         if two_stage_enabled:
             local_logger.info("two_stage_review_start")
@@ -819,7 +906,7 @@ def _process_record(record: dict[str, Any]) -> None:
     # -- Fallback to legacy single-stage if 2-stage failed or not configured --
     if review_dict is None:
         local_logger.info("falling_back_to_single_stage")
-        prompt = _build_prompt(pr, files, jira_issues=jira_issues or None)
+        prompt = _build_prompt(pr, files, jira_issues=jira_issues or None, kb_passages=kb_passages or None)
         legacy_result = parse_review_result(bedrock.analyze_pr(prompt))
         legacy_result.findings = _sanitize_findings(legacy_result.findings)
 
