@@ -455,6 +455,27 @@ resource "aws_dynamodb_table" "idempotency" {
   }
 }
 
+resource "aws_dynamodb_table" "pr_review_state" {
+  name         = "${local.name_prefix}-pr-review-state"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pr_key"
+
+  attribute {
+    name = "pr_key"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app.arn
+  }
+}
+
 resource "aws_dynamodb_table" "chatbot_memory" {
   count        = local.chatbot_memory_enabled ? 1 : 0
   name         = "${local.name_prefix}-chatbot-memory"
@@ -963,6 +984,14 @@ resource "aws_iam_policy" "webhook_policy" {
         Resource = local.github_webhook_secret_arn
       },
       {
+        Effect = "Allow"
+        Action = ["secretsmanager:GetSecretValue"]
+        Resource = [
+          local.github_app_private_key_secret_arn,
+          local.github_app_ids_secret_arn
+        ]
+      },
+      {
         Effect   = "Allow"
         Action   = ["kms:Decrypt"]
         Resource = aws_kms_key.app.arn
@@ -1007,6 +1036,14 @@ resource "aws_iam_policy" "worker_policy" {
           "dynamodb:PutItem"
         ]
         Resource = aws_dynamodb_table.idempotency.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem"
+        ]
+        Resource = aws_dynamodb_table.pr_review_state.arn
       },
       {
         Effect = "Allow"
@@ -1623,12 +1660,18 @@ resource "aws_lambda_function" "webhook_receiver" {
   environment {
     variables = {
       # Shared by both runtimes
-      WEBHOOK_SECRET_ARN       = local.github_webhook_secret_arn
-      GITHUB_ALLOWED_REPOS     = join(",", var.github_allowed_repos)
-      PR_DESCRIPTION_QUEUE_URL = var.pr_description_enabled ? aws_sqs_queue.pr_description_queue[0].id : ""
+      WEBHOOK_SECRET_ARN           = local.github_webhook_secret_arn
+      GITHUB_ALLOWED_REPOS         = join(",", var.github_allowed_repos)
+      PR_DESCRIPTION_QUEUE_URL     = var.pr_description_enabled ? aws_sqs_queue.pr_description_queue[0].id : ""
       # Python receiver uses QUEUE_URL; TS receiver uses SQS_QUEUE_URL
-      QUEUE_URL                = aws_sqs_queue.pr_review_queue.id
-      SQS_QUEUE_URL            = aws_sqs_queue.pr_review_queue.id
+      QUEUE_URL                    = aws_sqs_queue.pr_review_queue.id
+      SQS_QUEUE_URL                = aws_sqs_queue.pr_review_queue.id
+      # P1-A: manual /review comment trigger
+      GITHUB_APP_IDS_SECRET_ARN    = local.github_app_ids_secret_arn
+      GITHUB_APP_PRIVATE_KEY_SECRET_ARN = local.github_app_private_key_secret_arn
+      GITHUB_API_BASE              = var.github_api_base
+      REVIEW_TRIGGER_PHRASE        = var.review_trigger_phrase
+      BOT_USERNAME                 = var.bot_username
     }
   }
 
@@ -1674,8 +1717,24 @@ resource "aws_lambda_function" "pr_review_worker" {
       MAX_REVIEW_FILES                  = tostring(var.max_review_files)
       MAX_DIFF_BYTES                    = tostring(var.max_diff_bytes)
       SKIP_PATTERNS                     = var.skip_patterns
+      # P1-B: incremental review
+      INCREMENTAL_REVIEW_ENABLED        = tostring(var.incremental_review_enabled)
+      PR_REVIEW_STATE_TABLE             = aws_dynamodb_table.pr_review_state.name
+      # P2-A: PR compression
+      LARGE_PATCH_POLICY                = var.large_patch_policy
+      MAX_TOTAL_DIFF_BYTES              = tostring(var.max_total_diff_bytes)
+      # P2-B: ignore filters
+      IGNORE_PR_AUTHORS                 = join(",", var.ignore_pr_authors)
+      IGNORE_PR_LABELS                  = join(",", var.ignore_pr_labels)
+      IGNORE_PR_SOURCE_BRANCHES         = join(",", var.ignore_pr_source_branches)
+      IGNORE_PR_TARGET_BRANCHES         = join(",", var.ignore_pr_target_branches)
+      # P2-B: findings controls
+      NUM_MAX_FINDINGS                  = tostring(var.num_max_findings)
+      REQUIRE_SECURITY_REVIEW           = tostring(var.require_security_review)
+      REQUIRE_TESTS_REVIEW              = tostring(var.require_tests_review)
+      # P3: structured verdict
+      FAILURE_ON_SEVERITY               = var.failure_on_severity
     }
-  }
 
   reserved_concurrent_executions = local.worker_concurrency
 

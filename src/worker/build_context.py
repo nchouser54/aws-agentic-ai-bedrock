@@ -56,6 +56,10 @@ SENSITIVE_PATTERNS = [".env", "*.pem", "*.key", "*.p12", "*secrets*", "*credenti
 
 MAX_REVIEW_FILES = int(os.getenv("MAX_REVIEW_FILES", "30"))
 MAX_DIFF_BYTES = int(os.getenv("MAX_DIFF_BYTES", "8000"))
+# P2-A: total budget across all files (default = per-file limit × max files)
+MAX_TOTAL_DIFF_BYTES = int(os.getenv("MAX_TOTAL_DIFF_BYTES", str(MAX_DIFF_BYTES * MAX_REVIEW_FILES)))
+# P2-A: what to do when a file patch exceeds MAX_DIFF_BYTES: "clip" (default) or "skip"
+LARGE_PATCH_POLICY = os.getenv("LARGE_PATCH_POLICY", "clip").lower()
 
 
 def _load_skip_patterns() -> list[str]:
@@ -95,13 +99,20 @@ def build_pr_context(
     patterns = skip_patterns if skip_patterns is not None else _load_skip_patterns()
     effective_max_files = max_files if max_files is not None else MAX_REVIEW_FILES
     effective_max_diff = max_diff_bytes if max_diff_bytes is not None else MAX_DIFF_BYTES
+    large_patch_policy = LARGE_PATCH_POLICY
+    # 0 means unlimited total budget
+    total_diff_budget = MAX_TOTAL_DIFF_BYTES if MAX_TOTAL_DIFF_BYTES > 0 else float("inf")
+
+    # P2-A: prioritise files with the most changes so reviewers see the largest diffs first
+    sorted_files = sorted(files, key=lambda f: int(f.get("changes") or 0), reverse=True)
 
     reviewed_files: list[str] = []
     skipped_files: list[str] = []
     selected: list[dict[str, Any]] = []
     truncation_note: str | None = None
+    total_bytes_used = 0
 
-    for file_obj in files:
+    for file_obj in sorted_files:
         filename = file_obj.get("filename", "")
 
         if _is_sensitive(filename):
@@ -119,10 +130,20 @@ def build_pr_context(
         patch = file_obj.get("patch") or ""
         was_truncated = False
         patch_bytes = patch.encode("utf-8")
+
         if len(patch_bytes) > effective_max_diff:
-            # Truncate to byte limit, respecting UTF-8 boundaries
+            if large_patch_policy == "skip":
+                skipped_files.append(f"{filename} — oversized patch ({len(patch_bytes)} bytes)")
+                continue
+            # default "clip"
             patch = patch_bytes[:effective_max_diff].decode("utf-8", errors="ignore")
             was_truncated = True
+
+        patch_len = len(patch.encode("utf-8"))
+        if total_bytes_used + patch_len > total_diff_budget:
+            skipped_files.append(f"{filename} — total diff budget exhausted")
+            continue
+        total_bytes_used += patch_len
 
         entry: dict[str, Any] = {
             "filename": filename,

@@ -1423,3 +1423,111 @@ variable "webhook_receiver_ts_zip_path" {
   type        = string
   default     = "../../services/webhook-receiver/function.zip"
 }
+
+# ---------------------------------------------------------------------------
+# P1-A: Manual /review comment trigger
+# ---------------------------------------------------------------------------
+
+variable "review_trigger_phrase" {
+  description = "Comment phrase that triggers a manual review (e.g. /review). Leave empty to disable manual trigger."
+  type        = string
+  default     = "/review"
+}
+
+variable "bot_username" {
+  description = "GitHub username of the bot/app (used to allow @bot_username review syntax). Leave empty to disable @-mention trigger."
+  type        = string
+  default     = ""
+}
+
+# ---------------------------------------------------------------------------
+# P1-B: Incremental review
+# ---------------------------------------------------------------------------
+
+variable "incremental_review_enabled" {
+  description = "When true, synchronize events only review the new commits since the last review."
+  type        = bool
+  default     = true
+}
+
+# ---------------------------------------------------------------------------
+# P2-A: PR diff compression
+# ---------------------------------------------------------------------------
+
+variable "large_patch_policy" {
+  description = "What to do when a file's diff exceeds MAX_DIFF_BYTES. 'clip' truncates the patch; 'skip' excludes the file."
+  type        = string
+  default     = "clip"
+
+  validation {
+    condition     = contains(["clip", "skip"], var.large_patch_policy)
+    error_message = "Must be clip or skip."
+  }
+}
+
+variable "max_total_diff_bytes" {
+  description = "Maximum total diff bytes across all files. 0 means use MAX_DIFF_BYTES * MAX_REVIEW_FILES."
+  type        = number
+  default     = 0
+}
+
+# ---------------------------------------------------------------------------
+# P2-B: Ignore / filter knobs
+# ---------------------------------------------------------------------------
+
+variable "ignore_pr_authors" {
+  description = "List of GitHub usernames whose PRs will be skipped automatically (e.g. bots, dependabot)."
+  type        = list(string)
+  default     = []
+}
+
+variable "ignore_pr_labels" {
+  description = "List of label names. PRs with any of these labels will be skipped."
+  type        = list(string)
+  default     = []
+}
+
+variable "ignore_pr_source_branches" {
+  description = "List of regex patterns for source (head) branch names to skip."
+  type        = list(string)
+  default     = []
+}
+
+variable "ignore_pr_target_branches" {
+  description = "List of regex patterns for target (base) branch names to skip."
+  type        = list(string)
+  default     = []
+}
+
+variable "num_max_findings" {
+  description = "Cap the number of findings returned per review. 0 = unlimited."
+  type        = number
+  default     = 0
+}
+
+variable "require_security_review" {
+  description = "Include security-type findings in the review."
+  type        = bool
+  default     = true
+}
+
+variable "require_tests_review" {
+  description = "Include test-coverage findings in the review."
+  type        = bool
+  default     = true
+}
+
+# ---------------------------------------------------------------------------
+# P3: Structured verdict / Check Run conclusion
+# ---------------------------------------------------------------------------
+
+variable "failure_on_severity" {
+  description = "Minimum severity that marks the Check Run as 'failure'. Options: high, medium, none."
+  type        = string
+  default     = "high"
+
+  validation {
+    condition     = contains(["high", "medium", "none"], var.failure_on_severity)
+    error_message = "Must be high, medium, or none."
+  }
+}

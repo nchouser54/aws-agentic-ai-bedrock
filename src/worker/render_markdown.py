@@ -21,13 +21,17 @@ _SEVERITY_LABEL = {
 _RISK_EMOJI = {"low": "🟢", "medium": "🟡", "high": "🔴"}
 
 
-def render_check_run_body(review: dict[str, Any]) -> str:
+def render_check_run_body(review: dict[str, Any], verdict: str | None = None) -> str:
     """Convert validated ``review.schema.json`` dict to markdown for Check Run output.
 
     Returns a string that fits within GitHub's 65 535-byte ``output.text`` limit.
     We truncate gracefully at section boundaries when needed.
     """
     parts: list[str] = []
+
+    # ---- Verdict headline (P3: structured verdict) ---------------------------
+    if verdict:
+        parts.append(f"**{verdict}**\n\n")
 
     # ---- Summary ----------------------------------------------------------------
     summary = (review.get("summary") or "").strip()

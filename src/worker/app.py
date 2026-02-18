@@ -37,6 +37,18 @@ REVIEW_COMMENT_MODE = os.getenv("REVIEW_COMMENT_MODE", "inline_best_effort")
 CHECK_RUN_NAME = os.getenv("CHECK_RUN_NAME", "AI PR Reviewer")
 BEDROCK_MODEL_LIGHT = os.getenv("BEDROCK_MODEL_LIGHT", "")
 BEDROCK_MODEL_HEAVY = os.getenv("BEDROCK_MODEL_HEAVY", "")
+INCREMENTAL_REVIEW_ENABLED = os.getenv("INCREMENTAL_REVIEW_ENABLED", "true").lower() == "true"
+PR_REVIEW_STATE_TABLE = os.getenv("PR_REVIEW_STATE_TABLE", "")
+# Config filter knobs (pr-agent style)
+IGNORE_PR_AUTHORS = {a.strip() for a in os.getenv("IGNORE_PR_AUTHORS", "").split(",") if a.strip()}
+IGNORE_PR_LABELS = {lb.strip() for lb in os.getenv("IGNORE_PR_LABELS", "").split(",") if lb.strip()}
+IGNORE_PR_SOURCE_BRANCHES_RAW = [p.strip() for p in os.getenv("IGNORE_PR_SOURCE_BRANCHES", "").split(",") if p.strip()]
+IGNORE_PR_TARGET_BRANCHES_RAW = [p.strip() for p in os.getenv("IGNORE_PR_TARGET_BRANCHES", "").split(",") if p.strip()]
+NUM_MAX_FINDINGS = int(os.getenv("NUM_MAX_FINDINGS", "0"))  # 0 = unlimited
+REQUIRE_SECURITY_REVIEW = os.getenv("REQUIRE_SECURITY_REVIEW", "true").lower() == "true"
+REQUIRE_TESTS_REVIEW = os.getenv("REQUIRE_TESTS_REVIEW", "true").lower() == "true"
+REVIEW_EFFORT_ESTIMATE = os.getenv("REVIEW_EFFORT_ESTIMATE", "false").lower() == "true"
+FAILURE_ON_SEVERITY = os.getenv("FAILURE_ON_SEVERITY", "high")  # "high", "medium", or "none"
 
 
 _JIRA_KEY_RE = re.compile(r"\b([A-Z][A-Z0-9_]+-\d+)\b")
@@ -142,6 +154,138 @@ def _claim_idempotency(repo_full_name: str, pr_number: int, head_sha: str) -> bo
         if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
             return False
         raise
+
+
+# ---------------------------------------------------------------------------
+# Incremental review: track last reviewed SHA per PR
+# ---------------------------------------------------------------------------
+
+def _pr_state_key(repo_full_name: str, pr_number: int) -> str:
+    return f"{repo_full_name}:{pr_number}"
+
+
+def _get_last_reviewed_sha(repo_full_name: str, pr_number: int) -> str | None:
+    """Return the head SHA from the most recent completed review, or None."""
+    if not PR_REVIEW_STATE_TABLE:
+        return None
+    try:
+        response = _dynamodb.get_item(
+            TableName=PR_REVIEW_STATE_TABLE,
+            Key={"pr_key": {"S": _pr_state_key(repo_full_name, pr_number)}},
+            ProjectionExpression="last_reviewed_sha",
+        )
+        item = response.get("Item") or {}
+        return (item.get("last_reviewed_sha") or {}).get("S") or None
+    except Exception:  # noqa: BLE001
+        logger.warning("get_last_reviewed_sha_failed")
+        return None
+
+
+def _set_last_reviewed_sha(repo_full_name: str, pr_number: int, sha: str) -> None:
+    """Persist the head SHA of a completed review for incremental diff tracking."""
+    if not PR_REVIEW_STATE_TABLE:
+        return
+    expires_at = int(time.time()) + (30 * 24 * 60 * 60)  # 30-day TTL
+    try:
+        _dynamodb.put_item(
+            TableName=PR_REVIEW_STATE_TABLE,
+            Item={
+                "pr_key": {"S": _pr_state_key(repo_full_name, pr_number)},
+                "last_reviewed_sha": {"S": sha},
+                "updated_at": {"N": str(int(time.time()))},
+                "expires_at": {"N": str(expires_at)},
+            },
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("set_last_reviewed_sha_failed")
+
+
+# ---------------------------------------------------------------------------
+# Review skip filters (pr-agent style config knobs)
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+
+def _should_skip_review(pr: dict[str, Any], event_action: str, trigger: str) -> tuple[bool, str]:
+    """Check whether this PR review should be skipped based on configured filters.
+
+    Returns (skip: bool, reason: str).
+    Manual triggers always bypass author/label/branch filters.
+    """
+    if trigger == "manual":
+        return False, ""
+
+    # Ignore PR by author
+    if IGNORE_PR_AUTHORS:
+        author = str((pr.get("user") or {}).get("login") or "")
+        if author in IGNORE_PR_AUTHORS:
+            return True, f"PR author '{author}' is in IGNORE_PR_AUTHORS"
+
+    # Ignore PR by label
+    if IGNORE_PR_LABELS:
+        labels = {str(lbl.get("name") or "") for lbl in (pr.get("labels") or [])}
+        matched = IGNORE_PR_LABELS & labels
+        if matched:
+            return True, f"PR has ignored label(s): {', '.join(sorted(matched))}"
+
+    # Ignore PR by source branch
+    if IGNORE_PR_SOURCE_BRANCHES_RAW:
+        head_ref = str((pr.get("head") or {}).get("ref") or "")
+        for pattern in IGNORE_PR_SOURCE_BRANCHES_RAW:
+            if _re.search(pattern, head_ref):
+                return True, f"Source branch '{head_ref}' matches IGNORE_PR_SOURCE_BRANCHES pattern '{pattern}'"
+
+    # Ignore PR by target branch
+    if IGNORE_PR_TARGET_BRANCHES_RAW:
+        base_ref = str((pr.get("base") or {}).get("ref") or "")
+        for pattern in IGNORE_PR_TARGET_BRANCHES_RAW:
+            if _re.search(pattern, base_ref):
+                return True, f"Target branch '{base_ref}' matches IGNORE_PR_TARGET_BRANCHES pattern '{pattern}'"
+
+    return False, ""
+
+
+# ---------------------------------------------------------------------------
+# Structured verdict derivation
+# ---------------------------------------------------------------------------
+
+def _derive_conclusion(findings: list[dict[str, Any]]) -> tuple[str, str]:
+    """Map review findings to a GitHub Check Run conclusion and a verdict string.
+
+    Returns (conclusion, verdict_line) where conclusion is one of:
+    success | neutral | failure
+    """
+    high_count = 0
+    medium_count = 0
+    for f in findings:
+        priority = int(f.get("priority", 2)) if "priority" in f else -1
+        severity = str(f.get("severity", "")).lower()
+        is_high = priority == 0 or severity == "high"
+        is_medium = priority == 1 or severity == "medium"
+        if is_high:
+            high_count += 1
+        elif is_medium:
+            medium_count += 1
+
+    threshold = FAILURE_ON_SEVERITY.lower()
+    if threshold == "none":
+        conclusion = "neutral"
+    elif threshold == "medium" and (high_count > 0 or medium_count > 0):
+        conclusion = "failure"
+    elif high_count > 0:
+        conclusion = "failure"
+    else:
+        conclusion = "neutral" if findings else "success"
+
+    if conclusion == "failure":
+        verdict = "❌ Changes Required"
+    elif findings:
+        verdict = "💬 Suggestions"
+    else:
+        verdict = "✅ LGTM"
+
+    return conclusion, verdict
 
 
 def _build_prompt(
@@ -536,7 +680,55 @@ def _process_record(record: dict[str, Any]) -> None:
     gh = GitHubClient(token_provider=lambda: token, api_base=os.getenv("GITHUB_API_BASE", "https://api.github.com"))
 
     pr = gh.get_pull_request(owner, repo, pr_number)
+
+    # -- Skip filters (pr-agent style) ----------------------------------------
+    trigger = message.get("trigger", "auto")
+    should_skip, skip_reason = _should_skip_review(pr, event_action=message.get("event_action", ""), trigger=trigger)
+    if should_skip:
+        local_logger.info("review_skipped", extra={"extra": {"reason": skip_reason}})
+        if not dry_run:
+            try:
+                cr = gh.create_check_run(
+                    owner=owner, repo=repo, head_sha=head_sha, name=CHECK_RUN_NAME,
+                    status="completed", conclusion="skipped",
+                    started_at=_now_iso(), output={"title": CHECK_RUN_NAME, "summary": f"Skipped: {skip_reason}"},
+                )
+                local_logger.info("check_run_skipped", extra={"extra": {"check_run_id": cr.get("id")}})
+            except Exception:  # noqa: BLE001
+                pass
+        return
+
+    # -- Determine review scope: full vs incremental ---------------------------
+    event_action = message.get("event_action", "")
+    is_incremental = False
+    incremental_base_sha: str | None = None
+
+    if (
+        INCREMENTAL_REVIEW_ENABLED
+        and trigger != "manual"
+        and event_action == "synchronize"
+        and PR_REVIEW_STATE_TABLE
+    ):
+        incremental_base_sha = _get_last_reviewed_sha(repo_full_name, pr_number)
+        if incremental_base_sha and incremental_base_sha != head_sha:
+            is_incremental = True
+            local_logger.info("incremental_review_mode", extra={"extra": {"base_sha": incremental_base_sha, "head_sha": head_sha}})
+
     files = gh.get_pull_request_files(owner, repo, pr_number)
+
+    if is_incremental and incremental_base_sha:
+        try:
+            comparison = gh.compare_commits(owner, repo, incremental_base_sha, head_sha)
+            incremental_files = comparison.get("files") or []
+            if incremental_files:
+                files = incremental_files
+                local_logger.info("incremental_diff_fetched", extra={"extra": {"file_count": len(files)}})
+            else:
+                local_logger.info("incremental_diff_empty_fallback_to_full")
+                is_incremental = False
+        except Exception:  # noqa: BLE001
+            local_logger.warning("incremental_diff_failed_fallback_to_full")
+            is_incremental = False
 
     dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
 
@@ -599,6 +791,16 @@ def _process_record(record: dict[str, Any]) -> None:
             if "files_skipped" not in review_dict or not review_dict["files_skipped"]:
                 review_dict["files_skipped"] = skipped_files
 
+            # -- Config knob filters -----------------------------------------
+            findings_list: list[dict[str, Any]] = list(review_dict.get("findings") or [])
+            if not REQUIRE_SECURITY_REVIEW:
+                findings_list = [f for f in findings_list if f.get("type") != "security"]
+            if not REQUIRE_TESTS_REVIEW:
+                findings_list = [f for f in findings_list if f.get("type") != "tests"]
+            if NUM_MAX_FINDINGS > 0:
+                findings_list = findings_list[:NUM_MAX_FINDINGS]
+            review_dict["findings"] = findings_list
+
     except Exception as exc:  # noqa: BLE001
         local_logger.exception("two_stage_review_failed", extra={"extra": {"error": str(exc)}})
         review_dict = None
@@ -614,9 +816,14 @@ def _process_record(record: dict[str, Any]) -> None:
         files_by_name = {f.get("filename"): f for f in files}
         inline_comments = _select_inline_comments(legacy_result.findings, files_by_name, REVIEW_COMMENT_MODE)
 
-        conclusion = "neutral"
+        legacy_findings_dicts = [
+            {"severity": f.severity, "type": f.type, "message": f.message}
+            for f in legacy_result.findings
+        ]
+        conclusion, verdict = _derive_conclusion(legacy_findings_dicts)
+        incremental_prefix = "[Incremental] " if is_incremental else ""
         check_output = {
-            "title": f"{CHECK_RUN_NAME} (fallback mode)",
+            "title": f"{incremental_prefix}{CHECK_RUN_NAME} {verdict} (fallback mode)",
             "summary": legacy_result.summary or "Review complete.",
             "text": body,
         }
@@ -649,15 +856,20 @@ def _process_record(record: dict[str, Any]) -> None:
         _create_autofix_pr(gh=gh, owner=owner, repo=repo, pr=pr,
                            findings=legacy_result.findings, local_logger=local_logger, dry_run=dry_run)
         _enqueue_test_gen(repo_full_name, pr_number, head_sha, pr, local_logger)
+        if PR_REVIEW_STATE_TABLE:
+            _set_last_reviewed_sha(repo_full_name, pr_number, head_sha)
         _emit_metric("reviews_success", 1)
         _emit_metric("duration_ms", (time.time() - started) * 1000, unit="Milliseconds")
         return
 
     # -- 2-stage path: render and post ----------------------------------------
-    body = render_check_run_body(review_dict)
+    findings_for_verdict = list(review_dict.get("findings") or [])
+    conclusion, verdict = _derive_conclusion(findings_for_verdict)
+    body = render_check_run_body(review_dict, verdict=verdict)
     summary_text = review_dict.get("summary") or "Review complete."
     overall_risk = review_dict.get("overall_risk", "unknown")
-    finding_count = len(review_dict.get("findings") or [])
+    finding_count = len(findings_for_verdict)
+    incremental_prefix = "[Incremental] " if is_incremental else ""
 
     # Build inline comments from 2-stage findings
     files_by_name = {f.get("filename"): f for f in files}
@@ -687,7 +899,7 @@ def _process_record(record: dict[str, Any]) -> None:
         inline_comments_2stage = []
 
     check_output = {
-        "title": f"{CHECK_RUN_NAME} · risk={overall_risk} · {finding_count} finding(s)",
+        "title": f"{incremental_prefix}{CHECK_RUN_NAME} {verdict} · risk={overall_risk} · {finding_count} finding(s)",
         "summary": summary_text[:65000],
         "text": body,
     }
@@ -715,7 +927,7 @@ def _process_record(record: dict[str, Any]) -> None:
             with _suppress_check_run_errors(local_logger):
                 gh.update_check_run(
                     owner=owner, repo=repo, check_run_id=check_run_id,
-                    status="completed", conclusion="neutral",
+                    status="completed", conclusion=conclusion,
                     completed_at=_now_iso(), output=check_output,
                 )
 
@@ -738,6 +950,8 @@ def _process_record(record: dict[str, Any]) -> None:
     _create_autofix_pr(gh=gh, owner=owner, repo=repo, pr=pr,
                        findings=adapted_findings, local_logger=local_logger, dry_run=dry_run)
     _enqueue_test_gen(repo_full_name, pr_number, head_sha, pr, local_logger)
+    if PR_REVIEW_STATE_TABLE:
+        _set_last_reviewed_sha(repo_full_name, pr_number, head_sha)
 
     duration_ms = (time.time() - started) * 1000
     _emit_metric("reviews_success", 1)
