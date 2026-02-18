@@ -25,9 +25,37 @@ import {
   Context,
 } from "aws-lambda";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
+import {
+  SecretsManagerClient,
+  GetSecretValueCommand,
+} from "@aws-sdk/client-secrets-manager";
 import { verifySignature } from "./verifySignature";
 
-const sqsClient = new SQSClient({ region: process.env.AWS_REGION ?? "us-gov-west-1" });
+const region = process.env.AWS_REGION ?? "us-gov-west-1";
+const sqsClient = new SQSClient({ region });
+const smClient = new SecretsManagerClient({ region });
+
+/** Module-level cache so we only hit Secrets Manager on cold start. */
+let _cachedWebhookSecret: string | null = null;
+
+async function getWebhookSecret(): Promise<string> {
+  if (_cachedWebhookSecret !== null) return _cachedWebhookSecret;
+  const secretArn = process.env.WEBHOOK_SECRET_ARN;
+  if (!secretArn) throw new Error("WEBHOOK_SECRET_ARN env var not set");
+  const response = await smClient.send(
+    new GetSecretValueCommand({ SecretId: secretArn })
+  );
+  const raw = response.SecretString ?? "";
+  // Secret may be stored as plain string or JSON object with a key
+  try {
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    _cachedWebhookSecret = parsed.secret ?? parsed.webhook_secret ?? raw;
+  } catch {
+    _cachedWebhookSecret = raw;
+  }
+  if (!_cachedWebhookSecret) throw new Error("Webhook secret resolved to empty string");
+  return _cachedWebhookSecret;
+}
 
 const SUPPORTED_ACTIONS = new Set(["opened", "synchronize", "reopened"]);
 
@@ -64,9 +92,11 @@ export async function handler(
     headers["x-github-event"] ?? headers["X-GitHub-Event"] ?? "";
 
   // ---- 2. Validate signature (constant-time) -----------------------------
-  const webhookSecret = process.env.WEBHOOK_SECRET ?? "";
-  if (!webhookSecret) {
-    console.error("WEBHOOK_SECRET env var not set");
+  let webhookSecret: string;
+  try {
+    webhookSecret = await getWebhookSecret();
+  } catch (err) {
+    console.error("Failed to load webhook secret", { error: err });
     return respond(500, "Server configuration error");
   }
 
@@ -142,9 +172,6 @@ export async function handler(
       new SendMessageCommand({
         QueueUrl: queueUrl,
         MessageBody: JSON.stringify(sqsMessage),
-        // Use PR number + head SHA as deduplication group for FIFO queues
-        MessageGroupId: `${repoFullName}:${prNumber}`,
-        MessageDeduplicationId: `${deliveryId}:${headSha}`,
       })
     );
   } catch (err) {

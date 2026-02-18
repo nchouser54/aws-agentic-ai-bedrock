@@ -1,0 +1,4 @@
+node_modules/
+dist/
+function.zip
+*.js.map

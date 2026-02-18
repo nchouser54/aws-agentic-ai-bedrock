@@ -10,6 +10,7 @@
     "package": "npm run build && cd dist && zip -r ../function.zip ."
   },
   "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.0.0",
     "@aws-sdk/client-sqs": "^3.0.0"
   },
   "devDependencies": {

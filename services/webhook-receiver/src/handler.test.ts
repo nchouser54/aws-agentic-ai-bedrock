@@ -57,6 +57,17 @@ jest.mock("@aws-sdk/client-sqs", () => {
   };
 });
 
+// Mock Secrets Manager — returns the secret set in process.env._TEST_WEBHOOK_SECRET
+jest.mock("@aws-sdk/client-secrets-manager", () => {
+  const sendMock = jest.fn().mockImplementation(() =>
+    Promise.resolve({ SecretString: process.env._TEST_WEBHOOK_SECRET ?? "" })
+  );
+  return {
+    SecretsManagerClient: jest.fn().mockImplementation(() => ({ send: sendMock })),
+    GetSecretValueCommand: jest.fn().mockImplementation((input) => input),
+  };
+});
+
 const { __sendMock } = jest.requireMock("@aws-sdk/client-sqs") as {
   __sendMock: jest.Mock;
 };
@@ -106,8 +117,11 @@ const SECRET = "handler-test-secret";
 const fakeContext = {} as Context;
 
 beforeEach(() => {
-  process.env.WEBHOOK_SECRET = SECRET;
-  process.env.SQS_QUEUE_URL = "https://sqs.us-gov-west-1.amazonaws.com/123/review.fifo";
+  // Reset module-level secret cache so each test gets a fresh fetch
+  jest.resetModules();
+  process.env._TEST_WEBHOOK_SECRET = SECRET;
+  process.env.WEBHOOK_SECRET_ARN = "arn:aws:secretsmanager:us-gov-west-1:123456789012:secret:webhook-secret";
+  process.env.SQS_QUEUE_URL = "https://sqs.us-gov-west-1.amazonaws.com/123/review";
   __sendMock.mockClear();
 });
 
