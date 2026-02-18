@@ -6,6 +6,7 @@ import hmac
 import json
 import os
 import re
+import time
 from typing import Any
 
 import boto3
@@ -16,6 +17,10 @@ from shared.logging import get_logger
 logger = get_logger("webhook_receiver")
 
 ALLOWED_ACTIONS = {"opened", "synchronize", "reopened", "ready_for_review", "labeled"}
+
+# Maximum age (seconds) of a webhook delivery to accept. Deliveries older than
+# this are rejected as potential replays. Set to 0 to disable. Default: 5 min.
+MAX_WEBHOOK_AGE_SECONDS = int(os.getenv("MAX_WEBHOOK_AGE_SECONDS", "300"))
 
 # Manual trigger: comment containing this phrase (case-insensitive) triggers a review.
 # Configurable via REVIEW_TRIGGER_PHRASE env var. Also matches @<BOT_USERNAME> review.
@@ -100,6 +105,9 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     delivery_id = _get_header(headers, "X-GitHub-Delivery")
     signature = _get_header(headers, "X-Hub-Signature-256")
 
+    if github_event == "pull_request_review_comment":
+        return {"statusCode": 202, "body": json.dumps({"ignored": "pull_request_review_comment_event"})}
+
     if github_event not in {"pull_request", "issue_comment", "check_run"}:
         return {"statusCode": 202, "body": json.dumps({"ignored": "non_pull_request_event"})}
 
@@ -112,6 +120,21 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     if not verify_signature(raw_body, signature or "", secret):
         logger.warning("signature_verification_failed", extra={"delivery_id": delivery_id})
         return {"statusCode": 401, "body": json.dumps({"error": "invalid_signature"})}
+
+    # Replay-attack window: reject stale deliveries
+    if MAX_WEBHOOK_AGE_SECONDS > 0:
+        gh_timestamp = _get_header(headers, "X-GitHub-Hook-Installation-Target-ID") or ""
+        # GitHub sets X-GitHub-Delivery as a UUID; use the request timestamp from
+        # API Gateway context if available, otherwise skip the check gracefully.
+        request_epoch = (event.get("requestContext") or {}).get("timeEpoch")
+        if request_epoch is not None:
+            age_seconds = (time.time() * 1000 - int(request_epoch)) / 1000
+            if age_seconds > MAX_WEBHOOK_AGE_SECONDS:
+                logger.warning(
+                    "webhook_replay_rejected",
+                    extra={"delivery_id": delivery_id, "age_seconds": age_seconds},
+                )
+                return {"statusCode": 400, "body": json.dumps({"error": "webhook_too_old"})}
 
     payload = json.loads(raw_body.decode("utf-8"))
 

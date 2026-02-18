@@ -1611,3 +1611,15 @@ variable "bedrock_kb_review_max_chars" {
   type        = number
   default     = 8000
 }
+
+variable "post_review_comment" {
+  description = "When true, post a plain PR conversation comment summarising the verdict in addition to the Check Run."
+  type        = bool
+  default     = false
+}
+
+variable "max_webhook_age_seconds" {
+  description = "Maximum age in seconds of an incoming webhook delivery to accept (replay protection). Set to 0 to disable."
+  type        = number
+  default     = 300
+}

@@ -127,23 +127,20 @@ class BedrockReviewClient:
         model_id: Optional[str] = None,
         system: Optional[str] = None,
         max_tokens: int = 1024,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], int, int]:
         """Stage-1: call the light model to produce a triage plan.
 
-        ``context`` is the PR context dict.
-        ``model_id`` overrides the instance model (use BEDROCK_MODEL_LIGHT).
-        ``system`` is the system prompt; defaults to planner_prompt.PLANNER_SYSTEM.
-        Validates output against planner.schema.json.
+        Returns (plan, input_tokens, output_tokens).
         """
         from worker.prompts.planner_prompt import PLANNER_SYSTEM, build_planner_messages
 
         effective_model = model_id or self._model_id
         messages = build_planner_messages(context)
         sys_prompt = system or PLANNER_SYSTEM
-        raw = self._invoke_model_with_system(sys_prompt, messages, effective_model, max_tokens=max_tokens)
+        raw, in_tok, out_tok = self._invoke_model_with_system(sys_prompt, messages, effective_model, max_tokens=max_tokens)
         plan = self._parse_text_to_json(raw)
         validate_against_schema(plan, "planner.schema.json")
-        return plan
+        return plan, in_tok, out_tok
 
     def invoke_reviewer(
         self,
@@ -152,24 +149,20 @@ class BedrockReviewClient:
         model_id: Optional[str] = None,
         system: Optional[str] = None,
         max_tokens: int = 4096,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], int, int]:
         """Stage-2: call the heavy model to produce the full review.
 
-        ``context`` is the PR context dict.
-        ``plan`` is the output of ``invoke_planner``.
-        ``model_id`` overrides the instance model (use BEDROCK_MODEL_HEAVY).
-        ``system`` is the system prompt; defaults to review_prompt.REVIEWER_SYSTEM.
-        Validates output against review.schema.json.
+        Returns (review, input_tokens, output_tokens).
         """
         from worker.prompts.review_prompt import REVIEWER_SYSTEM, build_reviewer_messages
 
         effective_model = model_id or self._model_id
         messages = build_reviewer_messages(context, plan)
         sys_prompt = system or REVIEWER_SYSTEM
-        raw = self._invoke_model_with_system(sys_prompt, messages, effective_model, max_tokens=max_tokens)
+        raw, in_tok, out_tok = self._invoke_model_with_system(sys_prompt, messages, effective_model, max_tokens=max_tokens)
         review = self._parse_text_to_json(raw)
         validate_against_schema(review, "review.schema.json")
-        return review
+        return review, in_tok, out_tok
 
     def _invoke_model_with_system(
         self,
@@ -177,8 +170,11 @@ class BedrockReviewClient:
         messages: list[dict],
         model_id: str,
         max_tokens: int = 2048,
-    ) -> str:
-        """Invoke Bedrock with an explicit system prompt and messages list."""
+    ) -> tuple[str, int, int]:
+        """Invoke Bedrock with an explicit system prompt and messages list.
+
+        Returns (text, input_tokens, output_tokens).
+        """
         body = {
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": max_tokens,
@@ -201,13 +197,19 @@ class BedrockReviewClient:
 
         response = self._bedrock_runtime.invoke_model(**invoke_kwargs)
         payload = json.loads(response["body"].read())
+
+        # Extract token usage from Anthropic response envelope
+        usage = payload.get("usage") or {}
+        input_tokens: int = int(usage.get("input_tokens") or 0)
+        output_tokens: int = int(usage.get("output_tokens") or 0)
+
         content = payload.get("content", [])
         if not content:
-            return json.dumps(payload)
+            return json.dumps(payload), input_tokens, output_tokens
         text = content[0].get("text")
         if not text:
-            return json.dumps(payload)
-        return text
+            return json.dumps(payload), input_tokens, output_tokens
+        return text, input_tokens, output_tokens
 
 
 # ---------------------------------------------------------------------------

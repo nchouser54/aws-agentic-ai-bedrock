@@ -65,8 +65,72 @@ BEDROCK_KB_REVIEW_TOP_K = int(os.getenv("BEDROCK_KB_REVIEW_TOP_K", "5"))
 # Max characters of KB context to include in the review prompt (default ~8 KB)
 BEDROCK_KB_REVIEW_MAX_CHARS = int(os.getenv("BEDROCK_KB_REVIEW_MAX_CHARS", "8000"))
 
+# Post a plain-text summary comment on the PR conversation thread in addition to
+# the Check Run. Useful for teams that want the verdict visible without navigating
+# to the Checks tab. Set POST_REVIEW_COMMENT=true to enable.
+POST_REVIEW_COMMENT = os.getenv("POST_REVIEW_COMMENT", "false").lower() == "true"
+
 
 _JIRA_KEY_RE = re.compile(r"\b([A-Z][A-Z0-9_]+-\d+)\b")
+
+# Supported keys that .ai-reviewer.yml may override (all values are strings).
+_REPO_CONFIG_KEYS = frozenset({
+    "skip_draft_prs",
+    "failure_on_severity",
+    "review_trigger_labels",
+    "ignore_pr_authors",
+    "ignore_pr_labels",
+    "ignore_pr_source_branches",
+    "ignore_pr_target_branches",
+    "post_review_comment",
+    "review_comment_mode",
+    "require_security_review",
+    "require_tests_review",
+    "num_max_findings",
+})
+
+
+def _load_repo_config(gh: "GitHubClient", owner: str, repo: str, ref: str) -> dict[str, str]:
+    """Fetch per-repo overrides from .ai-reviewer.yml at the PR head ref.
+
+    Returns a dict of string key/value pairs for recognised config keys.
+    Silently returns empty dict on any error (file absent, YAML parse error, etc.).
+    The file format is simple flat YAML, e.g.::
+
+        failure_on_severity: medium
+        skip_draft_prs: false
+        post_review_comment: true
+        ignore_pr_labels: wip, do-not-review
+    """
+    try:
+        import base64 as _b64
+        resp = gh._request(
+            "GET",
+            f"/repos/{owner}/{repo}/contents/.ai-reviewer.yml",
+            params={"ref": ref},
+        )
+        if resp.status_code == 404:
+            return {}
+        data = resp.json()
+        encoded = data.get("content", "")
+        raw_yaml = _b64.b64decode(encoded.replace("\n", "")).decode("utf-8")
+
+        # Minimal YAML parser — only flat key: value lines, no deps on pyyaml
+        config: dict[str, str] = {}
+        for line in raw_yaml.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if ":" not in line:
+                continue
+            key, _, value = line.partition(":")
+            key = key.strip().lower()
+            value = value.strip().strip("\"'")
+            if key in _REPO_CONFIG_KEYS:
+                config[key] = value
+        return config
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def _extract_jira_keys(pr: dict[str, Any]) -> list[str]:
@@ -241,8 +305,18 @@ def _get_last_reviewed_sha(repo_full_name: str, pr_number: int) -> str | None:
         return None
 
 
-def _set_last_reviewed_sha(repo_full_name: str, pr_number: int, sha: str) -> None:
-    """Persist the head SHA of a completed review for incremental diff tracking."""
+def _set_last_reviewed_sha(
+    repo_full_name: str,
+    pr_number: int,
+    sha: str,
+    *,
+    overall_risk: str = "unknown",
+    finding_count: int = 0,
+    verdict: str = "",
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+) -> None:
+    """Persist the head SHA and review metadata for incremental diff tracking."""
     if not PR_REVIEW_STATE_TABLE:
         return
     expires_at = int(time.time()) + (30 * 24 * 60 * 60)  # 30-day TTL
@@ -254,10 +328,42 @@ def _set_last_reviewed_sha(repo_full_name: str, pr_number: int, sha: str) -> Non
                 "last_reviewed_sha": {"S": sha},
                 "updated_at": {"N": str(int(time.time()))},
                 "expires_at": {"N": str(expires_at)},
+                "overall_risk": {"S": overall_risk},
+                "finding_count": {"N": str(finding_count)},
+                "verdict": {"S": verdict},
+                "input_tokens": {"N": str(input_tokens)},
+                "output_tokens": {"N": str(output_tokens)},
             },
         )
     except Exception:  # noqa: BLE001
         logger.warning("set_last_reviewed_sha_failed")
+
+
+def _get_review_history(repo_full_name: str, pr_number: int) -> dict[str, Any] | None:
+    """Return the most recent stored review metadata for a PR, or None."""
+    if not PR_REVIEW_STATE_TABLE:
+        return None
+    try:
+        response = _dynamodb.get_item(
+            TableName=PR_REVIEW_STATE_TABLE,
+            Key={"pr_key": {"S": _pr_state_key(repo_full_name, pr_number)}},
+        )
+        item = response.get("Item") or {}
+        if not item:
+            return None
+        return {
+            "pr_key": (item.get("pr_key") or {}).get("S"),
+            "last_reviewed_sha": (item.get("last_reviewed_sha") or {}).get("S"),
+            "updated_at": int((item.get("updated_at") or {"N": "0"}).get("N", 0)),
+            "overall_risk": (item.get("overall_risk") or {}).get("S", "unknown"),
+            "finding_count": int((item.get("finding_count") or {"N": "0"}).get("N", 0)),
+            "verdict": (item.get("verdict") or {}).get("S", ""),
+            "input_tokens": int((item.get("input_tokens") or {"N": "0"}).get("N", 0)),
+            "output_tokens": int((item.get("output_tokens") or {"N": "0"}).get("N", 0)),
+        }
+    except Exception:  # noqa: BLE001
+        logger.warning("get_review_history_failed")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -267,17 +373,24 @@ def _set_last_reviewed_sha(repo_full_name: str, pr_number: int, sha: str) -> Non
 import re as _re
 
 
-def _should_skip_review(pr: dict[str, Any], event_action: str, trigger: str) -> tuple[bool, str]:
+def _should_skip_review(
+    pr: dict[str, Any],
+    event_action: str,
+    trigger: str,
+    skip_draft_prs_override: bool | None = None,
+) -> tuple[bool, str]:
     """Check whether this PR review should be skipped based on configured filters.
 
     Returns (skip: bool, reason: str).
     Manual and rerun triggers always bypass author/label/branch filters.
+    skip_draft_prs_override allows per-repo .ai-reviewer.yml to override the global flag.
     """
     if trigger in {"manual", "rerun"}:
         return False, ""
 
-    # Skip draft PRs (configurable; defaults to True)
-    if SKIP_DRAFT_PRS and pr.get("draft"):
+    # Skip draft PRs (configurable; defaults to True; per-repo overridable)
+    effective_skip_drafts = SKIP_DRAFT_PRS if skip_draft_prs_override is None else skip_draft_prs_override
+    if effective_skip_drafts and pr.get("draft"):
         return True, "PR is a draft (SKIP_DRAFT_PRS=true)"
 
     # Require a specific label before reviewing (opt-in mode)
@@ -759,9 +872,30 @@ def _process_record(record: dict[str, Any]) -> None:
 
     pr = gh.get_pull_request(owner, repo, pr_number)
 
+    # -- Per-repo config override (.ai-reviewer.yml) --------------------------
+    head_ref = (pr.get("head") or {}).get("ref") or head_sha
+    repo_cfg = _load_repo_config(gh, owner, repo, head_ref)
+    if repo_cfg:
+        local_logger.info("repo_config_loaded", extra={"extra": {"keys": list(repo_cfg.keys())}})
+
+    def _cfg_bool(key: str, default: bool) -> bool:
+        val = repo_cfg.get(key)
+        if val is None:
+            return default
+        return val.lower() not in {"false", "0", "no", "off"}
+
+    effective_skip_draft = _cfg_bool("skip_draft_prs", SKIP_DRAFT_PRS)
+    effective_post_comment = _cfg_bool("post_review_comment", POST_REVIEW_COMMENT)
+    effective_failure_on_severity = repo_cfg.get("failure_on_severity", FAILURE_ON_SEVERITY)
+
     # -- Skip filters (pr-agent style) ----------------------------------------
     trigger = message.get("trigger", "auto")
-    should_skip, skip_reason = _should_skip_review(pr, event_action=message.get("event_action", ""), trigger=trigger)
+    should_skip, skip_reason = _should_skip_review(
+        pr,
+        event_action=message.get("event_action", ""),
+        trigger=trigger,
+        skip_draft_prs_override=effective_skip_draft,
+    )
     if should_skip:
         local_logger.info("review_skipped", extra={"extra": {"reason": skip_reason}})
         if not dry_run:
@@ -870,6 +1004,8 @@ def _process_record(record: dict[str, Any]) -> None:
 
     two_stage_enabled = bool(BEDROCK_MODEL_LIGHT and BEDROCK_MODEL_HEAVY)
     review_dict: dict[str, Any] | None = None
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
 
     try:
         context, reviewed_files, skipped_files = build_pr_context(
@@ -878,10 +1014,15 @@ def _process_record(record: dict[str, Any]) -> None:
 
         if two_stage_enabled:
             local_logger.info("two_stage_review_start")
-            plan = bedrock.invoke_planner(context, model_id=model_light)
-            local_logger.info("planner_complete", extra={"extra": {"risk": plan.get("overall_risk_estimate")}})
-            review_dict = bedrock.invoke_reviewer(context, plan, model_id=model_heavy)
-            local_logger.info("reviewer_complete", extra={"extra": {"risk": review_dict.get("overall_risk")}})
+            plan, in_tok_p, out_tok_p = bedrock.invoke_planner(context, model_id=model_light)
+            total_input_tokens += in_tok_p
+            total_output_tokens += out_tok_p
+            local_logger.info("planner_complete", extra={"extra": {"risk": plan.get("overall_risk_estimate"), "input_tokens": in_tok_p, "output_tokens": out_tok_p}})
+            review_dict, in_tok_r, out_tok_r = bedrock.invoke_reviewer(context, plan, model_id=model_heavy)
+            total_input_tokens += in_tok_r
+            total_output_tokens += out_tok_r
+            local_logger.info("reviewer_complete", extra={"extra": {"risk": review_dict.get("overall_risk"), "input_tokens": in_tok_r, "output_tokens": out_tok_r}})
+            local_logger.info("token_usage", extra={"extra": {"total_input": total_input_tokens, "total_output": total_output_tokens}})
 
             # Inject file lists into review for rendering
             if "files_reviewed" not in review_dict or not review_dict["files_reviewed"]:
@@ -1029,6 +1170,30 @@ def _process_record(record: dict[str, Any]) -> None:
                     completed_at=_now_iso(), output=check_output,
                 )
 
+        # Optionally post a plain PR comment summarising the verdict
+        if effective_post_comment:
+            try:
+                comment_lines = [
+                    f"**{CHECK_RUN_NAME}** — {verdict}",
+                    f"",
+                    f"Risk: **{overall_risk.upper()}** · {finding_count} finding(s)",
+                    f"",
+                    (review_dict.get("summary") or "").strip(),
+                ]
+                gh.create_issue_comment(
+                    owner=owner, repo=repo,
+                    issue_number=pr_number,
+                    body="\n".join(comment_lines).strip(),
+                )
+                local_logger.info("review_comment_posted")
+            except Exception:  # noqa: BLE001
+                local_logger.warning("review_comment_post_failed")
+
+    # Emit token-usage metrics
+    if total_input_tokens or total_output_tokens:
+        _emit_metric("bedrock_input_tokens", total_input_tokens)
+        _emit_metric("bedrock_output_tokens", total_output_tokens)
+
     # Adapt review_dict findings to Finding objects for autofix/test-gen
     adapted_findings: list[Finding] = []
     for f in (review_dict.get("findings") or []):
@@ -1049,7 +1214,14 @@ def _process_record(record: dict[str, Any]) -> None:
                        findings=adapted_findings, local_logger=local_logger, dry_run=dry_run)
     _enqueue_test_gen(repo_full_name, pr_number, head_sha, pr, local_logger)
     if PR_REVIEW_STATE_TABLE:
-        _set_last_reviewed_sha(repo_full_name, pr_number, head_sha)
+        _set_last_reviewed_sha(
+            repo_full_name, pr_number, head_sha,
+            overall_risk=overall_risk,
+            finding_count=finding_count,
+            verdict=verdict,
+            input_tokens=total_input_tokens,
+            output_tokens=total_output_tokens,
+        )
 
     duration_ms = (time.time() - started) * 1000
     _emit_metric("reviews_success", 1)

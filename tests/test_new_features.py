@@ -817,3 +817,374 @@ class TestBuildPromptKbPassages:
         assert result["org_knowledge_base"][0]["text"] == "Always use HTTPS."
         # hard_rules should mention the KB
         assert any("org_knowledge_base" in rule or "coding standards" in rule for rule in result["hard_rules"])
+
+
+# ===========================================================================
+# Batch-8 features
+# ===========================================================================
+
+import base64
+import hashlib
+import hmac
+import json as _json
+import logging
+import time
+
+# ---------------------------------------------------------------------------
+# Helpers for webhook tests
+# ---------------------------------------------------------------------------
+
+def _make_replay_event(
+    github_event: str = "pull_request",
+    age_seconds: float = 0,
+    body: dict | None = None,
+    secret: bytes = b"secret",
+    signature: str | None = None,
+    include_request_context: bool = True,
+) -> dict:
+    """Build an API-Gateway-like event for webhook_receiver.lambda_handler."""
+    if body is None:
+        body = {
+            "action": "opened",
+            "pull_request": {
+                "number": 1,
+                "draft": False,
+                "title": "test",
+                "body": "",
+                "head": {"sha": "abc123", "ref": "feat/x"},
+                "base": {"ref": "main"},
+                "user": {"login": "tester"},
+                "labels": [],
+            },
+            "repository": {"full_name": "org/repo"},
+            "sender": {"login": "tester"},
+        }
+    raw_body = _json.dumps(body).encode()
+    sig = signature or ("sha256=" + hmac.new(secret, raw_body, hashlib.sha256).hexdigest())
+    epoch_ms = int((time.time() - age_seconds) * 1000)
+    event: dict = {
+        "headers": {
+            "X-GitHub-Event": github_event,
+            "X-GitHub-Delivery": "delivery-123",
+            "X-Hub-Signature-256": sig,
+        },
+        "body": raw_body.decode(),
+        "isBase64Encoded": False,
+    }
+    if include_request_context:
+        event["requestContext"] = {"timeEpoch": epoch_ms}
+    return event
+
+
+# ---------------------------------------------------------------------------
+# 1. Webhook replay-attack window (MAX_WEBHOOK_AGE_SECONDS)
+# ---------------------------------------------------------------------------
+
+class TestWebhookReplayWindow:
+    """MAX_WEBHOOK_AGE_SECONDS replay-attack protection."""
+
+    def _invoke(
+        self,
+        age_seconds: float,
+        max_age: int = 300,
+        include_request_context: bool = True,
+    ) -> dict:
+        secret = b"testsecret"
+        event = _make_replay_event(
+            age_seconds=age_seconds,
+            secret=secret,
+            include_request_context=include_request_context,
+        )
+        with (
+            patch("webhook_receiver.app.MAX_WEBHOOK_AGE_SECONDS", max_age),
+            patch("webhook_receiver.app._load_webhook_secret", return_value=secret),
+            patch("webhook_receiver.app._sqs") as mock_sqs,
+            patch.dict("os.environ", {"QUEUE_URL": "https://sqs.test/queue"}),
+        ):
+            mock_sqs.send_message.return_value = {}
+            from webhook_receiver.app import lambda_handler
+            return lambda_handler(event, None)
+
+    def test_fresh_webhook_accepted(self):
+        resp = self._invoke(age_seconds=10)
+        assert resp["statusCode"] == 202
+
+    def test_stale_webhook_rejected(self):
+        resp = self._invoke(age_seconds=400)
+        assert resp["statusCode"] == 400
+        body = _json.loads(resp["body"])
+        assert body["error"] == "webhook_too_old"
+
+    def test_replay_check_disabled_when_zero(self):
+        """MAX_WEBHOOK_AGE_SECONDS=0 must never reject even a very old delivery."""
+        resp = self._invoke(age_seconds=9999, max_age=0)
+        assert resp["statusCode"] == 202
+
+    def test_missing_request_context_skips_check(self):
+        """No requestContext → skip check, proceed normally."""
+        resp = self._invoke(age_seconds=9999, include_request_context=False)
+        assert resp["statusCode"] == 202
+
+
+# ---------------------------------------------------------------------------
+# 6. pull_request_review_comment early-return filter
+# ---------------------------------------------------------------------------
+
+class TestPullRequestReviewCommentFilter:
+    """pull_request_review_comment events must be silently ignored (202)."""
+
+    def test_review_comment_event_returns_202(self):
+        secret = b"testsecret"
+        event = _make_replay_event(github_event="pull_request_review_comment", secret=secret)
+        with patch("webhook_receiver.app._load_webhook_secret", return_value=secret):
+            from webhook_receiver.app import lambda_handler
+            resp = lambda_handler(event, None)
+        assert resp["statusCode"] == 202
+        body = _json.loads(resp["body"])
+        assert body.get("ignored") == "pull_request_review_comment_event"
+
+    def test_review_comment_event_does_not_enqueue(self):
+        secret = b"testsecret"
+        event = _make_replay_event(github_event="pull_request_review_comment", secret=secret)
+        with (
+            patch("webhook_receiver.app._load_webhook_secret", return_value=secret),
+            patch("webhook_receiver.app._sqs") as mock_sqs,
+        ):
+            from webhook_receiver.app import lambda_handler
+            lambda_handler(event, None)
+        mock_sqs.send_message.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 5. Token cost tracking — bedrock_client returns (result, in_tok, out_tok)
+# ---------------------------------------------------------------------------
+
+class TestTokenTracking:
+    """_invoke_model_with_system returns a (text, input_tokens, output_tokens) tuple."""
+
+    def _make_runtime(self, in_tok: int = 150, out_tok: int = 50, include_usage: bool = True):
+        runtime = MagicMock()
+        payload: dict = {"content": [{"text": "{}"}]}
+        if include_usage:
+            payload["usage"] = {"input_tokens": in_tok, "output_tokens": out_tok}
+
+        class _Body:
+            def read(self):
+                return _json.dumps(payload).encode()
+
+        runtime.invoke_model.return_value = {"body": _Body()}
+        return runtime
+
+    def test_returns_tuple_with_token_counts(self):
+        from shared.bedrock_client import BedrockReviewClient
+        runtime = self._make_runtime(in_tok=100, out_tok=40)
+        client = BedrockReviewClient(
+            region="us-gov-west-1",
+            model_id="anthropic.model",
+            agent_runtime=MagicMock(),
+            bedrock_runtime=runtime,
+        )
+        text, in_tok, out_tok = client._invoke_model_with_system(
+            system="sys",
+            messages=[{"role": "user", "content": "hi"}],
+            model_id="anthropic.model",
+        )
+        assert isinstance(text, str)
+        assert in_tok == 100
+        assert out_tok == 40
+
+    def test_missing_usage_yields_zeros(self):
+        from shared.bedrock_client import BedrockReviewClient
+        runtime = self._make_runtime(include_usage=False)
+        client = BedrockReviewClient(
+            region="us-gov-west-1",
+            model_id="anthropic.model",
+            agent_runtime=MagicMock(),
+            bedrock_runtime=runtime,
+        )
+        _, in_tok, out_tok = client._invoke_model_with_system(
+            system="sys",
+            messages=[{"role": "user", "content": "hi"}],
+            model_id="anthropic.model",
+        )
+        assert in_tok == 0
+        assert out_tok == 0
+
+
+# ---------------------------------------------------------------------------
+# 7. Per-repo .ai-reviewer.yml config (_load_repo_config)
+# ---------------------------------------------------------------------------
+
+class TestLoadRepoConfig:
+    """_load_repo_config fetches .ai-reviewer.yml and returns filtered dict."""
+
+    def _gh(self, content: str | None, status_code: int = 200):
+        gh = MagicMock()
+        resp = MagicMock()
+        resp.status_code = status_code
+        if content is not None:
+            encoded = base64.b64encode(content.encode()).decode()
+            resp.json.return_value = {"content": encoded}
+        else:
+            resp.json.return_value = {}
+        gh._request.return_value = resp
+        return gh
+
+    def test_valid_config_loaded(self):
+        from worker.app import _load_repo_config
+        yaml_content = (
+            "failure_on_severity: medium\n"
+            "skip_draft_prs: false\n"
+            "post_review_comment: true\n"
+        )
+        gh = self._gh(yaml_content)
+        cfg = _load_repo_config(gh, "org", "repo", "main")
+        assert cfg["failure_on_severity"] == "medium"
+        assert cfg["skip_draft_prs"] == "false"
+        assert cfg["post_review_comment"] == "true"
+
+    def test_missing_file_returns_empty_dict(self):
+        from worker.app import _load_repo_config
+        gh = self._gh(None, status_code=404)
+        cfg = _load_repo_config(gh, "org", "repo", "main")
+        assert cfg == {}
+
+    def test_unknown_keys_ignored(self):
+        from worker.app import _load_repo_config
+        yaml_content = "secret_key: value\nfailure_on_severity: high\n"
+        gh = self._gh(yaml_content)
+        cfg = _load_repo_config(gh, "org", "repo", "main")
+        assert "secret_key" not in cfg
+        assert cfg["failure_on_severity"] == "high"
+
+    def test_exception_returns_empty_dict(self):
+        from worker.app import _load_repo_config
+        gh = MagicMock()
+        gh._request.side_effect = RuntimeError("network error")
+        cfg = _load_repo_config(gh, "org", "repo", "main")
+        assert cfg == {}
+
+    def test_comment_lines_skipped(self):
+        from worker.app import _load_repo_config
+        yaml_content = "# this is a comment\nfailure_on_severity: low\n"
+        gh = self._gh(yaml_content)
+        cfg = _load_repo_config(gh, "org", "repo", "main")
+        assert cfg.get("failure_on_severity") == "low"
+        assert len(cfg) == 1
+
+    def test_quoted_values_stripped(self):
+        from worker.app import _load_repo_config
+        yaml_content = 'failure_on_severity: "critical"\n'
+        gh = self._gh(yaml_content)
+        cfg = _load_repo_config(gh, "org", "repo", "main")
+        assert cfg["failure_on_severity"] == "critical"
+
+    def test_post_review_comment_true_parses(self):
+        from worker.app import _load_repo_config
+        gh = self._gh("post_review_comment: true\n")
+        cfg = _load_repo_config(gh, "org", "repo", "feat/x")
+        assert cfg.get("post_review_comment") == "true"
+
+    def test_post_review_comment_false_parses(self):
+        from worker.app import _load_repo_config
+        gh = self._gh("post_review_comment: false\n")
+        cfg = _load_repo_config(gh, "org", "repo", "feat/x")
+        assert cfg.get("post_review_comment") == "false"
+
+
+# ---------------------------------------------------------------------------
+# 8. Review history — _set_last_reviewed_sha / _get_review_history
+# ---------------------------------------------------------------------------
+
+class TestReviewHistoryEnrichment:
+    """Enriched DynamoDB schema stores and retrieves full review metadata."""
+
+    def test_set_stores_enriched_fields(self):
+        from worker.app import _set_last_reviewed_sha
+        ddb = MagicMock()
+        with (
+            patch("worker.app._dynamodb", ddb),
+            patch("worker.app.PR_REVIEW_STATE_TABLE", "state-table"),
+        ):
+            _set_last_reviewed_sha(
+                "org/repo", 42, "deadbeef",
+                overall_risk="high",
+                finding_count=3,
+                verdict="FAIL",
+                input_tokens=500,
+                output_tokens=200,
+            )
+        ddb.put_item.assert_called_once()
+        item = ddb.put_item.call_args.kwargs["Item"]
+        assert item["overall_risk"]["S"] == "high"
+        assert item["finding_count"]["N"] == "3"
+        assert item["verdict"]["S"] == "FAIL"
+        assert item["input_tokens"]["N"] == "500"
+        assert item["output_tokens"]["N"] == "200"
+        assert item["last_reviewed_sha"]["S"] == "deadbeef"
+
+    def test_set_noop_when_no_table(self):
+        from worker.app import _set_last_reviewed_sha
+        ddb = MagicMock()
+        with (
+            patch("worker.app._dynamodb", ddb),
+            patch("worker.app.PR_REVIEW_STATE_TABLE", ""),
+        ):
+            _set_last_reviewed_sha("org/repo", 1, "abc")
+        ddb.put_item.assert_not_called()
+
+    def test_get_returns_history_dict(self):
+        from worker.app import _get_review_history
+        ddb = MagicMock()
+        ddb.get_item.return_value = {
+            "Item": {
+                "pr_key": {"S": "org/repo#1"},
+                "last_reviewed_sha": {"S": "abc123"},
+                "updated_at": {"N": "1700000000"},
+                "overall_risk": {"S": "medium"},
+                "finding_count": {"N": "2"},
+                "verdict": {"S": "PASS"},
+                "input_tokens": {"N": "300"},
+                "output_tokens": {"N": "100"},
+            }
+        }
+        with (
+            patch("worker.app._dynamodb", ddb),
+            patch("worker.app.PR_REVIEW_STATE_TABLE", "state-table"),
+        ):
+            history = _get_review_history("org/repo", 1)
+        assert history is not None
+        assert history["overall_risk"] == "medium"
+        assert history["finding_count"] == 2
+        assert history["verdict"] == "PASS"
+        assert history["input_tokens"] == 300
+        assert history["output_tokens"] == 100
+
+    def test_get_returns_none_when_no_table(self):
+        from worker.app import _get_review_history
+        with patch("worker.app.PR_REVIEW_STATE_TABLE", ""):
+            result = _get_review_history("org/repo", 1)
+        assert result is None
+
+    def test_get_returns_none_when_item_absent(self):
+        from worker.app import _get_review_history
+        ddb = MagicMock()
+        ddb.get_item.return_value = {"Item": {}}
+        with (
+            patch("worker.app._dynamodb", ddb),
+            patch("worker.app.PR_REVIEW_STATE_TABLE", "state-table"),
+        ):
+            result = _get_review_history("org/repo", 99)
+        assert result is None
+
+    def test_get_returns_none_on_exception(self, caplog):
+        from worker.app import _get_review_history
+        ddb = MagicMock()
+        ddb.get_item.side_effect = RuntimeError("ddb down")
+        with (
+            patch("worker.app._dynamodb", ddb),
+            patch("worker.app.PR_REVIEW_STATE_TABLE", "state-table"),
+            caplog.at_level(logging.WARNING),
+        ):
+            result = _get_review_history("org/repo", 1)
+        assert result is None
