@@ -195,7 +195,16 @@ github_api_base = "https://github.example.com/api/v3"
 Deploy infrastructure:
 
 ```bash
-terraform init
+# 1. Set up remote state backend (recommended — do this once)
+cp infra/terraform/backend.s3.tfbackend.example infra/terraform/backend.s3.tfbackend
+# Edit backend.s3.tfbackend — set bucket, key, region, dynamodb_table
+
+# 2. Init with remote backend
+terraform init -backend-config=backend.s3.tfbackend
+
+# Or, to use local state only (not recommended for shared/prod deployments):
+# terraform init -backend=false
+
 terraform plan
 terraform apply
 ```

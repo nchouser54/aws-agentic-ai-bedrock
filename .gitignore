@@ -14,6 +14,7 @@ venv/
 .terraform/
 *.tfstate
 *.tfstate.*
+*.tfbackend
 crash.log
 
 # OS/editor

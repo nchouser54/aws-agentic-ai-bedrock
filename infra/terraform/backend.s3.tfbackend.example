@@ -1,0 +1,48 @@
+# Terraform S3 remote state backend configuration
+#
+# Usage:
+#   cp backend.s3.tfbackend.example backend.s3.tfbackend
+#   # Edit backend.s3.tfbackend with your values
+#   terraform init -backend-config=backend.s3.tfbackend
+#
+# IMPORTANT: backend.s3.tfbackend is gitignored — never commit it.
+# It may contain account-specific values; keep it local or in a secrets store.
+#
+# GovCloud notes:
+#   - Use the arn:aws-us-gov partition
+#   - region must be us-gov-west-1 or us-gov-east-1
+#   - KMS key ARN must be in the same region as the bucket
+#   - The bucket and DynamoDB lock table must already exist before running
+#     terraform init. See the pre-deploy runbook for creation steps.
+
+# ── Required ────────────────────────────────────────────────────────────────
+
+# S3 bucket that will hold the state file (must exist already)
+bucket = "your-tfstate-bucket-name"
+
+# Region where the bucket lives
+region = "us-gov-west-1"
+
+# Path inside the bucket — use one key per environment to avoid collisions
+# e.g. "ai-pr-reviewer/prod/terraform.tfstate"
+key = "ai-pr-reviewer/prod/terraform.tfstate"
+
+# ── Recommended ─────────────────────────────────────────────────────────────
+
+# Encrypt state at rest using AES-256 (true = use S3-managed keys)
+encrypt = true
+
+# KMS key ARN for SSE-KMS encryption (leave empty to use SSE-S3 instead)
+# kms_key_id = "arn:aws-us-gov:kms:us-gov-west-1:123456789012:key/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+# DynamoDB table for state locking (prevents concurrent applies)
+# Must have a String hash key named "LockID" and PAY_PER_REQUEST billing.
+dynamodb_table = "your-tfstate-lock-table"
+
+# ── Optional ─────────────────────────────────────────────────────────────────
+
+# Explicit AWS profile (omit to use the default credential chain)
+# profile = "govcloud-deploy"
+
+# IAM role to assume when accessing the state bucket (cross-account deploys)
+# role_arn = "arn:aws-us-gov:iam::123456789012:role/TerraformStateRole"
