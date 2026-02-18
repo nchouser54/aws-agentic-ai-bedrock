@@ -77,7 +77,10 @@ Worker Lambda env vars:
 - `AWS_REGION=us-gov-west-1`
 - `BEDROCK_AGENT_ID` (optional)
 - `BEDROCK_AGENT_ALIAS_ID` (optional)
-- `BEDROCK_MODEL_ID` (fallback model)
+- `BEDROCK_MODEL_ID` (fallback model; default `anthropic.claude-3-5-sonnet-20241022-v2:0`)
+- `BEDROCK_MODEL_LIGHT` (optional; Stage-1 planner model — fast/cheap, e.g. Haiku)
+- `BEDROCK_MODEL_HEAVY` (optional; Stage-2 reviewer model — capable, e.g. Sonnet)
+  When both are set the 2-stage planner→reviewer pipeline activates. Otherwise single-stage using `BEDROCK_MODEL_ID`.
 - `BEDROCK_GUARDRAIL_ID` (optional; apply guardrails on direct Bedrock model invocation)
 - `BEDROCK_GUARDRAIL_VERSION` (required when `BEDROCK_GUARDRAIL_ID` is set; numeric or `DRAFT`)
 - `BEDROCK_GUARDRAIL_TRACE` (optional: `ENABLED|DISABLED|ENABLED_FULL`, default `DISABLED`)
@@ -87,6 +90,10 @@ Worker Lambda env vars:
 - `AUTO_PR_MAX_FILES` (default `5`)
 - `AUTO_PR_BRANCH_PREFIX` (default `ai-autofix`)
 - `REVIEW_COMMENT_MODE=summary_only|inline_best_effort|strict_inline`
+- `FAILURE_ON_SEVERITY=high|medium|none` (default `high`; finding severity that fails the check run)
+- `SKIP_DRAFT_PRS=true|false` (default `false`; skip review for draft PRs)
+- `POST_REVIEW_COMMENT=true|false` (default `false`; post a plain PR conversation comment with verdict summary)
+- `MAX_WEBHOOK_AGE_SECONDS` (default `300`; reject webhook deliveries older than this — set to `0` to disable)
 - `CHATBOT_MODEL_ID` (Jira/Confluence chatbot model)
 - `ATLASSIAN_CREDENTIALS_SECRET_ARN`
 - `CHATBOT_API_TOKEN` or `CHATBOT_API_TOKEN_SECRET_ARN` (used when `chatbot_auth_mode=token`)
@@ -97,6 +104,41 @@ Webhook Lambda env vars:
 - `WEBHOOK_SECRET_ARN`
 - `QUEUE_URL`
 - `GITHUB_ALLOWED_REPOS` (optional CSV allow-list)
+- `MAX_WEBHOOK_AGE_SECONDS` (default `300`; replay-attack protection — rejects deliveries older than this)
+- `REVIEW_TRIGGER_LABELS` (optional CSV; when set, `labeled` events only trigger a review for these labels)
+
+### Per-repo configuration (`.ai-reviewer.yml`)
+
+Add a `.ai-reviewer.yml` file to the root of any repository to override global settings for that repo. The file uses simple flat YAML (no nested keys). All values are strings; booleans should be `true` or `false`.
+
+Supported keys:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `failure_on_severity` | `high\|medium\|none` | Override the severity level that fails the check run |
+| `skip_draft_prs` | `true\|false` | Skip reviews for draft PRs |
+| `post_review_comment` | `true\|false` | Post a plain PR conversation comment with verdict summary |
+| `review_comment_mode` | `summary_only\|inline_best_effort\|strict_inline` | Override inline comment mode |
+| `ignore_pr_authors` | CSV string | Authors whose PRs are skipped (e.g. `dependabot[bot],renovate[bot]`) |
+| `ignore_pr_labels` | CSV string | Labels that suppress the review |
+| `ignore_pr_source_branches` | CSV string | Source branch glob patterns to skip |
+| `ignore_pr_target_branches` | CSV string | Target branch glob patterns to skip |
+| `review_trigger_labels` | CSV string | Labels that trigger a review (overrides `REVIEW_TRIGGER_LABELS`) |
+| `require_security_review` | `true\|false` | Require security findings pass |
+| `require_tests_review` | `true\|false` | Require test coverage findings pass |
+| `num_max_findings` | integer | Max findings to surface (0 = unlimited) |
+
+Example `.ai-reviewer.yml`:
+
+```yaml
+failure_on_severity: medium
+skip_draft_prs: true
+post_review_comment: true
+ignore_pr_authors: dependabot[bot], renovate[bot]
+ignore_pr_labels: skip-ai-review, wip
+```
+
+Per-repo settings take precedence over Lambda environment variable defaults. The file is fetched from the PR head branch at review time, so changes take effect without a Lambda redeployment.
 
 Chatbot endpoint:
 

@@ -103,17 +103,7 @@ def _load_repo_config(gh: "GitHubClient", owner: str, repo: str, ref: str) -> di
         ignore_pr_labels: wip, do-not-review
     """
     try:
-        import base64 as _b64
-        resp = gh._request(
-            "GET",
-            f"/repos/{owner}/{repo}/contents/.ai-reviewer.yml",
-            params={"ref": ref},
-        )
-        if resp.status_code == 404:
-            return {}
-        data = resp.json()
-        encoded = data.get("content", "")
-        raw_yaml = _b64.b64decode(encoded.replace("\n", "")).decode("utf-8")
+        raw_yaml, _ = gh.get_file_contents(owner, repo, ".ai-reviewer.yml", ref)
 
         # Minimal YAML parser — only flat key: value lines, no deps on pyyaml
         config: dict[str, str] = {}

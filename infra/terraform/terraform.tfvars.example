@@ -18,7 +18,12 @@ github_allowed_repos = [
 # Bedrock config
 bedrock_agent_id       = ""
 bedrock_agent_alias_id = ""
-bedrock_model_id       = "anthropic.claude-3-5-sonnet-20240620-v1:0"  # GovCloud FedRAMP/IL4/5 authorized
+bedrock_model_id       = "anthropic.claude-3-5-sonnet-20241022-v2:0"  # GovCloud FedRAMP/IL4/5 authorized
+
+# 2-stage review: fast model for planner (Stage 1), capable model for reviewer (Stage 2).
+# Leave both empty to use bedrock_model_id for both stages (single-stage mode).
+# bedrock_model_light = "anthropic.claude-3-haiku-20240307-v1:0"   # Stage 1 — fast triage
+# bedrock_model_heavy = "anthropic.claude-3-5-sonnet-20241022-v2:0" # Stage 2 — full review
 bedrock_guardrail_id      = ""
 bedrock_guardrail_version = ""
 bedrock_guardrail_trace   = "DISABLED"
@@ -58,7 +63,7 @@ review_effort_estimate = false
 
 # Jira/Confluence chatbot service
 chatbot_enabled = true
-chatbot_model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
+chatbot_model_id = "anthropic.claude-3-5-sonnet-20241022-v2:0"
 chatbot_guardrail_id = ""
 chatbot_guardrail_version = ""
 chatbot_guardrail_trace = "disabled"

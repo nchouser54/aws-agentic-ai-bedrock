@@ -1020,14 +1020,13 @@ class TestLoadRepoConfig:
 
     def _gh(self, content: str | None, status_code: int = 200):
         gh = MagicMock()
-        resp = MagicMock()
-        resp.status_code = status_code
-        if content is not None:
-            encoded = base64.b64encode(content.encode()).decode()
-            resp.json.return_value = {"content": encoded}
+        if content is not None and status_code == 200:
+            gh.get_file_contents.return_value = (content, "abc123sha")
         else:
-            resp.json.return_value = {}
-        gh._request.return_value = resp
+            from requests import HTTPError
+            resp = MagicMock()
+            resp.status_code = status_code
+            gh.get_file_contents.side_effect = HTTPError(response=resp)
         return gh
 
     def test_valid_config_loaded(self):
@@ -1060,7 +1059,7 @@ class TestLoadRepoConfig:
     def test_exception_returns_empty_dict(self):
         from worker.app import _load_repo_config
         gh = MagicMock()
-        gh._request.side_effect = RuntimeError("network error")
+        gh.get_file_contents.side_effect = RuntimeError("network error")
         cfg = _load_repo_config(gh, "org", "repo", "main")
         assert cfg == {}
 
