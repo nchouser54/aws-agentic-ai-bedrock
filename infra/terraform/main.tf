@@ -1749,6 +1749,7 @@ resource "aws_lambda_function" "webhook_receiver" {
       GITHUB_API_BASE              = var.github_api_base
       REVIEW_TRIGGER_PHRASE        = var.review_trigger_phrase
       BOT_USERNAME                 = var.bot_username
+      REVIEW_TRIGGER_LABELS        = join(",", var.review_trigger_labels)
     }
   }
 
@@ -1807,6 +1808,7 @@ resource "aws_lambda_function" "pr_review_worker" {
       IGNORE_PR_LABELS                  = join(",", var.ignore_pr_labels)
       IGNORE_PR_SOURCE_BRANCHES         = join(",", var.ignore_pr_source_branches)
       IGNORE_PR_TARGET_BRANCHES         = join(",", var.ignore_pr_target_branches)
+      REVIEW_TRIGGER_LABELS             = join(",", var.review_trigger_labels)
       # P2-B: findings controls
       NUM_MAX_FINDINGS                  = tostring(var.num_max_findings)
       REQUIRE_SECURITY_REVIEW           = tostring(var.require_security_review)

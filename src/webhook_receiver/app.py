@@ -15,11 +15,19 @@ from shared.logging import get_logger
 
 logger = get_logger("webhook_receiver")
 
-ALLOWED_ACTIONS = {"opened", "synchronize", "reopened", "ready_for_review"}
+ALLOWED_ACTIONS = {"opened", "synchronize", "reopened", "ready_for_review", "labeled"}
 
 # Manual trigger: comment containing this phrase (case-insensitive) triggers a review.
 # Configurable via REVIEW_TRIGGER_PHRASE env var. Also matches @<BOT_USERNAME> review.
 _DEFAULT_TRIGGER_PHRASE = "/review"
+
+# When set, the "labeled" action only triggers a review if the applied label is in this set.
+# Comma-separated list of label names. Empty = any label triggers a review (not recommended).
+# Example: REVIEW_TRIGGER_LABELS="needs-ai-review,ai-review"
+_review_trigger_labels_raw = os.getenv("REVIEW_TRIGGER_LABELS", "").strip()
+REVIEW_TRIGGER_LABELS: frozenset[str] = frozenset(
+    lbl.strip() for lbl in _review_trigger_labels_raw.split(",") if lbl.strip()
+)
 
 _sqs = boto3.client("sqs")
 _secrets = boto3.client("secretsmanager")
@@ -92,7 +100,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     delivery_id = _get_header(headers, "X-GitHub-Delivery")
     signature = _get_header(headers, "X-Hub-Signature-256")
 
-    if github_event not in {"pull_request", "issue_comment"}:
+    if github_event not in {"pull_request", "issue_comment", "check_run"}:
         return {"statusCode": 202, "body": json.dumps({"ignored": "non_pull_request_event"})}
 
     if not delivery_id:
@@ -106,6 +114,10 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         return {"statusCode": 401, "body": json.dumps({"error": "invalid_signature"})}
 
     payload = json.loads(raw_body.decode("utf-8"))
+
+    # ---- check_run: re-run button path -------------------------------------
+    if github_event == "check_run":
+        return _handle_check_run(payload, delivery_id)
 
     # ---- issue_comment: manual trigger path ----------------------------------
     if github_event == "issue_comment":
@@ -134,6 +146,12 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         )
         return {"statusCode": 202, "body": json.dumps({"ignored": "repo_not_allowed"})}
 
+    # For "labeled" actions, only proceed if the applied label is in the trigger set.
+    if action == "labeled" and REVIEW_TRIGGER_LABELS:
+        label_name = str((payload.get("label") or {}).get("name") or "")
+        if label_name not in REVIEW_TRIGGER_LABELS:
+            return {"statusCode": 202, "body": json.dumps({"ignored": "label_not_in_trigger_set"})}
+
     return _enqueue_review(
         delivery_id=delivery_id,
         repo_full_name=repo_full_name,
@@ -142,6 +160,52 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         installation_id=(payload.get("installation") or {}).get("id"),
         event_action=action,
         trigger="auto",
+    )
+
+
+def _handle_check_run(payload: dict[str, Any], delivery_id: str) -> dict[str, Any]:
+    """Handle check_run rerequested — fires when user clicks 'Re-run' in GitHub UI."""
+    action = payload.get("action")
+    if action != "rerequested":
+        return {"statusCode": 202, "body": json.dumps({"ignored": "check_run_action_not_rerequested"})}
+
+    check_run = payload.get("check_run") or {}
+    # Only handle our own check runs, not third-party ones.
+    check_run_name = check_run.get("name") or ""
+    expected_name = os.getenv("CHECK_RUN_NAME", "AI PR Reviewer")
+    if check_run_name != expected_name:
+        return {"statusCode": 202, "body": json.dumps({"ignored": "not_our_check_run"})}
+
+    # A check_run payload contains pull_requests[] — use the first one.
+    pull_requests = check_run.get("pull_requests") or []
+    if not pull_requests:
+        return {"statusCode": 202, "body": json.dumps({"ignored": "check_run_no_pr"})}
+
+    pr_ref = pull_requests[0]
+    pr_number = pr_ref.get("number")
+    head_sha = (pr_ref.get("head") or {}).get("sha")
+    repository = payload.get("repository") or {}
+    repo_full_name = repository.get("full_name")
+
+    if not repo_full_name or not pr_number or not head_sha:
+        return {"statusCode": 400, "body": json.dumps({"error": "missing_required_fields"})}
+
+    if not _repo_allowed(repo_full_name):
+        return {"statusCode": 202, "body": json.dumps({"ignored": "repo_not_allowed"})}
+
+    logger.info(
+        "check_run_rerun_triggered",
+        extra={"delivery_id": delivery_id, "repo": repo_full_name, "pr_number": pr_number, "sha": head_sha},
+    )
+
+    return _enqueue_review(
+        delivery_id=delivery_id,
+        repo_full_name=repo_full_name,
+        pr_number=int(pr_number),
+        head_sha=head_sha,
+        installation_id=(payload.get("installation") or {}).get("id"),
+        event_action="rerequested",
+        trigger="rerun",
     )
 
 
@@ -252,14 +316,32 @@ def _enqueue_review(
         "event_action": event_action,
         "trigger": trigger,
     }
+    message_body = json.dumps(message)
 
-    _sqs.send_message(QueueUrl=os.environ["QUEUE_URL"], MessageBody=json.dumps(message))
+    # Dedup key: same repo + PR + SHA should only be reviewed once, even if multiple
+    # webhooks fire in rapid succession (e.g. fast-push synchronize storms, rerequested
+    # while a review is already in flight).  We use MessageDeduplicationId on FIFO
+    # queues; on standard queues this attribute is silently ignored, so it's safe either
+    # way.  The dedup window is 5 minutes (SQS FIFO hardcoded minimum).
+    dedup_id = f"{repo_full_name}:{pr_number}:{head_sha}"
+
+    send_kwargs: dict[str, Any] = {"QueueUrl": os.environ["QUEUE_URL"], "MessageBody": message_body}
+    queue_url: str = os.environ["QUEUE_URL"]
+    if queue_url.endswith(".fifo"):
+        send_kwargs["MessageGroupId"] = f"{repo_full_name}:{pr_number}"
+        send_kwargs["MessageDeduplicationId"] = dedup_id
+
+    _sqs.send_message(**send_kwargs)
 
     # Fan-out: enqueue PR description generation if enabled (auto triggers only)
     pr_desc_queue = os.getenv("PR_DESCRIPTION_QUEUE_URL")
     if pr_desc_queue and trigger == "auto":
         try:
-            _sqs.send_message(QueueUrl=pr_desc_queue, MessageBody=json.dumps(message))
+            desc_kwargs: dict[str, Any] = {"QueueUrl": pr_desc_queue, "MessageBody": message_body}
+            if pr_desc_queue.endswith(".fifo"):
+                desc_kwargs["MessageGroupId"] = f"{repo_full_name}:{pr_number}"
+                desc_kwargs["MessageDeduplicationId"] = f"pr-desc:{dedup_id}"
+            _sqs.send_message(**desc_kwargs)
             logger.info("pr_description_enqueued", extra={"delivery_id": delivery_id, "pr_number": pr_number})
         except Exception:  # noqa: BLE001
             logger.warning("pr_description_enqueue_failed", extra={"delivery_id": delivery_id})

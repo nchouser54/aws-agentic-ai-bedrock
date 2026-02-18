@@ -1520,6 +1520,16 @@ variable "ignore_pr_labels" {
   default     = []
 }
 
+variable "review_trigger_labels" {
+  description = <<-EOT
+    Opt-in label allowlist. When non-empty, auto-reviews only run if the PR already
+    carries at least one of these labels. Manual /review triggers and check-run reruns
+    are never blocked by this filter. Example: ["needs-ai-review"].
+  EOT
+  type        = list(string)
+  default     = []
+}
+
 variable "ignore_pr_source_branches" {
   description = "List of regex patterns for source (head) branch names to skip."
   type        = list(string)

@@ -397,3 +397,245 @@ class TestRenderTicketCompliance:
         assert "ALPHA-2" in body
         assert "First ticket" in body
         assert "Second ticket" in body
+
+
+# ===========================================================================
+# check_run rerequested, labeled trigger, dedup, review_trigger_labels
+# ===========================================================================
+
+def _make_webhook_event(github_event: str, body_dict: dict, secret: str = "s3cr3t") -> dict:
+    """Build a minimal Lambda proxy event for the webhook receiver."""
+    import hashlib
+    import hmac
+    import json as _json
+
+    body = _json.dumps(body_dict)
+    sig = "sha256=" + hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()
+    return {
+        "headers": {
+            "X-GitHub-Event": github_event,
+            "X-GitHub-Delivery": "abc-123",
+            "X-Hub-Signature-256": sig,
+        },
+        "body": body,
+        "isBase64Encoded": False,
+    }
+
+
+def _load_webhook(env_overrides: dict | None = None):
+    env_base = {
+        "WEBHOOK_SECRET_ARN": "arn:aws:secretsmanager:us-east-1:123:secret:test",
+        "QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/123/queue",
+        "GITHUB_APP_IDS_SECRET_ARN": "arn:aws:secretsmanager:us-east-1:123:secret:ids",
+        "GITHUB_APP_PRIVATE_KEY_SECRET_ARN": "arn:aws:secretsmanager:us-east-1:123:secret:key",
+    }
+    if env_overrides:
+        env_base.update(env_overrides)
+    mod = _reload_module("webhook_receiver.app", env_base)
+    return mod
+
+
+class TestCheckRunRerequested:
+    """check_run rerequested event triggers a review."""
+
+    def _run(self, action="rerequested", check_run_name="AI PR Reviewer", pr_list=None, env=None):
+        if pr_list is None:
+            pr_list = [{"number": 42, "head": {"sha": "abc123"}}]
+        payload = {
+            "action": action,
+            "check_run": {"name": check_run_name, "pull_requests": pr_list},
+            "repository": {"full_name": "org/repo"},
+            "installation": {"id": 99},
+        }
+        extra_env = env or {}
+        mod = _load_webhook(extra_env)
+        secret = b"s3cr3t"
+        env_runtime = {
+            "QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/123/queue",
+            "WEBHOOK_SECRET_ARN": "arn:aws:secretsmanager:us-east-1:123:secret:test",
+            "GITHUB_APP_IDS_SECRET_ARN": "arn:aws:secretsmanager:us-east-1:123:secret:ids",
+            "GITHUB_APP_PRIVATE_KEY_SECRET_ARN": "arn:aws:secretsmanager:us-east-1:123:secret:key",
+        }
+        env_runtime.update(extra_env)
+        with (
+            patch("webhook_receiver.app._load_webhook_secret", return_value=secret),
+            patch("webhook_receiver.app._sqs") as mock_sqs,
+            patch.dict(os.environ, env_runtime),
+        ):
+            event = _make_webhook_event("check_run", payload)
+            result = mod.lambda_handler(event, None)
+        return result, mock_sqs
+
+    def test_rerequested_enqueues_review(self):
+        result, mock_sqs = self._run()
+        import json as _json
+        assert result["statusCode"] == 202
+        assert _json.loads(result["body"])["status"] == "accepted"
+        mock_sqs.send_message.assert_called_once()
+
+    def test_non_rerequested_action_ignored(self):
+        result, mock_sqs = self._run(action="created")
+        assert result["statusCode"] == 202
+        import json as _json
+        assert "ignored" in _json.loads(result["body"])
+        mock_sqs.send_message.assert_not_called()
+
+    def test_wrong_check_run_name_ignored(self):
+        result, mock_sqs = self._run(check_run_name="Other Bot")
+        assert result["statusCode"] == 202
+        import json as _json
+        assert "not_our_check_run" in _json.loads(result["body"])["ignored"]
+        mock_sqs.send_message.assert_not_called()
+
+    def test_no_pull_requests_ignored(self):
+        result, mock_sqs = self._run(pr_list=[])
+        assert result["statusCode"] == 202
+        mock_sqs.send_message.assert_not_called()
+
+    def test_check_run_event_not_delivered_for_other_events(self):
+        """Non-check_run events still work normally (regression guard)."""
+        mod = _load_webhook()
+        secret = b"s3cr3t"
+        with patch("webhook_receiver.app._load_webhook_secret", return_value=secret):
+            event = _make_webhook_event("push", {"ref": "refs/heads/main"})
+            result = mod.lambda_handler(event, None)
+        import json as _json
+        assert result["statusCode"] == 202
+        assert "ignored" in _json.loads(result["body"])
+
+
+class TestLabeledTrigger:
+    """pull_request labeled action triggers a review only for configured labels."""
+
+    def _pr_payload(self, label_name="needs-ai-review"):
+        return {
+            "action": "labeled",
+            "label": {"name": label_name},
+            "pull_request": {"number": 7, "head": {"sha": "deadbeef"}},
+            "repository": {"full_name": "org/repo"},
+            "installation": {"id": 1},
+        }
+
+    def test_labeled_with_matching_trigger_label_enqueues(self):
+        mod = _load_webhook({"REVIEW_TRIGGER_LABELS": "needs-ai-review"})
+        secret = b"s3cr3t"
+        with (
+            patch("webhook_receiver.app._load_webhook_secret", return_value=secret),
+            patch("webhook_receiver.app._sqs") as mock_sqs,
+            patch.dict(os.environ, {"QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/123/queue", "REVIEW_TRIGGER_LABELS": "needs-ai-review"}),
+        ):
+            event = _make_webhook_event("pull_request", self._pr_payload("needs-ai-review"))
+            result = mod.lambda_handler(event, None)
+        import json as _json
+        assert result["statusCode"] == 202
+        assert _json.loads(result["body"])["status"] == "accepted"
+        mock_sqs.send_message.assert_called_once()
+
+    def test_labeled_with_non_trigger_label_ignored(self):
+        mod = _load_webhook({"REVIEW_TRIGGER_LABELS": "needs-ai-review"})
+        secret = b"s3cr3t"
+        with (
+            patch("webhook_receiver.app._load_webhook_secret", return_value=secret),
+            patch("webhook_receiver.app._sqs") as mock_sqs,
+            patch.dict(os.environ, {"QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/123/queue", "REVIEW_TRIGGER_LABELS": "needs-ai-review"}),
+        ):
+            event = _make_webhook_event("pull_request", self._pr_payload("documentation"))
+            result = mod.lambda_handler(event, None)
+        import json as _json
+        assert result["statusCode"] == 202
+        assert "label_not_in_trigger_set" in _json.loads(result["body"])["ignored"]
+        mock_sqs.send_message.assert_not_called()
+
+    def test_labeled_with_empty_trigger_labels_allows_any(self):
+        """When REVIEW_TRIGGER_LABELS is empty, any label-action triggers review."""
+        mod = _load_webhook({"REVIEW_TRIGGER_LABELS": ""})
+        secret = b"s3cr3t"
+        with (
+            patch("webhook_receiver.app._load_webhook_secret", return_value=secret),
+            patch("webhook_receiver.app._sqs") as mock_sqs,
+            patch.dict(os.environ, {"QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/123/queue", "REVIEW_TRIGGER_LABELS": ""}),
+        ):
+            event = _make_webhook_event("pull_request", self._pr_payload("random-label"))
+            result = mod.lambda_handler(event, None)
+        import json as _json
+        assert result["statusCode"] == 202
+        assert _json.loads(result["body"])["status"] == "accepted"
+        mock_sqs.send_message.assert_called_once()
+
+
+class TestSqsDeduplication:
+    """_enqueue_review sends MessageDeduplicationId on FIFO queues."""
+
+    def _enqueue(self, queue_url: str):
+        mod = _load_webhook({"QUEUE_URL": queue_url})
+        secret = b"s3cr3t"
+        with (
+            patch("webhook_receiver.app._load_webhook_secret", return_value=secret),
+            patch("webhook_receiver.app._sqs") as mock_sqs,
+            patch.dict(os.environ, {"QUEUE_URL": queue_url}),
+        ):
+            payload = {
+                "action": "opened",
+                "pull_request": {"number": 1, "head": {"sha": "sha1"}},
+                "repository": {"full_name": "org/repo"},
+                "installation": {"id": 5},
+            }
+            event = _make_webhook_event("pull_request", payload)
+            mod.lambda_handler(event, None)
+        return mock_sqs.send_message.call_args_list
+
+    def test_fifo_queue_gets_dedup_id(self):
+        calls = self._enqueue("https://sqs.us-east-1.amazonaws.com/123/queue.fifo")
+        assert len(calls) == 1
+        kwargs = calls[0].kwargs or calls[0][1]
+        assert "MessageDeduplicationId" in kwargs
+        assert "MessageGroupId" in kwargs
+
+    def test_standard_queue_no_dedup_id(self):
+        calls = self._enqueue("https://sqs.us-east-1.amazonaws.com/123/standard-queue")
+        assert len(calls) == 1
+        kwargs = calls[0].kwargs or calls[0][1]
+        assert "MessageDeduplicationId" not in kwargs
+        assert "MessageGroupId" not in kwargs
+
+
+class TestReviewTriggerLabelsWorkerFilter:
+    """Worker _should_skip_review respects REVIEW_TRIGGER_LABELS."""
+
+    def _get_fn(self, review_trigger_labels=""):
+        mod = _reload_module("worker.app", {
+            "FAILURE_ON_SEVERITY": "high",
+            "PR_REVIEW_STATE_TABLE": "",
+            "IDEMPOTENCY_TABLE": "x",
+            "REVIEW_TRIGGER_LABELS": review_trigger_labels,
+        })
+        return mod._should_skip_review
+
+    def _pr(self, labels=None):
+        return {"labels": [{"name": lb} for lb in (labels or [])]}
+
+    def test_no_trigger_labels_configured_never_skips(self):
+        fn = self._get_fn("")
+        skip, _ = fn(self._pr(["anything"]), "opened", "auto")
+        assert not skip
+
+    def test_pr_has_required_label_not_skipped(self):
+        fn = self._get_fn("needs-ai-review")
+        skip, _ = fn(self._pr(["needs-ai-review", "bug"]), "labeled", "auto")
+        assert not skip
+
+    def test_pr_missing_required_label_skipped(self):
+        fn = self._get_fn("needs-ai-review")
+        skip, reason = fn(self._pr(["bug"]), "opened", "auto")
+        assert skip
+        assert "needs-ai-review" in reason
+
+    def test_manual_trigger_bypasses_label_check(self):
+        fn = self._get_fn("needs-ai-review")
+        skip, _ = fn(self._pr([]), "opened", "manual")
+        assert not skip
+
+    def test_rerun_trigger_bypasses_label_check(self):
+        fn = self._get_fn("needs-ai-review")
+        skip, _ = fn(self._pr([]), "rerequested", "rerun")
+        assert not skip

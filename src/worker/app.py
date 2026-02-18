@@ -42,6 +42,11 @@ PR_REVIEW_STATE_TABLE = os.getenv("PR_REVIEW_STATE_TABLE", "")
 # Config filter knobs (pr-agent style)
 IGNORE_PR_AUTHORS = {a.strip() for a in os.getenv("IGNORE_PR_AUTHORS", "").split(",") if a.strip()}
 IGNORE_PR_LABELS = {lb.strip() for lb in os.getenv("IGNORE_PR_LABELS", "").split(",") if lb.strip()}
+# When non-empty, auto-reviews only run if the PR already has one of these labels.
+# Manual/rerun triggers bypass this check. Comma-separated label names.
+REVIEW_TRIGGER_LABELS: frozenset[str] = frozenset(
+    lb.strip() for lb in os.getenv("REVIEW_TRIGGER_LABELS", "").split(",") if lb.strip()
+)
 IGNORE_PR_SOURCE_BRANCHES_RAW = [p.strip() for p in os.getenv("IGNORE_PR_SOURCE_BRANCHES", "").split(",") if p.strip()]
 IGNORE_PR_TARGET_BRANCHES_RAW = [p.strip() for p in os.getenv("IGNORE_PR_TARGET_BRANCHES", "").split(",") if p.strip()]
 NUM_MAX_FINDINGS = int(os.getenv("NUM_MAX_FINDINGS", "0"))  # 0 = unlimited
@@ -211,10 +216,16 @@ def _should_skip_review(pr: dict[str, Any], event_action: str, trigger: str) -> 
     """Check whether this PR review should be skipped based on configured filters.
 
     Returns (skip: bool, reason: str).
-    Manual triggers always bypass author/label/branch filters.
+    Manual and rerun triggers always bypass author/label/branch filters.
     """
-    if trigger == "manual":
+    if trigger in {"manual", "rerun"}:
         return False, ""
+
+    # Require a specific label before reviewing (opt-in mode)
+    if REVIEW_TRIGGER_LABELS:
+        labels = {str(lbl.get("name") or "") for lbl in (pr.get("labels") or [])}
+        if not (REVIEW_TRIGGER_LABELS & labels):
+            return True, f"PR does not have any of the required trigger label(s): {', '.join(sorted(REVIEW_TRIGGER_LABELS))}"
 
     # Ignore PR by author
     if IGNORE_PR_AUTHORS:
