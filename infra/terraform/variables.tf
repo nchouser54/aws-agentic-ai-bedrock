@@ -1454,6 +1454,12 @@ variable "incremental_review_enabled" {
 # P2-A: PR diff compression
 # ---------------------------------------------------------------------------
 
+variable "patch_char_budget" {
+  description = "Maximum characters per file patch in the legacy single-stage prompt builder (fallback path). Default 45000."
+  type        = number
+  default     = 45000
+}
+
 variable "large_patch_policy" {
   description = "What to do when a file's diff exceeds MAX_DIFF_BYTES. 'clip' truncates the patch; 'skip' excludes the file."
   type        = string
@@ -1530,4 +1536,9 @@ variable "failure_on_severity" {
     condition     = contains(["high", "medium", "none"], var.failure_on_severity)
     error_message = "Must be high, medium, or none."
   }
+}
+variable "review_effort_estimate" {
+  description = "When true, the reviewer includes an estimated review-effort score in the output."
+  type        = bool
+  default     = false
 }

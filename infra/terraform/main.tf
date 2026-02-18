@@ -1721,6 +1721,7 @@ resource "aws_lambda_function" "pr_review_worker" {
       INCREMENTAL_REVIEW_ENABLED        = tostring(var.incremental_review_enabled)
       PR_REVIEW_STATE_TABLE             = aws_dynamodb_table.pr_review_state.name
       # P2-A: PR compression
+      PATCH_CHAR_BUDGET                 = tostring(var.patch_char_budget)
       LARGE_PATCH_POLICY                = var.large_patch_policy
       MAX_TOTAL_DIFF_BYTES              = tostring(var.max_total_diff_bytes)
       # P2-B: ignore filters
@@ -1734,7 +1735,9 @@ resource "aws_lambda_function" "pr_review_worker" {
       REQUIRE_TESTS_REVIEW              = tostring(var.require_tests_review)
       # P3: structured verdict
       FAILURE_ON_SEVERITY               = var.failure_on_severity
+      REVIEW_EFFORT_ESTIMATE            = tostring(var.review_effort_estimate)
     }
+  }
 
   reserved_concurrent_executions = local.worker_concurrency
 
