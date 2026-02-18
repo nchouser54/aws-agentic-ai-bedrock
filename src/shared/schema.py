@@ -28,12 +28,31 @@ class Finding(BaseModel):
         return value
 
 
+class TicketCompliance(BaseModel):
+    """Structured compliance check for a single linked Jira ticket."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    ticket_key: str
+    """The Jira ticket key, e.g. ``PROJ-123``."""
+    ticket_summary: str
+    """One-sentence restatement of what the ticket requires."""
+    fully_compliant: list[str]
+    """Bullet list of requirements the PR satisfies."""
+    not_compliant: list[str]
+    """Bullet list of requirements the PR does NOT satisfy."""
+    needs_human_verification: list[str]
+    """Items that cannot be verified by code review alone (UI, browser, runtime behaviour)."""
+
+
 class ReviewResult(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     summary: str
     overall_risk: RiskLevel
     findings: list[Finding]
+    ticket_compliance: Optional[list[TicketCompliance]] = None
+    """Present only when Jira tickets were linked to the PR."""
 
 
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)

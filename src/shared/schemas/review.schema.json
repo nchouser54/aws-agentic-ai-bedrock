@@ -47,6 +47,21 @@
       "items": { "type": "string" }
     },
     "truncation_note": { "type": ["string", "null"] },
-    "not_reviewed": { "type": ["string", "null"] }
+    "not_reviewed": { "type": ["string", "null"] },
+    "ticket_compliance": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "required": ["ticket_key", "ticket_summary", "fully_compliant", "not_compliant", "needs_human_verification"],
+        "additionalProperties": false,
+        "properties": {
+          "ticket_key": { "type": "string" },
+          "ticket_summary": { "type": "string" },
+          "fully_compliant": { "type": "array", "items": { "type": "string" } },
+          "not_compliant": { "type": "array", "items": { "type": "string" } },
+          "needs_human_verification": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
   }
 }

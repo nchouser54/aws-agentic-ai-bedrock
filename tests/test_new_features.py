@@ -302,3 +302,98 @@ class TestIncrementalStateHelpers:
         call_kwargs = mock_dynamodb.put_item.call_args[1]
         assert call_kwargs["Item"]["last_reviewed_sha"]["S"] == "deadbeef"
         assert call_kwargs["Item"]["pr_key"]["S"] == "org/repo:42"
+
+
+# ===========================================================================
+# Ticket Compliance — render_check_run_body section
+# ===========================================================================
+
+class TestRenderTicketCompliance:
+    def _render(self, ticket_compliance=None):
+        from worker.render_markdown import render_check_run_body
+        review = {
+            "summary": "Implements the Jira requirements.",
+            "overall_risk": "low",
+            "findings": [],
+            "files_reviewed": ["app.py"],
+            "files_skipped": [],
+            "ticket_compliance": ticket_compliance,
+        }
+        return render_check_run_body(review)
+
+    def test_section_absent_when_none(self):
+        body = self._render(ticket_compliance=None)
+        assert "Jira Ticket Compliance" not in body
+
+    def test_section_absent_when_empty_list(self):
+        body = self._render(ticket_compliance=[])
+        assert "Jira Ticket Compliance" not in body
+
+    def test_section_present_with_ticket(self):
+        body = self._render(ticket_compliance=[{
+            "ticket_key": "PROJ-99",
+            "ticket_summary": "Add login endpoint",
+            "fully_compliant": ["Login endpoint added"],
+            "not_compliant": ["Logout not implemented"],
+            "needs_human_verification": ["Browser redirect check"],
+        }])
+        assert "Jira Ticket Compliance" in body
+        assert "PROJ-99" in body
+        assert "Add login endpoint" in body
+
+    def test_compliant_items_rendered(self):
+        body = self._render(ticket_compliance=[{
+            "ticket_key": "PROJ-1",
+            "ticket_summary": "Refactor auth",
+            "fully_compliant": ["Token refresh added", "Session invalidation fixed"],
+            "not_compliant": [],
+            "needs_human_verification": [],
+        }])
+        assert "✅ Compliant" in body
+        assert "Token refresh added" in body
+        assert "Session invalidation fixed" in body
+        assert "❌ Not compliant" not in body
+
+    def test_not_compliant_items_rendered(self):
+        body = self._render(ticket_compliance=[{
+            "ticket_key": "PROJ-2",
+            "ticket_summary": "Add rate limiting",
+            "fully_compliant": [],
+            "not_compliant": ["Burst limit not enforced"],
+            "needs_human_verification": [],
+        }])
+        assert "❌ Not compliant" in body
+        assert "Burst limit not enforced" in body
+
+    def test_needs_human_verification_rendered(self):
+        body = self._render(ticket_compliance=[{
+            "ticket_key": "PROJ-3",
+            "ticket_summary": "Payment flow",
+            "fully_compliant": [],
+            "not_compliant": [],
+            "needs_human_verification": ["Manual Stripe sandbox test required"],
+        }])
+        assert "🔍 Needs human verification" in body
+        assert "Manual Stripe sandbox test required" in body
+
+    def test_multiple_tickets_rendered(self):
+        body = self._render(ticket_compliance=[
+            {
+                "ticket_key": "ALPHA-1",
+                "ticket_summary": "First ticket",
+                "fully_compliant": ["Done"],
+                "not_compliant": [],
+                "needs_human_verification": [],
+            },
+            {
+                "ticket_key": "ALPHA-2",
+                "ticket_summary": "Second ticket",
+                "fully_compliant": [],
+                "not_compliant": ["Not done"],
+                "needs_human_verification": [],
+            },
+        ])
+        assert "ALPHA-1" in body
+        assert "ALPHA-2" in body
+        assert "First ticket" in body
+        assert "Second ticket" in body

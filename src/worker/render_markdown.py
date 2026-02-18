@@ -98,6 +98,32 @@ def render_check_run_body(review: dict[str, Any], verdict: str | None = None) ->
     if not_reviewed:
         parts.append(f"\n## What Was Not Reviewed\n{not_reviewed}\n")
 
+    # ---- Ticket Compliance ------------------------------------------------------
+    ticket_compliance: list[dict[str, Any]] = review.get("ticket_compliance") or []
+    if ticket_compliance:
+        parts.append("\n## Jira Ticket Compliance\n")
+        for tc in ticket_compliance:
+            key = tc.get("ticket_key", "")
+            summary = tc.get("ticket_summary", "").strip()
+            parts.append(f"\n### {key}" + (f" — {summary}" if summary else "") + "\n")
+
+            fully = tc.get("fully_compliant") or []
+            not_comp = tc.get("not_compliant") or []
+            needs_human = tc.get("needs_human_verification") or []
+
+            if fully:
+                parts.append("**✅ Compliant:**\n")
+                for item in fully:
+                    parts.append(f"- {item.strip()}\n")
+            if not_comp:
+                parts.append("**❌ Not compliant:**\n")
+                for item in not_comp:
+                    parts.append(f"- {item.strip()}\n")
+            if needs_human:
+                parts.append("**🔍 Needs human verification:**\n")
+                for item in needs_human:
+                    parts.append(f"- {item.strip()}\n")
+
     body = "".join(parts)
 
     # GitHub Check Run output.text limit is 65 535 bytes

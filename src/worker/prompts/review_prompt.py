@@ -34,7 +34,22 @@ The JSON must match this exact schema:
   "files_reviewed": ["path/to/reviewed/file.py"],
   "files_skipped": ["path/to/skipped/file.py — reason"],
   "truncation_note": "plain text if any files were truncated, else null",
-  "not_reviewed": "plain text description of what was NOT reviewed and why, else null"
+  "not_reviewed": "plain text description of what was NOT reviewed and why, else null",
+  "ticket_compliance": null
+}
+
+When the context includes a "linked_jira_issues" field, replace the null "ticket_compliance" with
+an array — one entry per ticket:
+{
+  "ticket_compliance": [
+    {
+      "ticket_key": "PROJ-123",
+      "ticket_summary": "One sentence restatement of what the ticket requires",
+      "fully_compliant": ["bullet item: requirement met by this PR"],
+      "not_compliant": ["bullet item: requirement NOT met by this PR"],
+      "needs_human_verification": ["bullet item: cannot be confirmed by code review alone"]
+    }
+  ]
 }
 
 Priority levels:
@@ -50,6 +65,7 @@ Hard rules:
 - Do not suggest patches for files marked as sensitive (.env, secrets, .pem, .key, credentials).
 - If a finding cannot be precisely located (no start_line), set start_line and end_line to null.
 - The "not_reviewed" field MUST explain omissions when files were skipped or truncated.
+- When ticket_compliance is present, base it ONLY on requirements stated in the linked_jira_issues data.
 - Output ONLY valid JSON — the first character must be '{' and the last must be '}'.
 """
 
