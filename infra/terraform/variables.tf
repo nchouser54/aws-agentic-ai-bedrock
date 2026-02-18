@@ -81,6 +81,12 @@ variable "dry_run" {
   default     = true
 }
 
+variable "idempotency_ttl_seconds" {
+  description = "How long (seconds) an idempotency key is retained in DynamoDB to prevent duplicate PR reviews. Default is 7 days."
+  type        = number
+  default     = 604800 # 7 * 24 * 60 * 60
+}
+
 variable "auto_pr_enabled" {
   description = "Enable autonomous remediation PR creation"
   type        = bool

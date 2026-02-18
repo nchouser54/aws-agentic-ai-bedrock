@@ -30,6 +30,31 @@ auto_pr_enabled       = false
 auto_pr_max_files     = 5
 auto_pr_branch_prefix = "ai-autofix"
 review_comment_mode   = "inline_best_effort"
+check_run_name        = "AI PR Reviewer"
+
+# ── PR review tuning knobs ───────────────────────────────────────────────
+# P1-B: Incremental review (only new commits since last review)
+incremental_review_enabled = true
+
+# P2-A: Diff compression
+max_review_files     = 30
+max_diff_bytes       = 8000
+max_total_diff_bytes = 0       # 0 = max_diff_bytes * max_review_files
+large_patch_policy   = "clip"  # clip | skip
+# skip_patterns = ""           # comma-separated extra glob patterns to exclude
+
+# P2-B: Ignore / filter knobs
+# ignore_pr_authors          = []  # e.g. ["dependabot[bot]", "renovate[bot]"]
+# ignore_pr_labels           = []  # e.g. ["skip-review", "wip"]
+# ignore_pr_source_branches  = []  # e.g. ["dependabot/*"]
+# ignore_pr_target_branches  = []  # e.g. ["main"]
+num_max_findings        = 0     # 0 = unlimited
+require_security_review = true
+require_tests_review    = true
+
+# P3: Structured verdict
+failure_on_severity    = "high"  # high | medium | none
+review_effort_estimate = false
 
 # Jira/Confluence chatbot service
 chatbot_enabled = true

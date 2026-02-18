@@ -57,6 +57,23 @@ auto_pr_enabled       = false
 auto_pr_max_files     = 5
 auto_pr_branch_prefix = "ai-autofix"
 review_comment_mode   = "inline_best_effort"
+check_run_name        = "AI PR Reviewer"
+
+# ── PR review tuning knobs ───────────────────────────────────────────────
+# P1-B: Incremental review
+incremental_review_enabled = true
+# P2-A: Diff compression
+max_review_files     = 30
+max_diff_bytes       = 8000
+large_patch_policy   = "clip"  # clip | skip
+# P2-B: Ignore filters
+# ignore_pr_authors         = ["dependabot[bot]"]
+# ignore_pr_labels          = ["skip-review"]
+num_max_findings        = 0    # 0 = unlimited
+require_security_review = true
+require_tests_review    = true
+# P3: Structured verdict
+failure_on_severity     = "high"  # high | medium | none
 
 # ── Chatbot ──────────────────────────────────────────────────────────────
 chatbot_enabled  = true

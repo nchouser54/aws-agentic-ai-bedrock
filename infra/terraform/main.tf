@@ -11,15 +11,12 @@ locals {
   webapp_private_only               = local.webapp_ec2_enabled && var.webapp_private_only
   webapp_tls_enabled                = local.webapp_ec2_enabled && var.webapp_tls_enabled
   webapp_bucket_name                = trimspace(var.webapp_bucket_name) != "" ? trimspace(var.webapp_bucket_name) : "${local.name_prefix}-${data.aws_caller_identity.current.account_id}-chatbot-webapp"
-  webapp_asset_version              = sha256(join("", [for filename in sort(keys(local.webapp_files)) : filesha256(local.webapp_files[filename].source)]))
-  webapp_files = {
+  # Static files uploaded from disk (config.js is rendered separately so S3 mode
+  # gets the same runtime defaults as EC2 mode — chatbot URL, auth mode, etc.)
+  webapp_static_files = {
     "index.html" = {
       source       = "${path.module}/../../webapp/index.html"
       content_type = "text/html"
-    }
-    "config.js" = {
-      source       = "${path.module}/../../webapp/config.js"
-      content_type = "application/javascript"
     }
     "app.js" = {
       source       = "${path.module}/../../webapp/app.js"
@@ -30,6 +27,19 @@ locals {
       content_type = "text/css"
     }
   }
+  # Rendered config.js — injects webapp_default_config so the S3-hosted UI gets
+  # the same pre-filled chatbot URL / auth mode as the EC2 nginx user_data path.
+  webapp_config_js_content = "window.WEBAPP_DEFAULTS = ${jsonencode(local.webapp_default_config)};\n"
+  webapp_asset_version     = sha256(join("", [
+    for filename in sort(keys(local.webapp_static_files)) : filesha256(local.webapp_static_files[filename].source)
+  ]) + local.webapp_config_js_content)
+  # Keep webapp_files for consumers that expect the full map (e.g. EC2 sync path)
+  webapp_files = merge(local.webapp_static_files, {
+    "config.js" = {
+      source       = "${path.module}/../../webapp/config.js"
+      content_type = "application/javascript"
+    }
+  })
   chatbot_metrics_namespace = trimspace(var.chatbot_metrics_namespace) != "" ? trimspace(var.chatbot_metrics_namespace) : "${var.project_name}/${var.environment}"
   chatbot_route_auth_type   = local.chatbot_auth_jwt_enabled ? "JWT" : local.chatbot_auth_github_oauth_enabled ? "CUSTOM" : "NONE"
   kb_sync_assets_enabled    = var.kb_sync_enabled || var.github_kb_sync_enabled || var.create_bedrock_kb_resources
@@ -568,14 +578,27 @@ resource "aws_s3_bucket_policy" "webapp_public_read" {
   depends_on = [aws_s3_bucket_public_access_block.webapp]
 }
 
+# Static assets (index.html, app.js, styles.css) — sourced from disk
 resource "aws_s3_object" "webapp_files" {
-  for_each = local.webapp_hosting_enabled ? local.webapp_files : {}
+  for_each = local.webapp_s3_enabled ? local.webapp_static_files : {}
 
   bucket       = aws_s3_bucket.webapp[0].id
   key          = each.key
   source       = each.value.source
   etag         = filemd5(each.value.source)
   content_type = each.value.content_type
+}
+
+# config.js — rendered with live Terraform defaults so the S3 UI gets the same
+# chatbotUrl / authMode / GitHub OAuth prefill as the EC2 nginx user_data path.
+resource "aws_s3_object" "webapp_config_js" {
+  count = local.webapp_s3_enabled ? 1 : 0
+
+  bucket       = aws_s3_bucket.webapp[0].id
+  key          = "config.js"
+  content      = local.webapp_config_js_content
+  etag         = md5(local.webapp_config_js_content)
+  content_type = "application/javascript"
 }
 
 # Security group for webapp EC2 instance
@@ -723,6 +746,7 @@ CRON
 
   depends_on = [
     aws_s3_object.webapp_files,
+    aws_s3_object.webapp_config_js,
     aws_iam_role_policy_attachment.webapp_ec2_assets,
   ]
 }
@@ -1704,6 +1728,7 @@ resource "aws_lambda_function" "pr_review_worker" {
       GITHUB_API_BASE                   = var.github_api_base
       DRY_RUN                           = tostring(var.dry_run)
       IDEMPOTENCY_TABLE                 = aws_dynamodb_table.idempotency.name
+      IDEMPOTENCY_TTL_SECONDS           = tostring(var.idempotency_ttl_seconds)
       GITHUB_APP_PRIVATE_KEY_SECRET_ARN = local.github_app_private_key_secret_arn
       GITHUB_APP_IDS_SECRET_ARN         = local.github_app_ids_secret_arn
       METRICS_NAMESPACE                 = "${var.project_name}/${var.environment}"
