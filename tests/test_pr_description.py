@@ -327,3 +327,45 @@ def test_lambda_handler_sqs_trigger(mock_auth_cls: MagicMock, mock_jira: MagicMo
             result = lambda_handler(event, None)
 
     assert result["batchItemFailures"] == []
+
+
+@patch("pr_description.app.BedrockChatClient")
+@patch("pr_description.app._fetch_jira_context")
+@patch("pr_description.app.GitHubAppAuth")
+def test_lambda_handler_api_gateway_reuses_pr_dict(mock_auth_cls: MagicMock, mock_jira: MagicMock, mock_chat_cls: MagicMock) -> None:
+    """API Gateway path: get_pull_request should be called exactly once (not twice)."""
+    mock_chat = MagicMock()
+    mock_chat.answer.return_value = "AI summary"
+    mock_chat_cls.return_value = mock_chat
+    mock_jira.return_value = []
+
+    mock_auth = MagicMock()
+    mock_auth.get_installation_token.return_value = "tok"
+    mock_auth_cls.return_value = mock_auth
+
+    with patch("pr_description.app.GitHubClient") as mock_gh_cls:
+        gh = MagicMock()
+        gh.get_pull_request.return_value = {
+            "number": 7, "title": "feat", "body": "existing",
+            "head": {"ref": "b", "sha": "sha"}, "base": {"ref": "main"},
+        }
+        gh.get_pull_request_files.return_value = [
+            {"filename": "a.py", "status": "modified", "additions": 1, "deletions": 0, "patch": "@@"},
+        ]
+        gh.list_pull_commits.return_value = [{"sha": "c1", "commit": {"message": "feat"}}]
+        mock_gh_cls.return_value = gh
+
+        with patch.dict("os.environ", {
+            "GITHUB_APP_IDS_SECRET_ARN": "arn:ids",
+            "GITHUB_APP_PRIVATE_KEY_SECRET_ARN": "arn:key",
+            "BEDROCK_MODEL_ID": "claude",
+        }):
+            event = {
+                "requestContext": {"http": {"method": "POST"}},
+                "body": json.dumps({"repo": "o/r", "pr_number": 7, "apply": True}),
+            }
+            result = lambda_handler(event, None)
+
+    assert result["statusCode"] == 200
+    # Must only fetch the PR once — not a second time for _update_pr_body
+    assert gh.get_pull_request.call_count == 1

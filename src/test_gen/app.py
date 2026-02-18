@@ -206,15 +206,21 @@ def _post_as_draft_pr(
 
     branch_name = f"ai-tests/pr-{pr_number}-{head_sha[:8]}"
 
-    # Create branch from base
+    # Create branch from base — resolve base SHA first; abort to comment on hard failure.
     try:
         base_ref_data = gh.get_ref(owner, repo, f"heads/{base_ref}")
         base_sha = ((base_ref_data.get("object") or {}).get("sha"))
         if not base_sha:
             raise ValueError("Could not resolve base SHA")
+    except Exception:  # noqa: BLE001
+        logger.warning("test_draft_pr_base_sha_failed", extra={"extra": {"base_ref": base_ref, "pr_number": pr_number}})
+        _post_as_comment(gh, owner, repo, pr_number, test_output)
+        return
+
+    try:
         gh.create_ref(owner, repo, f"refs/heads/{branch_name}", base_sha)
     except Exception:  # noqa: BLE001
-        # Branch might already exist
+        # Branch likely already exists from a previous run — continue using it.
         pass
 
     # Commit test files
@@ -231,21 +237,25 @@ def _post_as_draft_pr(
         except Exception:  # noqa: BLE001
             logger.warning("test_file_commit_failed", extra={"extra": {"path": path}})
 
-    # Create draft PR
+    # Create draft PR — fall back to a comment if the PR already exists or the call fails.
     pr_body = (
         f"AI-generated test suggestions for PR #{pr_number}.\n\n"
         "**Review all tests before merging.** These are auto-generated and may "
         "need adjustments for your project's specific patterns."
     )
-    gh.create_pull_request(
-        owner=owner,
-        repo=repo,
-        title=f"AI Test Suggestions for #{pr_number}",
-        head=branch_name,
-        base=base_ref,
-        body=pr_body,
-    )
-    logger.info("test_draft_pr_created", extra={"extra": {"pr_number": pr_number, "branch": branch_name}})
+    try:
+        gh.create_pull_request(
+            owner=owner,
+            repo=repo,
+            title=f"AI Test Suggestions for #{pr_number}",
+            head=branch_name,
+            base=base_ref,
+            body=pr_body,
+        )
+        logger.info("test_draft_pr_created", extra={"extra": {"pr_number": pr_number, "branch": branch_name}})
+    except Exception:  # noqa: BLE001
+        logger.warning("test_draft_pr_create_failed_fallback_to_comment", extra={"extra": {"pr_number": pr_number}})
+        _post_as_comment(gh, owner, repo, pr_number, test_output)
 
 
 def _is_safe_generated_test_path(path: str) -> bool:

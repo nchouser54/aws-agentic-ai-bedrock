@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from test_gen.app import (
+    _is_safe_generated_test_path,
     _is_testable,
     _parse_test_files,
+    _post_as_draft_pr,
     _select_testable_files,
     generate_tests,
     lambda_handler,
@@ -227,3 +229,52 @@ def test_lambda_handler_missing_fields() -> None:
     }):
         result = lambda_handler(event, None)
     assert result["statusCode"] == 400
+
+
+# -- _post_as_draft_pr error handling tests ------------------------------------
+
+
+def test_post_as_draft_pr_falls_back_to_comment_when_base_sha_unresolvable() -> None:
+    """If get_ref raises, _post_as_draft_pr must fall back to a PR comment."""
+    gh = MagicMock()
+    gh.get_ref.side_effect = Exception("404 Not Found")
+    test_output = "```python\n# Test file: tests/test_x.py\ndef test_x(): pass\n```"
+
+    with patch("test_gen.app._post_as_comment") as mock_comment:
+        _post_as_draft_pr(gh, "o", "r", 42, "abc12345", "main", test_output)
+
+    mock_comment.assert_called_once_with(gh, "o", "r", 42, test_output)
+    gh.put_file_contents.assert_not_called()
+    gh.create_pull_request.assert_not_called()
+
+
+def test_post_as_draft_pr_falls_back_to_comment_when_create_pr_fails() -> None:
+    """If create_pull_request raises (e.g. 422 PR already exists), fall back to comment."""
+    gh = MagicMock()
+    gh.get_ref.return_value = {"object": {"sha": "base_sha"}}
+    gh.create_ref.return_value = {}
+    gh.put_file_contents.return_value = {}
+    gh.create_pull_request.side_effect = Exception("Unprocessable Entity")
+    test_output = "```python\n# Test file: tests/test_x.py\ndef test_x(): pass\n```"
+
+    with patch("test_gen.app._post_as_comment") as mock_comment:
+        _post_as_draft_pr(gh, "o", "r", 42, "abc12345", "main", test_output)
+
+    mock_comment.assert_called_once_with(gh, "o", "r", 42, test_output)
+
+
+def test_post_as_draft_pr_existing_branch_is_reused() -> None:
+    """create_ref raising (branch exists) should NOT abort; commits should proceed."""
+    gh = MagicMock()
+    gh.get_ref.return_value = {"object": {"sha": "base_sha"}}
+    gh.create_ref.side_effect = Exception("branch already exists")
+    gh.put_file_contents.return_value = {}
+    gh.create_pull_request.return_value = {"number": 99, "html_url": "http://example.com/99"}
+    test_output = "```python\n# Test file: tests/test_x.py\ndef test_x(): pass\n```"
+
+    with patch("test_gen.app._post_as_comment") as mock_comment:
+        _post_as_draft_pr(gh, "o", "r", 42, "abc12345", "main", test_output)
+
+    mock_comment.assert_not_called()
+    gh.put_file_contents.assert_called_once()
+    gh.create_pull_request.assert_called_once()

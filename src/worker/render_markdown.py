@@ -133,8 +133,3 @@ def render_check_run_body(review: dict[str, Any], verdict: str | None = None) ->
         body = truncated + "\n\n*[Output truncated due to size limits]*"
 
     return body
-
-
-def render_pr_review_body(review: dict[str, Any]) -> str:
-    """Render a shorter PR review comment body (no strict size limit, but keep concise)."""
-    return render_check_run_body(review)

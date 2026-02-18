@@ -312,16 +312,21 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     token = auth.get_installation_token()
     gh = GitHubClient(token_provider=lambda: token, api_base=os.getenv("GITHUB_API_BASE", "https://api.github.com"))
 
+    # Fetch PR once and reuse for both generate_description and _update_pr_body.
     try:
-        description = generate_description(gh, owner, repo, int(pr_number), atlassian_secret_arn, model_id, region)
+        pr = gh.get_pull_request(owner, repo, int(pr_number))
+    except Exception:
+        logger.exception("pr_description_fetch_pr_failed")
+        return {"statusCode": 500, "body": json.dumps({"error": "pr_fetch_failed"})}
+
+    try:
+        description = generate_description(gh, owner, repo, int(pr_number), atlassian_secret_arn, model_id, region, pr=pr)
     except Exception:
         logger.exception("pr_description_generation_failed")
         return {"statusCode": 500, "body": json.dumps({"error": "generation_failed"})}
 
     if apply_to_pr and not dry_run:
-        pr = gh.get_pull_request(owner, repo, int(pr_number))
         _update_pr_body(gh, owner, repo, int(pr_number), pr.get("body") or "", description)
-
     return {
         "statusCode": 200,
         "headers": {"Content-Type": "application/json"},
