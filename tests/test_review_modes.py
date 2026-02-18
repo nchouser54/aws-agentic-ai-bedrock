@@ -44,3 +44,9 @@ def test_review_mode_strict_inline_suppresses_unmapped() -> None:
     )
     comments = _select_inline_comments([bad], _files(), "strict_inline")
     assert comments == []
+
+
+def test_review_mode_strict_inline_keeps_when_all_mapped() -> None:
+    """strict_inline should keep comments when every finding is mappable."""
+    comments = _select_inline_comments([_finding()], _files(), "strict_inline")
+    assert len(comments) == 1

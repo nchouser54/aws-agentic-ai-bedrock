@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import datetime
 import json
 import os
@@ -360,8 +361,6 @@ def _get_review_history(repo_full_name: str, pr_number: int) -> dict[str, Any] |
 # Review skip filters (pr-agent style config knobs)
 # ---------------------------------------------------------------------------
 
-import re as _re
-
 
 def _should_skip_review(
     pr: dict[str, Any],
@@ -406,14 +405,14 @@ def _should_skip_review(
     if IGNORE_PR_SOURCE_BRANCHES_RAW:
         head_ref = str((pr.get("head") or {}).get("ref") or "")
         for pattern in IGNORE_PR_SOURCE_BRANCHES_RAW:
-            if _re.search(pattern, head_ref):
+            if re.search(pattern, head_ref):
                 return True, f"Source branch '{head_ref}' matches IGNORE_PR_SOURCE_BRANCHES pattern '{pattern}'"
 
     # Ignore PR by target branch
     if IGNORE_PR_TARGET_BRANCHES_RAW:
         base_ref = str((pr.get("base") or {}).get("ref") or "")
         for pattern in IGNORE_PR_TARGET_BRANCHES_RAW:
-            if _re.search(pattern, base_ref):
+            if re.search(pattern, base_ref):
                 return True, f"Target branch '{base_ref}' matches IGNORE_PR_TARGET_BRANCHES pattern '{pattern}'"
 
     return False, ""
@@ -810,9 +809,6 @@ def _now_iso() -> str:
     return datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-import contextlib
-
-
 @contextlib.contextmanager
 def _suppress_check_run_errors(log):
     """Suppress and log check-run update failures so they never block the review."""
@@ -874,9 +870,15 @@ def _process_record(record: dict[str, Any]) -> None:
             return default
         return val.lower() not in {"false", "0", "no", "off"}
 
+    dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
     effective_skip_draft = _cfg_bool("skip_draft_prs", SKIP_DRAFT_PRS)
     effective_post_comment = _cfg_bool("post_review_comment", POST_REVIEW_COMMENT)
     effective_failure_on_severity = repo_cfg.get("failure_on_severity", FAILURE_ON_SEVERITY)
+    effective_review_comment_mode = repo_cfg.get("review_comment_mode", REVIEW_COMMENT_MODE)
+    effective_require_security = _cfg_bool("require_security_review", REQUIRE_SECURITY_REVIEW)
+    effective_require_tests = _cfg_bool("require_tests_review", REQUIRE_TESTS_REVIEW)
+    _num_max_raw = repo_cfg.get("num_max_findings")
+    effective_num_max_findings = int(_num_max_raw) if _num_max_raw and _num_max_raw.isdigit() else NUM_MAX_FINDINGS
 
     # -- Skip filters (pr-agent style) ----------------------------------------
     trigger = message.get("trigger", "auto")
@@ -931,8 +933,6 @@ def _process_record(record: dict[str, Any]) -> None:
         except Exception:  # noqa: BLE001
             local_logger.warning("incremental_diff_failed_fallback_to_full")
             is_incremental = False
-
-    dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
 
     # -- Create Check Run: in_progress ----------------------------------------
     check_run_id: int | None = None
@@ -1022,12 +1022,12 @@ def _process_record(record: dict[str, Any]) -> None:
 
             # -- Config knob filters -----------------------------------------
             findings_list: list[dict[str, Any]] = list(review_dict.get("findings") or [])
-            if not REQUIRE_SECURITY_REVIEW:
+            if not effective_require_security:
                 findings_list = [f for f in findings_list if f.get("type") != "security"]
-            if not REQUIRE_TESTS_REVIEW:
+            if not effective_require_tests:
                 findings_list = [f for f in findings_list if f.get("type") != "tests"]
-            if NUM_MAX_FINDINGS > 0:
-                findings_list = findings_list[:NUM_MAX_FINDINGS]
+            if effective_num_max_findings > 0:
+                findings_list = findings_list[:effective_num_max_findings]
             review_dict["findings"] = findings_list
 
     except Exception as exc:  # noqa: BLE001
@@ -1048,7 +1048,7 @@ def _process_record(record: dict[str, Any]) -> None:
 
         body = _format_review_body(legacy_result)
         files_by_name = {f.get("filename"): f for f in files}
-        inline_comments = _select_inline_comments(legacy_result.findings, files_by_name, REVIEW_COMMENT_MODE)
+        inline_comments = _select_inline_comments(legacy_result.findings, files_by_name, effective_review_comment_mode)
 
         legacy_findings_dicts = [
             {"severity": f.severity, "type": f.type, "message": f.message}
@@ -1112,6 +1112,7 @@ def _process_record(record: dict[str, Any]) -> None:
         if PR_REVIEW_STATE_TABLE:
             _set_last_reviewed_sha(
                 repo_full_name, pr_number, head_sha,
+                overall_risk=legacy_result.overall_risk,
                 finding_count=len(legacy_result.findings),
                 verdict=verdict,
                 input_tokens=total_input_tokens,
@@ -1133,6 +1134,7 @@ def _process_record(record: dict[str, Any]) -> None:
     # Build inline comments from 2-stage findings
     files_by_name = {f.get("filename"): f for f in files}
     inline_comments_2stage: list[dict[str, Any]] = []
+    _2stage_unmapped = 0
     for finding in (review_dict.get("findings") or []):
         file_data = files_by_name.get(finding.get("file", ""))
         if not file_data:
@@ -1144,6 +1146,7 @@ def _process_record(record: dict[str, Any]) -> None:
             continue
         position = map_new_line_to_diff_position(patch, finding["start_line"])
         if position is None:
+            _2stage_unmapped += 1
             continue
         comment_body = finding.get("message", "")
         if finding.get("suggested_patch"):
@@ -1154,7 +1157,10 @@ def _process_record(record: dict[str, Any]) -> None:
             "body": comment_body,
         })
 
-    if REVIEW_COMMENT_MODE == "summary_only":
+    _2stage_mode = effective_review_comment_mode.strip().lower()
+    if _2stage_mode == "summary_only":
+        inline_comments_2stage = []
+    elif _2stage_mode == "strict_inline" and _2stage_unmapped > 0:
         inline_comments_2stage = []
 
     check_output = {
