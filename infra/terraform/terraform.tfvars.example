@@ -294,3 +294,20 @@ webapp_bucket_name     = ""
 # webapp_tls_acm_certificate_arn = "arn:aws-us-gov:acm:us-gov-west-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 # webapp_tls_subnet_ids       = ["subnet-aaaaaaa", "subnet-bbbbbbb"]
 # webapp_default_chatbot_url  = "https://<api-id>.execute-api.us-gov-west-1.amazonaws.com/chatbot/query"
+
+# ---------------------------------------------------------------------------
+# Digital Twin — Phase 1: AST-aware KB ingestion
+# Source-code files parsed at symbol/function level for richer KB context.
+# ---------------------------------------------------------------------------
+# github_kb_source_patterns   = ["**/*.py", "**/*.ts", "**/*.go"]
+
+# Digital Twin — Phase 3: /test-gen/file — KB context top-k
+# test_gen_kb_top_k            = 5
+
+# Digital Twin — Phase 2: Coverage ingestion (POST /coverage/ingest)
+# coverage_ingest_enabled      = true
+
+# Digital Twin — Phase 4: Impact analysis (POST /impact-analysis)
+# impact_analysis_enabled      = true
+# impact_analysis_model_id     = ""    # falls back to bedrock_model_id
+# impact_analysis_kb_top_k     = 8

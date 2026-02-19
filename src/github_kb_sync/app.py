@@ -3,6 +3,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any
 
 import boto3
 
+from shared.ast_parser import build_symbol_text, parse_file, symbol_doc_id
 from shared.constants import DEFAULT_REGION
 from shared.github_app_auth import GitHubAppAuth
 from shared.github_client import GitHubClient
@@ -48,8 +50,11 @@ def _matches(path: str, patterns: list[str]) -> bool:
     return False
 
 
-def _s3_key(prefix: str, owner: str, repo: str, ref: str, path: str) -> str:
+def _s3_key(prefix: str, owner: str, repo: str, ref: str, path: str, symbol: str = "") -> str:
     safe_path = path.strip("/")
+    if symbol:
+        safe_symbol = re.sub(r"[^\w.\-]", "_", symbol)
+        return f"{prefix.rstrip('/')}/repos/{owner}/{repo}/{ref}/{safe_path}.{safe_symbol}.json"
     return f"{prefix.rstrip('/')}/repos/{owner}/{repo}/{ref}/{safe_path}.json"
 
 
@@ -82,6 +87,9 @@ def lambda_handler(_event: dict[str, Any], _context: Any) -> dict[str, Any]:
         os.getenv("GITHUB_KB_INCLUDE_PATTERNS", ""),
         default=["README.md", "docs/**", "**/*.md"],
     )
+    # Source-code patterns to parse at symbol level (functions/classes)
+    source_patterns = _parse_csv_list(os.getenv("GITHUB_KB_SOURCE_PATTERNS", ""))
+    symbol_ingestion_enabled = bool(source_patterns)
     prefix = os.getenv("GITHUB_KB_SYNC_PREFIX", "github")
     max_files_per_repo = max(1, int(os.getenv("GITHUB_KB_MAX_FILES_PER_REPO", "200")))
     ref_override = os.getenv("GITHUB_KB_REF", "").strip()
@@ -120,7 +128,13 @@ def lambda_handler(_event: dict[str, Any], _context: Any) -> dict[str, Any]:
 
             files = gh.list_repository_files(owner, repo, effective_ref)
             matches = [path for path in files if _matches(path, include_patterns)]
-            matches = matches[:max_files_per_repo]
+            if symbol_ingestion_enabled:
+                source_matches = [path for path in files if _matches(path, source_patterns)]
+                # merge without duplicates, source-code files first
+                all_paths = list(dict.fromkeys(source_matches + matches))
+            else:
+                all_paths = matches
+            matches = all_paths[:max_files_per_repo]
 
             for path in matches:
                 try:
@@ -130,6 +144,7 @@ def lambda_handler(_event: dict[str, Any], _context: Any) -> dict[str, Any]:
                         skipped += 1
                         continue
 
+                    # Always emit a file-level doc
                     doc = _build_doc(
                         owner=owner,
                         repo=repo,
@@ -145,6 +160,36 @@ def lambda_handler(_event: dict[str, Any], _context: Any) -> dict[str, Any]:
                         ContentType="application/json",
                     )
                     uploaded += 1
+
+                    # Emit per-symbol docs when source_patterns matched
+                    if symbol_ingestion_enabled and _matches(path, source_patterns):
+                        parsed = parse_file(path, text)
+                        for sym in parsed.symbols:
+                            sym_text = build_symbol_text(sym, path)
+                            sym_doc = {
+                                "id": symbol_doc_id(f"{owner}/{repo}", path, sym.symbol_name, effective_ref),
+                                "title": f"{sym.symbol_name} ({sym.symbol_type})",
+                                "repo": f"{owner}/{repo}",
+                                "path": path,
+                                "ref": effective_ref,
+                                "url": f"{web_base}/{owner}/{repo}/blob/{effective_ref}/{path}#L{sym.line_start}",
+                                "source": "github",
+                                "symbol_type": sym.symbol_type,
+                                "symbol_name": sym.symbol_name,
+                                "signature": sym.signature,
+                                "language": sym.language,
+                                "line_start": sym.line_start,
+                                "line_end": sym.line_end,
+                                "updated_at": datetime.now(timezone.utc).isoformat(),
+                                "text": sym_text,
+                            }
+                            s3.put_object(
+                                Bucket=bucket,
+                                Key=_s3_key(prefix, owner, repo, effective_ref, path, sym.symbol_name),
+                                Body=json.dumps(sym_doc).encode("utf-8"),
+                                ContentType="application/json",
+                            )
+                            uploaded += 1
                 except Exception:
                     logger.exception("github_doc_sync_failed", extra={"extra": {"repo": repo_slug, "path": path}})
                     failed += 1

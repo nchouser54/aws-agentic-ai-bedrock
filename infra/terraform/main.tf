@@ -2047,6 +2047,7 @@ resource "aws_lambda_function" "github_kb_sync" {
       GITHUB_KB_SYNC_PREFIX             = var.github_kb_sync_s3_prefix
       GITHUB_KB_REPOS                   = join(",", var.github_kb_repos)
       GITHUB_KB_INCLUDE_PATTERNS        = join(",", var.github_kb_include_patterns)
+      GITHUB_KB_SOURCE_PATTERNS         = join(",", var.github_kb_source_patterns)
       GITHUB_KB_MAX_FILES_PER_REPO      = tostring(var.github_kb_max_files_per_repo)
     }
   }
@@ -2749,6 +2750,11 @@ resource "aws_iam_policy" "test_gen_policy" {
       },
       {
         Effect   = "Allow"
+        Action   = ["bedrock-agent-runtime:Retrieve"]
+        Resource = ["*"]
+      },
+      {
+        Effect   = "Allow"
         Action   = ["kms:Decrypt"]
         Resource = aws_kms_key.app.arn
       }
@@ -2784,9 +2790,11 @@ resource "aws_lambda_function" "test_gen" {
       TEST_GEN_MODEL_ID                 = var.test_gen_model_id
       TEST_GEN_DELIVERY_MODE            = var.test_gen_delivery_mode
       TEST_GEN_MAX_FILES                = tostring(var.test_gen_max_files)
+      TEST_GEN_KB_TOP_K                 = tostring(var.test_gen_kb_top_k)
       GITHUB_API_BASE                   = var.github_api_base
       GITHUB_APP_PRIVATE_KEY_SECRET_ARN = local.github_app_private_key_secret_arn
       GITHUB_APP_IDS_SECRET_ARN         = local.github_app_ids_secret_arn
+      BEDROCK_KNOWLEDGE_BASE_ID         = local.effective_bedrock_knowledge_base_id
       DRY_RUN                           = tostring(var.dry_run)
     }
   }

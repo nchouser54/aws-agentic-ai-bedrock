@@ -1708,3 +1708,56 @@ variable "webhook_proxy_tls_key_secret_arn" {
   type        = string
   default     = ""
 }
+
+# ---------------------------------------------------------------------------
+# Digital Twin — Phase 1: AST-aware KB ingestion
+# ---------------------------------------------------------------------------
+
+variable "github_kb_source_patterns" {
+  description = "Glob patterns for source-code files to ingest at symbol (function/class) level in addition to docs. E.g. [\"**/*.py\", \"**/*.ts\"]. Empty list disables symbol-level ingestion."
+  type        = list(string)
+  default     = []
+}
+
+# ---------------------------------------------------------------------------
+# Digital Twin — Phase 3: /test-gen/file KB top-k
+# ---------------------------------------------------------------------------
+
+variable "test_gen_kb_top_k" {
+  description = "Number of KB results to retrieve as context for the /test-gen/file on-demand test generation endpoint."
+  type        = number
+  default     = 5
+}
+
+# ---------------------------------------------------------------------------
+# Digital Twin — Phase 2: Coverage ingestion Lambda
+# ---------------------------------------------------------------------------
+
+variable "coverage_ingest_enabled" {
+  description = "Enable the coverage ingestion Lambda and POST /coverage/ingest API route."
+  type        = bool
+  default     = false
+}
+
+# ---------------------------------------------------------------------------
+# Digital Twin — Phase 4: Impact analysis Lambda
+# ---------------------------------------------------------------------------
+
+variable "impact_analysis_enabled" {
+  description = "Enable the impact analysis Lambda and POST /impact-analysis API route."
+  type        = bool
+  default     = false
+}
+
+variable "impact_analysis_model_id" {
+  description = "Bedrock model ID for impact analysis LLM calls. Falls back to bedrock_model_id when empty."
+  type        = string
+  default     = ""
+}
+
+variable "impact_analysis_kb_top_k" {
+  description = "Number of KB results to retrieve per symbol during impact analysis."
+  type        = number
+  default     = 8
+}
+}
