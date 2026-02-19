@@ -223,3 +223,15 @@ output "webhook_proxy_url" {
   description = "HTTPS webhook URL to configure in GHES when using the proxy EC2. Format: https://<proxy_private_ip>/webhook/github"
   value       = var.webhook_proxy_enabled ? "https://${aws_instance.webhook_proxy[0].private_ip}/webhook/github" : ""
 }
+
+# ── Digital Twin outputs ─────────────────────────────────────────────────
+
+output "coverage_ingest_function_name" {
+  description = "Name of the coverage ingestion Lambda. Empty when coverage_ingest_enabled=false."
+  value       = var.coverage_ingest_enabled ? aws_lambda_function.coverage_ingest[0].function_name : ""
+}
+
+output "impact_analysis_function_name" {
+  description = "Name of the impact analysis Lambda. Empty when impact_analysis_enabled=false."
+  value       = var.impact_analysis_enabled ? aws_lambda_function.impact_analysis[0].function_name : ""
+}
