@@ -17,6 +17,7 @@ import os
 from typing import Any
 
 from shared.bedrock_chat import BedrockChatClient
+from shared.bedrock_kb import BedrockKnowledgeBaseClient
 from shared.constants import DEFAULT_REGION
 from shared.github_app_auth import GitHubAppAuth
 from shared.github_client import GitHubClient
@@ -62,6 +63,7 @@ Rules:
 """
 
 MAX_FILES = int(os.getenv("TEST_GEN_MAX_FILES", "10"))
+TEST_GEN_KB_TOP_K = int(os.getenv("TEST_GEN_KB_TOP_K", "5"))
 
 
 # ---- File filtering ----------------------------------------------------------
@@ -313,6 +315,164 @@ def _parse_test_files(markdown: str) -> list[tuple[str, str]]:
 # ---- Lambda handler ----------------------------------------------------------
 
 
+_FILE_SYSTEM_PROMPT = """\
+You are an expert software test engineer. Given a source file (and optionally \
+related code retrieved from a knowledge base), generate a comprehensive unit \
+test file.
+
+Rules:
+- Detect the programming language and use the idiomatic test framework:
+  * Python → pytest (use ``import pytest``, plain assert statements)
+  * TypeScript/JavaScript → jest or vitest
+  * Go → testing package
+  * Java → JUnit 5
+  * Other → best standard framework
+- Generate a SINGLE test file covering the provided source.
+- If a specific symbol (function/class) is requested, focus on it but include
+  helper tests as needed.
+- Use knowledge-base context (related functions, patterns, dependencies) to
+  produce realistic tests that match the project style.
+- Cover: happy path, edge cases, error handling, boundary conditions.
+- Mock external dependencies (APIs, databases, file I/O) completely.
+- Use descriptive test function names that explain the scenario.
+- Format output as ONE fenced code block with a comment on the first line:
+    # Test file: tests/test_<original_filename>.<ext>
+- Output ONLY the code block. No explanations outside the code fence.
+"""
+
+
+def generate_tests_for_file(
+    gh: GitHubClient,
+    owner: str,
+    repo: str,
+    ref: str,
+    path: str,
+    symbol: str,
+    model_id: str,
+    region: str,
+    kb_client: "BedrockKnowledgeBaseClient | None" = None,
+) -> str:
+    """Generate a full test file for *path* (optionally scoped to *symbol*).
+
+    Uses KB RAG to enrich the prompt with related functions / patterns.
+    Returns markdown with a fenced code block.
+    """
+    content, _ = gh.get_file_contents(owner, repo, path, ref)
+    content = (content or "").strip()
+    if not content:
+        return ""
+
+    # RAG: retrieve related symbols from KB
+    kb_context = ""
+    if kb_client is not None:
+        query = f"{symbol or path} tests patterns usage {repo}"
+        try:
+            results = kb_client.retrieve(query)
+            snippets = [r.get("text") or "" for r in results if r.get("text")]
+            if snippets:
+                kb_context = "\n\n".join(snippets[:TEST_GEN_KB_TOP_K])
+        except Exception:  # noqa: BLE001
+            logger.warning("kb_retrieve_failed_for_file_test_gen")
+
+    lines = [
+        f"Repository: {owner}/{repo}",
+        f"File: {path}",
+        f"Ref: {ref}",
+    ]
+    if symbol:
+        lines.append(f"Focus symbol: {symbol}")
+    lines += [
+        "",
+        f"## Source file content\n```\n{content}\n```",
+    ]
+    if kb_context:
+        lines += [
+            "",
+            "## Related code from project knowledge base (for style / import patterns)",
+            f"```\n{kb_context}\n```",
+        ]
+    user_prompt = "\n".join(lines)
+
+    chat = BedrockChatClient(region=region, model_id=model_id, max_tokens=4000)
+    return chat.answer(_FILE_SYSTEM_PROMPT, user_prompt)
+
+
+def _handle_file_request(
+    event: "dict[str, Any]",
+    auth: "GitHubAppAuth",
+) -> "dict[str, Any]":
+    """Handle ``POST /test-gen/file`` — on-demand single-file test generation."""
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return {"statusCode": 400, "body": json.dumps({"error": "invalid_json"})}
+
+    repo_full = (body.get("repo") or "").strip()
+    path = (body.get("path") or "").strip()
+    ref = (body.get("ref") or "main").strip()
+    symbol = (body.get("symbol") or "").strip()
+
+    if not repo_full or "/" not in repo_full or not path:
+        return {
+            "statusCode": 400,
+            "body": json.dumps({"error": "missing_fields", "detail": "repo (owner/repo) and path are required"}),
+        }
+
+    owner, repo = repo_full.split("/", maxsplit=1)
+    region = os.getenv("AWS_REGION", DEFAULT_REGION)
+    model_id = os.environ.get("TEST_GEN_MODEL_ID") or os.environ.get("BEDROCK_MODEL_ID", "")
+
+    token = auth.get_installation_token()
+    gh = GitHubClient(
+        token_provider=lambda: token,
+        api_base=os.getenv("GITHUB_API_BASE", "https://api.github.com"),
+    )
+
+    # Build KB client if configured
+    kb_id = os.getenv("BEDROCK_KNOWLEDGE_BASE_ID", "").strip()
+    kb_client: "BedrockKnowledgeBaseClient | None" = None
+    if kb_id:
+        kb_client = BedrockKnowledgeBaseClient(
+            region=region,
+            knowledge_base_id=kb_id,
+            top_k=TEST_GEN_KB_TOP_K,
+        )
+
+    try:
+        test_output = generate_tests_for_file(
+            gh=gh,
+            owner=owner,
+            repo=repo,
+            ref=ref,
+            path=path,
+            symbol=symbol,
+            model_id=model_id,
+            region=region,
+            kb_client=kb_client,
+        )
+    except Exception:
+        logger.exception("test_gen_file_failed")
+        return {"statusCode": 500, "body": json.dumps({"error": "generation_failed"})}
+
+    if not test_output:
+        return {"statusCode": 200, "body": json.dumps({"status": "empty_file"})}
+
+    return {
+        "statusCode": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps(
+            {
+                "status": "generated",
+                "repo": repo_full,
+                "path": path,
+                "ref": ref,
+                "symbol": symbol,
+                "tests": test_output,
+            }
+        ),
+    }
+
+
 def _process_sqs_record(record: dict[str, Any]) -> None:
     """Process a single SQS record (auto-triggered from worker)."""
     message = json.loads(record["body"])
@@ -370,10 +530,22 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     request_context = event.get("requestContext") or {}
     http = request_context.get("http") or {}
     method = http.get("method", "").upper()
+    path_info = http.get("path", "")
 
     if method != "POST":
         return {"statusCode": 405, "body": json.dumps({"error": "method_not_allowed"})}
 
+    auth = GitHubAppAuth(
+        app_ids_secret_arn=os.environ["GITHUB_APP_IDS_SECRET_ARN"],
+        private_key_secret_arn=os.environ["GITHUB_APP_PRIVATE_KEY_SECRET_ARN"],
+        api_base=os.getenv("GITHUB_API_BASE", "https://api.github.com"),
+    )
+
+    # Route: POST /test-gen/file — on-demand single-file test generation
+    if path_info.rstrip("/").endswith("/test-gen/file"):
+        return _handle_file_request(event, auth)
+
+    # Route: POST /test-gen/generate — PR-based test generation (existing)
     try:
         body = json.loads(event.get("body") or "{}")
     except json.JSONDecodeError:
@@ -393,11 +565,6 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     delivery_mode = os.getenv("TEST_GEN_DELIVERY_MODE", "comment").lower()
     dry_run = str(body.get("dry_run", os.getenv("DRY_RUN", "false"))).lower() == "true"
 
-    auth = GitHubAppAuth(
-        app_ids_secret_arn=os.environ["GITHUB_APP_IDS_SECRET_ARN"],
-        private_key_secret_arn=os.environ["GITHUB_APP_PRIVATE_KEY_SECRET_ARN"],
-        api_base=os.getenv("GITHUB_API_BASE", "https://api.github.com"),
-    )
     token = auth.get_installation_token()
     gh = GitHubClient(token_provider=lambda: token, api_base=os.getenv("GITHUB_API_BASE", "https://api.github.com"))
 

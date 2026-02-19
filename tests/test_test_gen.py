@@ -6,12 +6,14 @@ import json
 from unittest.mock import MagicMock, call, patch
 
 from test_gen.app import (
+    _handle_file_request,
     _is_safe_generated_test_path,
     _is_testable,
     _parse_test_files,
     _post_as_draft_pr,
     _select_testable_files,
     generate_tests,
+    generate_tests_for_file,
     lambda_handler,
 )
 
