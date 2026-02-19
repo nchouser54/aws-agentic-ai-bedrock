@@ -1649,3 +1649,62 @@ variable "webhook_private_allowed_cidrs" {
   type        = list(string)
   default     = ["10.0.0.0/8"]
 }
+
+# ── Webhook Nginx proxy EC2 (GHES over Direct Connect, port 443) ─────────
+# Use this when GHES requires HTTPS (port 443) and you have an internal CA cert.
+# The proxy EC2 listens on 443 with your cert and proxies to API Gateway
+# via the private execute-api VPC endpoint. Requires webhook_private_enabled=true.
+
+variable "webhook_proxy_enabled" {
+  description = "When true, deploy a small Nginx EC2 that proxies HTTPS:443 from GHES to the API Gateway execute-api VPC endpoint. Requires webhook_private_enabled=true. Set webhook_proxy_subnet_id and the TLS secret ARNs."
+  type        = bool
+  default     = false
+}
+
+variable "webhook_proxy_subnet_id" {
+  description = "Subnet ID (private, Direct Connect VPC) where the proxy EC2 is placed. Required when webhook_proxy_enabled=true."
+  type        = string
+  default     = ""
+}
+
+variable "webhook_proxy_instance_type" {
+  description = "Instance type for the webhook proxy EC2."
+  type        = string
+  default     = "t3.micro"
+}
+
+variable "webhook_proxy_private_ip" {
+  description = "Optional fixed private IPv4 address for the proxy EC2. Recommended for a stable target to put in GHES and firewall rules."
+  type        = string
+  default     = ""
+}
+
+variable "webhook_proxy_key_name" {
+  description = "Optional EC2 key pair name for SSH access to the proxy instance."
+  type        = string
+  default     = ""
+}
+
+variable "webhook_proxy_ami_id" {
+  description = "Optional AMI ID override for proxy EC2. Defaults to latest Amazon Linux 2 via SSM."
+  type        = string
+  default     = ""
+}
+
+variable "webhook_proxy_allowed_cidrs" {
+  description = "CIDR blocks allowed inbound to the proxy EC2 on port 443. Scope to your GHES host IP."
+  type        = list(string)
+  default     = ["10.0.0.0/8"]
+}
+
+variable "webhook_proxy_tls_cert_secret_arn" {
+  description = "Secrets Manager ARN containing the PEM-encoded TLS certificate for the proxy (issued by your internal CA). The secret value should be the full cert chain PEM text."
+  type        = string
+  default     = ""
+}
+
+variable "webhook_proxy_tls_key_secret_arn" {
+  description = "Secrets Manager ARN containing the PEM-encoded TLS private key for the proxy certificate."
+  type        = string
+  default     = ""
+}

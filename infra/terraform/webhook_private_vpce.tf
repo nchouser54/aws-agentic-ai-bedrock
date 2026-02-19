@@ -66,9 +66,10 @@ resource "aws_vpc_endpoint" "webhook_execute_api" {
   subnet_ids         = var.webhook_private_subnet_ids
   security_group_ids = [aws_security_group.webhook_vpce[0].id]
 
-  # private_dns_enabled=false: GHES is on a different network (other side of DX),
-  # so VPC-internal DNS override won't help it. We use /etc/hosts on GHES instead.
-  private_dns_enabled = false
+  # When webhook_proxy_enabled=true, the proxy EC2 is inside this VPC and needs
+  # VPC-internal DNS to resolve the API GW hostname to the VPCE IP automatically.
+  # When only VPCE is used (GHES /etc/hosts approach), keep false.
+  private_dns_enabled = var.webhook_proxy_enabled
 
   tags = merge(local.common_tags, {
     Name = "${local.name_prefix}-webhook-vpce"

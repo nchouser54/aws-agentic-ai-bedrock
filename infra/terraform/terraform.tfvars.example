@@ -28,6 +28,27 @@ github_allowed_repos = [
 # webhook_private_allowed_cidrs = ["10.x.x.x/32"]         # GHES host IP
 # ────────────────────────────────────────────────────────────────────────
 
+# ── Webhook Nginx proxy (GHES, port 443 only, internal CA cert) ──────────
+# Use this when port 80 is blocked and you have an internal CA cert GHES trusts.
+# Requires webhook_private_enabled=true (VPCE must exist).
+#
+# Steps:
+#   1. Issue cert from internal CA for the proxy EC2 IP/hostname
+#   2. Store cert PEM in Secrets Manager -> webhook_proxy_tls_cert_secret_arn
+#   3. Store key PEM in Secrets Manager  -> webhook_proxy_tls_key_secret_arn
+#   4. terraform apply
+#   5. terraform output webhook_proxy_url  -> GHES webhook URL
+#   6. terraform output webhook_proxy_private_ip -> open firewall hole on 443
+#
+# webhook_proxy_enabled                 = true
+# webhook_proxy_subnet_id               = "subnet-xxxxxxxx"   # same VPC as VPCE
+# webhook_proxy_private_ip              = "10.x.x.x"          # stable fixed IP (recommended)
+# webhook_proxy_allowed_cidrs           = ["10.x.x.x/32"]     # GHES host IP
+# webhook_proxy_tls_cert_secret_arn     = "arn:aws-us-gov:secretsmanager:us-gov-west-1:123456789:secret:webhook-proxy-cert"
+# webhook_proxy_tls_key_secret_arn      = "arn:aws-us-gov:secretsmanager:us-gov-west-1:123456789:secret:webhook-proxy-key"
+# webhook_proxy_key_name                = ""                   # optional SSH key pair
+# ────────────────────────────────────────────────────────────────────────
+
 # Bedrock config
 bedrock_agent_id       = ""
 bedrock_agent_alias_id = ""

@@ -211,3 +211,15 @@ output "webhook_private_url" {
   description = "Webhook URL to configure in GHES. After mapping the API GW hostname to a webhook_vpce_private_ip in /etc/hosts (or internal DNS), GHES traffic stays fully private over Direct Connect."
   value       = "https://${aws_apigatewayv2_api.webhook.id}.execute-api.${data.aws_region.current.name}.amazonaws.com/webhook/github"
 }
+
+# ── Nginx proxy outputs ──────────────────────────────────────────────────
+
+output "webhook_proxy_private_ip" {
+  description = "Private IP of the Nginx proxy EC2. Use this as the target in GHES webhook URL and firewall rules. Empty when webhook_proxy_enabled=false."
+  value       = var.webhook_proxy_enabled ? aws_instance.webhook_proxy[0].private_ip : ""
+}
+
+output "webhook_proxy_url" {
+  description = "HTTPS webhook URL to configure in GHES when using the proxy EC2. Format: https://<proxy_private_ip>/webhook/github"
+  value       = var.webhook_proxy_enabled ? "https://${aws_instance.webhook_proxy[0].private_ip}/webhook/github" : ""
+}
