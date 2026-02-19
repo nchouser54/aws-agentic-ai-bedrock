@@ -194,3 +194,20 @@ output "webhook_receiver_runtime" {
   description = "Lambda runtime selected for the webhook receiver."
   value       = var.webhook_receiver_runtime
 }
+
+# ── Private webhook VPC endpoint outputs ────────────────────────────────
+
+output "webhook_vpce_id" {
+  description = "execute-api VPC endpoint ID for private webhook delivery (GHES over Direct Connect). Empty when webhook_private_enabled=false."
+  value       = var.webhook_private_enabled ? aws_vpc_endpoint.webhook_execute_api[0].id : ""
+}
+
+output "webhook_vpce_private_ips" {
+  description = "Private IPs of the VPC endpoint ENIs. Open a firewall hole from your GHES host to these IPs on port 443, then add an /etc/hosts entry for the API Gateway hostname on GHES."
+  value       = var.webhook_private_enabled ? [for eni in data.aws_network_interface.webhook_vpce_enis : eni.private_ip] : []
+}
+
+output "webhook_private_url" {
+  description = "Webhook URL to configure in GHES. After mapping the API GW hostname to a webhook_vpce_private_ip in /etc/hosts (or internal DNS), GHES traffic stays fully private over Direct Connect."
+  value       = "https://${aws_apigatewayv2_api.webhook.id}.execute-api.${data.aws_region.current.name}.amazonaws.com/webhook/github"
+}

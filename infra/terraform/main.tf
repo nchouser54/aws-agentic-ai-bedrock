@@ -1742,7 +1742,16 @@ resource "aws_lambda_function" "webhook_receiver" {
       PR_DESCRIPTION_QUEUE_URL     = var.pr_description_enabled ? aws_sqs_queue.pr_description_queue[0].id : ""
       # Python receiver uses QUEUE_URL; TS receiver uses SQS_QUEUE_URL
       QUEUE_URL                    = aws_sqs_queue.pr_review_queue.id
-      SQS_QUEUE_URL                = aws_sqs_queue.pr_review_queue.id\n      # P1-A: manual /review comment trigger\n      GITHUB_APP_IDS_SECRET_ARN    = local.github_app_ids_secret_arn\n      GITHUB_APP_PRIVATE_KEY_SECRET_ARN = local.github_app_private_key_secret_arn\n      GITHUB_API_BASE              = var.github_api_base\n      REVIEW_TRIGGER_PHRASE        = var.review_trigger_phrase\n      BOT_USERNAME                 = var.bot_username\n      REVIEW_TRIGGER_LABELS        = join(",", var.review_trigger_labels)\n      MAX_WEBHOOK_AGE_SECONDS      = tostring(var.max_webhook_age_seconds)\n    }
+      SQS_QUEUE_URL                = aws_sqs_queue.pr_review_queue.id
+      # P1-A: manual /review comment trigger
+      GITHUB_APP_IDS_SECRET_ARN         = local.github_app_ids_secret_arn
+      GITHUB_APP_PRIVATE_KEY_SECRET_ARN = local.github_app_private_key_secret_arn
+      GITHUB_API_BASE                   = var.github_api_base
+      REVIEW_TRIGGER_PHRASE             = var.review_trigger_phrase
+      BOT_USERNAME                      = var.bot_username
+      REVIEW_TRIGGER_LABELS             = join(",", var.review_trigger_labels)
+      MAX_WEBHOOK_AGE_SECONDS           = tostring(var.max_webhook_age_seconds)
+    }
   }
 
   tracing_config {

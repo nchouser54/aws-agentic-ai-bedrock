@@ -15,6 +15,19 @@ github_allowed_repos = [
   # "my-org/my-repo"
 ]
 
+# ── Private webhook (GHES over Direct Connect) ──────────────────────────
+# Enable this block when your GHES cannot reach the public API Gateway endpoint.
+# After apply, run: terraform output webhook_vpce_private_ips
+# Open a firewall hole from GHES host to those IPs on port 443, then
+# add to GHES /etc/hosts: <private_ip>  <api_id>.execute-api.<region>.amazonaws.com
+# Use terraform output webhook_private_url as the GHES webhook URL.
+#
+# webhook_private_enabled       = true
+# webhook_private_vpc_id        = "vpc-xxxxxxxx"           # VPC where DX lands
+# webhook_private_subnet_ids    = ["subnet-xxxxxxxx"]      # one subnet = one stable IP
+# webhook_private_allowed_cidrs = ["10.x.x.x/32"]         # GHES host IP
+# ────────────────────────────────────────────────────────────────────────
+
 # Bedrock config
 bedrock_agent_id       = ""
 bedrock_agent_alias_id = ""

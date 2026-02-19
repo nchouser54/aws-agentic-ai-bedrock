@@ -1623,3 +1623,29 @@ variable "max_webhook_age_seconds" {
   type        = number
   default     = 300
 }
+
+# ── Private webhook endpoint (GHES over Direct Connect) ─────────────────
+
+variable "webhook_private_enabled" {
+  description = "When true, create a private execute-api VPC endpoint so GHES can deliver webhooks over Direct Connect without using a public hostname. Set webhook_private_vpc_id and webhook_private_subnet_ids when enabling."
+  type        = bool
+  default     = false
+}
+
+variable "webhook_private_vpc_id" {
+  description = "VPC ID where the execute-api interface VPC endpoint will be created. Required when webhook_private_enabled=true."
+  type        = string
+  default     = ""
+}
+
+variable "webhook_private_subnet_ids" {
+  description = "Subnet IDs (inside the Direct Connect VPC) for the execute-api VPC endpoint ENIs. One private IP is allocated per subnet — use a single subnet if you want a single stable IP."
+  type        = list(string)
+  default     = []
+}
+
+variable "webhook_private_allowed_cidrs" {
+  description = "CIDR blocks allowed inbound to the VPC endpoint security group on port 443. Scope this to your GHES host or network segment."
+  type        = list(string)
+  default     = ["10.0.0.0/8"]
+}
