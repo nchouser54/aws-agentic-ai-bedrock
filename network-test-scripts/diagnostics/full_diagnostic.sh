@@ -11,9 +11,14 @@
 
 set -uo pipefail
 
-TARGET_IP="${1:-}"
-PORT="${2:-21240}"
-CONTAINER_NAME="${3:-dev-pod}"
+# ── Load shared config (network-test-scripts/test.env) ──────────────────────
+_CFG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)/test.env"
+# shellcheck source=/dev/null
+[[ -f "${_CFG}" ]] && source "${_CFG}"
+
+TARGET_IP="${1:-${RHEL8_IP:-}}"
+PORT="${2:-${TEST_PORT:-21240}}"
+CONTAINER_NAME="${3:-${CONTAINER_NAME:-dev-pod}}"
 LOGFILE="/tmp/network_diag_$(hostname -s)_$(date +%Y%m%d_%H%M%S).log"
 
 # Resolve sibling script directories relative to this file's location

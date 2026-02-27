@@ -18,9 +18,14 @@
 
 set -uo pipefail
 
-PORT="${1:-21240}"
+# ── Load shared config (network-test-scripts/test.env) ──────────────────────
+_CFG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)/test.env"
+# shellcheck source=/dev/null
+[[ -f "${_CFG}" ]] && source "${_CFG}"
+
+PORT="${1:-${TEST_PORT:-21240}}"
 IFACE="${2:-}"
-DURATION="${3:-30}"
+DURATION="${3:-${CAPTURE_DURATION:-30}}"
 CAPFILE="/tmp/capture_port${PORT}_$(date +%Y%m%d_%H%M%S).pcap"
 
 echo "============================================="

@@ -12,9 +12,14 @@
 
 set -uo pipefail
 
-CONTAINER="${1:-dev-pod}"
-PORT="${2:-21240}"
-RHEL8_IP="${3:-}"
+# ── Load shared config (network-test-scripts/test.env) ──────────────────────
+_CFG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)/test.env"
+# shellcheck source=/dev/null
+[[ -f "${_CFG}" ]] && source "${_CFG}"
+
+CONTAINER="${1:-${CONTAINER_NAME:-dev-pod}}"
+PORT="${2:-${TEST_PORT:-21240}}"
+RHEL8_IP="${3:-${RHEL8_IP:-}}"
 
 echo "============================================="
 echo " DEBIAN DEVELOPER POD DIAGNOSTIC"

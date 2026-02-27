@@ -15,10 +15,15 @@
 
 set -euo pipefail
 
-HOST_PORT="${1:-21240}"
-CONTAINER_PORT="${2:-21240}"
-IMAGE="${3:-registry.access.redhat.com/ubi9/ubi-minimal}"
-CONTAINER_NAME="nc-test-server"
+# ── Load shared config (network-test-scripts/test.env) ──────────────────────
+_CFG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)/test.env"
+# shellcheck source=/dev/null
+[[ -f "${_CFG}" ]] && source "${_CFG}"
+
+HOST_PORT="${1:-${TEST_PORT:-21240}}"
+CONTAINER_PORT="${2:-${CONTAINER_PORT:-21240}}"
+IMAGE="${3:-${CONTAINER_IMAGE:-registry.access.redhat.com/ubi9/ubi-minimal}}"
+CONTAINER_NAME="${CONTAINER_NAME:-nc-test-server}"
 
 echo "============================================="
 echo " PODMAN NC SERVER SETUP"

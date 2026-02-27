@@ -17,7 +17,12 @@
 
 set -uo pipefail
 
-PORT="${1:-21240}"
+# ── Load shared config (network-test-scripts/test.env) ──────────────────────
+_CFG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)/test.env"
+# shellcheck source=/dev/null
+[[ -f "${_CFG}" ]] && source "${_CFG}"
+
+PORT="${1:-${TEST_PORT:-21240}}"
 
 echo "============================================="
 echo " CONNTRACK (Connection Tracking) CHECK"

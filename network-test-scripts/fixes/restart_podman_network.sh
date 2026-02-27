@@ -13,9 +13,14 @@
 
 set -uo pipefail
 
-CONTAINER="${1:-nc-test-server}"
-HOST_PORT="${2:-21240}"
-CONTAINER_PORT="${3:-21240}"
+# ── Load shared config (network-test-scripts/test.env) ──────────────────────
+_CFG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)/test.env"
+# shellcheck source=/dev/null
+[[ -f "${_CFG}" ]] && source "${_CFG}"
+
+CONTAINER="${1:-${CONTAINER_NAME:-nc-test-server}}"
+HOST_PORT="${2:-${TEST_PORT:-21240}}"
+CONTAINER_PORT="${3:-${CONTAINER_PORT:-21240}}"
 
 echo "============================================="
 echo " PODMAN NETWORK RESTART"

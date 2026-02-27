@@ -20,7 +20,12 @@
 
 set -uo pipefail
 
-SENDER_IP="${1:-}"
+# ── Load shared config (network-test-scripts/test.env) ──────────────────────
+_CFG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)/test.env"
+# shellcheck source=/dev/null
+[[ -f "${_CFG}" ]] && source "${_CFG}"
+
+SENDER_IP="${1:-${RHEL9_IP:-}}"
 
 echo "============================================="
 echo " TCP WRAPPERS CHECK (hosts.allow / hosts.deny)"

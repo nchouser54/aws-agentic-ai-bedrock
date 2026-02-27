@@ -52,10 +52,54 @@ network-test-scripts/
 
 ## Quick Start
 
-### Make scripts executable (run once)
+### 1. Configure once with `test.env`
+
+All scripts read from a shared config file so you never have to repeat IPs or
+ports on the command line.
 
 ```bash
-chmod +x network-test-scripts/**/*.sh
+# One-time setup — fill in your actual IPs
+cp test.env.example test.env
+$EDITOR test.env
+```
+
+`test.env` is gitignored (contains host-specific IPs). The file you edit looks like:
+
+```bash
+RHEL8_IP="10.0.0.10"          # RHEL8 EC2 (nc receiver / client)
+RHEL9_IP="10.0.0.20"          # RHEL9 EC2 (Podman host / server)
+TEST_PORT="21240"              # Port the container publishes
+CONTAINER_NAME="nc-test-server"
+CONTAINER_IMAGE="registry.access.redhat.com/ubi9/ubi-minimal"
+CONTAINER_PORT="${TEST_PORT}"  # Port inside the container
+TIMEOUT_SECS="5"
+CAPTURE_DURATION="30"
+```
+
+### 2. Make scripts executable (run once)
+
+```bash
+chmod +x run.sh **/*.sh
+```
+
+### 3. Use `run.sh` for common workflows
+
+```bash
+./run.sh config          # verify active configuration
+./run.sh server          # start nc container on RHEL9 (Podman host)
+./run.sh test            # test connectivity from RHEL8 → RHEL9
+./run.sh diag            # full diagnostic report
+./run.sh selinux-fix     # diagnose SELinux issues (dry-run)
+./run.sh help            # list all commands
+```
+
+CLI arguments still override `test.env` values in every script:
+
+```bash
+# Override just the port for this one run
+./run.sh test
+# … or call the script directly
+./ec2-to-podman/client_test.sh 1.2.3.4 9000
 ```
 
 ---
@@ -64,16 +108,19 @@ chmod +x network-test-scripts/**/*.sh
 
 **On the receiver EC2 (RHEL8):**
 ```bash
-./ec2-to-ec2/server.sh 9000
+./ec2-to-ec2/server.sh         # uses TEST_PORT from test.env
+./ec2-to-ec2/server.sh 9000    # or specify port explicitly
 ```
 
 **On the sender EC2:**
 ```bash
-./ec2-to-ec2/client.sh <RECEIVER_IP> 9000
+./ec2-to-ec2/client.sh                         # uses RHEL9_IP + TEST_PORT
+./ec2-to-ec2/client.sh <RECEIVER_IP> 9000      # or specify explicitly
 ```
 
 **Test multiple ports at once:**
 ```bash
+./ec2-to-ec2/multi_port_test.sh                           # uses RHEL9_IP
 ./ec2-to-ec2/multi_port_test.sh <RECEIVER_IP> 8080,9000,9090,5000
 ```
 
@@ -84,7 +131,8 @@ chmod +x network-test-scripts/**/*.sh
 ### 1. Start the test container on RHEL9
 
 ```bash
-./ec2-to-podman/podman_server_setup.sh 9000
+./run.sh server                    # uses test.env
+./ec2-to-podman/podman_server_setup.sh 9000   # or explicit port
 ```
 
 This launches an `nc` listener container with `-p 0.0.0.0:9000:9000` so it
@@ -100,7 +148,8 @@ a common failure cause).
 ### 3. Test from RHEL8
 
 ```bash
-./ec2-to-podman/client_test.sh <RHEL9_IP> 9000
+./run.sh test                            # uses RHEL9_IP + TEST_PORT from test.env
+./ec2-to-podman/client_test.sh <RHEL9_IP> 9000   # or explicit args
 ```
 
 ---
@@ -120,11 +169,13 @@ application receives them. The capture point is:
 
 **On RHEL9 (Podman host) — watch what leaves:**
 ```bash
-./diagnostics/tcpdump_capture.sh 9000
+./run.sh tcpdump                     # uses TEST_PORT + CAPTURE_DURATION from test.env
+./diagnostics/tcpdump_capture.sh 9000   # or explicit port
 ```
 
 **On RHEL8 (receiver) — watch what arrives:**
 ```bash
+./run.sh tcpdump
 ./diagnostics/tcpdump_capture.sh 9000
 ```
 
@@ -134,7 +185,9 @@ Then trigger the nc test from RHEL8 in a third terminal.
 
 Run on **both** hosts and compare:
 ```bash
-./diagnostics/full_diagnostic.sh <OTHER_HOST_IP> 9000 [CONTAINER_NAME]
+./run.sh diag            # on RHEL8: targets RHEL9_IP from test.env
+./run.sh diag rhel9      # on RHEL9: targets RHEL8_IP from test.env
+./diagnostics/full_diagnostic.sh <OTHER_HOST_IP> 9000 [CONTAINER_NAME]  # explicit
 ```
 Output is saved to `/tmp/network_diag_<hostname>_<timestamp>.log`.
 

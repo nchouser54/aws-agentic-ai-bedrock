@@ -21,7 +21,12 @@
 
 set -uo pipefail
 
-CONTAINER="${1:-dev-pod}"
+# ── Load shared config (network-test-scripts/test.env) ──────────────────────
+_CFG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)/test.env"
+# shellcheck source=/dev/null
+[[ -f "${_CFG}" ]] && source "${_CFG}"
+
+CONTAINER="${1:-${CONTAINER_NAME:-dev-pod}}"
 MODE="${2:-diagnose}"
 
 echo "============================================="

@@ -14,9 +14,14 @@
 
 set -euo pipefail
 
-HOST="${1:-}"
-PORT="${2:-21240}"
-TIMEOUT="${3:-5}"
+# ── Load shared config (network-test-scripts/test.env) ──────────────────────
+_CFG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)/test.env"
+# shellcheck source=/dev/null
+[[ -f "${_CFG}" ]] && source "${_CFG}"
+
+HOST="${1:-${RHEL9_IP:-}}"
+PORT="${2:-${TEST_PORT:-21240}}"
+TIMEOUT="${3:-${TIMEOUT_SECS:-5}}"
 ATTEMPTS=3
 
 if [[ -z "${HOST}" ]]; then
