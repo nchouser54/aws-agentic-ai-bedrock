@@ -173,7 +173,7 @@ echo ""
 
 # ── AppArmor inside container ─────────────────────────────────────────────────
 echo "── AppArmor (Debian default MAC) ────────────"
-if ${EXEC} which aa-status &>/dev/null 2>&1 || ${EXEC} test -f /sys/kernel/security/apparmor/profiles 2>/dev/null; then
+if ${EXEC} which aa-status &>/dev/null 2>&1 || test -f /sys/kernel/security/apparmor/profiles 2>/dev/null; then
     AA_STATUS=$(${EXEC} sh -c 'aa-status 2>/dev/null || cat /sys/kernel/security/apparmor/profiles 2>/dev/null | head -20' || true)
     if [[ -n "${AA_STATUS}" ]]; then
         echo "  [WARN] AppArmor is present inside the container:"

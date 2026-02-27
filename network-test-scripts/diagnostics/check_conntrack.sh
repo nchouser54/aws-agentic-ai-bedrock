@@ -130,8 +130,34 @@ echo ""
 # ── Podman NAT entries ────────────────────────────────────────────────────────
 echo "── Podman NAT Conntrack Entries ────────────"
 if command -v conntrack &>/dev/null || ${SUDO} conntrack --version &>/dev/null 2>&1; then
-    PODMAN_ENTRIES=$(${SUDO} conntrack -L 2>/dev/null | grep -E '10\.88\.' | wc -l || echo 0)
-    echo "  Entries from Podman subnet (10.88.x.x): ${PODMAN_ENTRIES}"
+    # Dynamically detect all configured Podman network subnets (works with
+    # custom networks, not just the default 10.88.0.0/16)
+    PODMAN_SUBNET_PATTERN=""
+    if command -v podman &>/dev/null; then
+        PODMAN_SUBNET_PATTERN=$(podman network inspect --all 2>/dev/null | \
+            python3 -c "
+import json, sys, re
+try:
+    nets = json.load(sys.stdin)
+    patterns = []
+    for n in nets:
+        for s in n.get('subnets', []):
+            sub = s.get('subnet', '')
+            # Build a grep-friendly prefix from the first two octets
+            m = re.match(r'(\d+\.\d+)\.', sub)
+            if m:
+                patterns.append(re.escape(m.group(1)) + r'\.')
+    print('|'.join(dict.fromkeys(patterns)))
+except Exception:
+    pass
+" 2>/dev/null || true)
+    fi
+    # Fall back to the Podman default if detection failed
+    [[ -z "${PODMAN_SUBNET_PATTERN}" ]] && PODMAN_SUBNET_PATTERN='10\.88\.'
+    echo "  Podman subnet pattern(s): ${PODMAN_SUBNET_PATTERN}"
+
+    PODMAN_ENTRIES=$(${SUDO} conntrack -L 2>/dev/null | grep -cE "${PODMAN_SUBNET_PATTERN}" || echo 0)
+    echo "  Conntrack entries matching Podman subnet(s): ${PODMAN_ENTRIES}"
     if [[ "${PODMAN_ENTRIES}" -gt 100 ]]; then
         echo "  [WARN] Large number of Podman NAT entries."
         echo "  Stale entries after container restart can block new connections."

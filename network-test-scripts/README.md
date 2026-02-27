@@ -42,7 +42,8 @@ network-test-scripts/
 │
 └── fixes/
     ├── fix_podman_firewall.sh     # fix firewalld, masquerade, Netavark
-    ├── fix_selinux_podman.sh      # fix SELinux booleans and port labels
+    ├── fix_selinux_podman.sh      # fix SELinux booleans and port labels (RHEL)
+    ├── fix_apparmor_podman.sh     # fix AppArmor confinement (Debian container)
     ├── fix_conntrack.sh           # flush stale conntrack entries, tune limits
     └── restart_podman_network.sh  # clean restart of container + networking
 ```
@@ -236,7 +237,7 @@ This applies:
 | Container nc works but app connections fail | Docker daemon iptables conflict | `check_podman_config.sh` |
 | Packets dropped before iptables on RHEL8 | XDP/eBPF program on NIC or tc ingress filter | `check_custom_rhel8.sh` [15] |
 | Traffic rerouted through VPN tunnel | VPN client (OpenVPN/WireGuard/AnyConnect) running | `check_custom_rhel8.sh` [16] |
-| nc works, app still times out | AppArmor confining nc inside Debian container | `check_debian_pod.sh` |
+| nc works, app still times out | AppArmor confining nc inside Debian container | `fix_apparmor_podman.sh` |
 | iptables rules invisible / no effect | iptables-nft vs iptables-legacy mismatch in container | `check_debian_pod.sh` |
 
 ---

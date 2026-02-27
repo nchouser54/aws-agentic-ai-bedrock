@@ -8,6 +8,7 @@
 set -uo pipefail
 
 CONTAINER="${1:-}"
+SUDO=""; [[ "${EUID}" -ne 0 ]] && SUDO="sudo"
 
 echo "============================================="
 echo " PODMAN NETWORK CONFIGURATION CHECK"
@@ -214,7 +215,7 @@ for n in d:
     echo "       Add to /etc/docker/daemon.json: {\"iptables\": false}"
     echo "       Then: systemctl restart docker"
     echo "  Check Docker chains: iptables -L -n | grep -E 'DOCKER'"
-    DOCKER_CHAINS=$(iptables -L -n 2>/dev/null | grep 'Chain DOCKER' || true)
+    DOCKER_CHAINS=$(${SUDO} iptables -L -n 2>/dev/null | grep 'Chain DOCKER' || true)
     [[ -n "${DOCKER_CHAINS}" ]] && echo "${DOCKER_CHAINS}" | sed 's/^/    /'
 elif command -v docker &>/dev/null; then
     echo "  [INFO] Docker CLI installed but daemon not running — no conflict."

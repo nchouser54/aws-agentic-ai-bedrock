@@ -269,8 +269,10 @@ echo "  [INFO] tc/qdisc filters can rate-limit or drop traffic outside iptables.
 echo "         Enterprise/STIG builds sometimes add ingress policers."
 TC_FILTERS=false
 for iface in $(ip link show 2>/dev/null | awk -F': ' '/^[0-9]+:/{print $2}' | tr -d '@' | cut -d' ' -f1); do
-    TC_OUT=$(tc qdisc show dev "${iface}" 2>/dev/null | grep -v '^$' || true)
-    if echo "${TC_OUT}" | grep -qvE 'noqueue|mq|fq_codel|pfifo_fast|pfifo'; then
+    # Only inspect lines that start with "qdisc" to avoid matching statistics lines
+    # (e.g. "Sent N bytes..." which would always fail the -v pattern check)
+    TC_OUT=$(tc qdisc show dev "${iface}" 2>/dev/null | grep '^qdisc ' || true)
+    if echo "${TC_OUT}" | grep -qvE '^qdisc (noqueue|mq|fq_codel|pfifo_fast|pfifo|ingress) '; then
         echo "  [WARN] Non-default qdisc on ${iface}:"
         echo "${TC_OUT}" | sed 's/^/    /'
         TC_INGRESS=$(tc filter show dev "${iface}" ingress 2>/dev/null || true)
