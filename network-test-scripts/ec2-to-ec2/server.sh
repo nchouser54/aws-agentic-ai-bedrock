@@ -7,8 +7,8 @@
 #   BIND_ADDR   Address to bind to (default: 0.0.0.0 = all interfaces)
 #
 # Example:
-#   ./server.sh 9000
-#   ./server.sh 9000 0.0.0.0
+#   ./server.sh 21240
+#   ./server.sh 21240 0.0.0.0
 
 set -euo pipefail
 

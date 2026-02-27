@@ -14,8 +14,8 @@
 set -uo pipefail
 
 CONTAINER="${1:-nc-test-server}"
-HOST_PORT="${2:-9000}"
-CONTAINER_PORT="${3:-9000}"
+HOST_PORT="${2:-21240}"
+CONTAINER_PORT="${3:-21240}"
 
 echo "============================================="
 echo " PODMAN NETWORK RESTART"

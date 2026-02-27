@@ -8,8 +8,8 @@
 #   TIMEOUT_SECS  Connection timeout in seconds (default: 5)
 #
 # Example:
-#   ./client.sh 10.0.1.50 9000
-#   ./client.sh 10.0.1.50 9000 10
+#   ./client.sh 10.0.1.50 21240
+#   ./client.sh 10.0.1.50 21240 10
 
 set -euo pipefail
 

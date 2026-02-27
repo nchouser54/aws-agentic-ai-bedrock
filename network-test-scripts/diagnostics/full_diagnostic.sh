@@ -4,14 +4,14 @@
 #
 # Usage: ./full_diagnostic.sh [TARGET_IP] [PORT]
 #   TARGET_IP  Remote host IP to include in connectivity checks (optional)
-#   PORT       Port to check specifically (optional, default: 9000)
+#   PORT       Port to check specifically (optional, default: 21240)
 #
 # Output is written to a timestamped log file for easy sharing.
 
 set -uo pipefail
 
 TARGET_IP="${1:-}"
-PORT="${2:-9000}"
+PORT="${2:-21240}"
 LOGFILE="/tmp/network_diag_$(hostname -s)_$(date +%Y%m%d_%H%M%S).log"
 
 run_section() {

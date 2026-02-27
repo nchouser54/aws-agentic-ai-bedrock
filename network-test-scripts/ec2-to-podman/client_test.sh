@@ -6,16 +6,16 @@
 #
 # Usage: ./client_test.sh <RHEL9_HOST_IP> [PORT] [TIMEOUT_SECS]
 #   RHEL9_HOST_IP  Public or private IP of the RHEL9 EC2
-#   PORT           Port published from the Podman container (default: 9000)
+#   PORT           Port published from the Podman container (default: 21240)
 #   TIMEOUT        Connection timeout (default: 5)
 #
 # Example:
-#   ./client_test.sh 10.0.2.100 9000
+#   ./client_test.sh 10.0.2.100 21240
 
 set -euo pipefail
 
 HOST="${1:-}"
-PORT="${2:-9000}"
+PORT="${2:-21240}"
 TIMEOUT="${3:-5}"
 ATTEMPTS=3
 

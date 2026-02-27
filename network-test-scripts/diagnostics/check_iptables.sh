@@ -7,7 +7,7 @@
 
 set -uo pipefail
 
-PORT="${1:-9000}"
+PORT="${1:-21240}"
 
 echo "============================================="
 echo " IPTABLES / NFTABLES DEEP INSPECTION"
