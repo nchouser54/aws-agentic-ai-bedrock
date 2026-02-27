@@ -170,12 +170,90 @@ ${SUDO} podman logs --tail 20 "${CONTAINER}" 2>&1 | sed 's/^/  /' || \
     podman logs --tail 20 "${CONTAINER}" 2>&1 | sed 's/^/  /'
 
 echo ""
+
+# ── AppArmor inside container ─────────────────────────────────────────────────
+echo "── AppArmor (Debian default MAC) ────────────"
+if ${EXEC} which aa-status &>/dev/null 2>&1 || ${EXEC} test -f /sys/kernel/security/apparmor/profiles 2>/dev/null; then
+    AA_STATUS=$(${EXEC} sh -c 'aa-status 2>/dev/null || cat /sys/kernel/security/apparmor/profiles 2>/dev/null | head -20' || true)
+    if [[ -n "${AA_STATUS}" ]]; then
+        echo "  [WARN] AppArmor is present inside the container:"
+        echo "${AA_STATUS}" | sed 's/^/  /'
+        echo ""
+        echo "  Check if nc/ncat has a restricting profile:"
+        ${EXEC} sh -c 'aa-status 2>/dev/null | grep -iE "nc|ncat|netcat" || echo "  (none found)"' | sed 's/^/  /'
+        echo ""
+        echo "  Denials in container syslog (if available):"
+        ${EXEC} sh -c 'grep "apparmor=\"DENIED\"" /var/log/syslog 2>/dev/null | tail -10 || dmesg 2>/dev/null | grep -i apparmor | tail -10 || echo "  (no apparmor denials visible)"' | sed 's/^/  /'
+        echo ""
+        echo "  Fix options:"
+        echo "    podman exec ${CONTAINER} aa-complain /usr/bin/nc.openbsd"
+        echo "    OR launch container with --security-opt apparmor=unconfined"
+    else
+        echo "  [OK ] AppArmor not active inside the container."
+    fi
+else
+    echo "  AppArmor tools not found inside container (may still be enforced by host)."
+    # Check if host AppArmor is confining the container
+    CONTAINER_PROF=$(cat /sys/kernel/security/apparmor/profiles 2>/dev/null | grep -i 'container\|podman' | head -5 || true)
+    if [[ -n "${CONTAINER_PROF}" ]]; then
+        echo "  [WARN] Host AppArmor profiles for containers:"
+        echo "${CONTAINER_PROF}" | sed 's/^/    /'
+    fi
+fi
+
+echo ""
+
+# ── iptables-legacy vs iptables-nft inside container ─────────────────────────
+echo "── iptables variant inside container ────────"
+echo "  [INFO] Debian/Ubuntu may have both iptables-legacy and iptables-nft."
+echo "         Rules written with one are invisible to the other."
+if ${EXEC} which update-alternatives &>/dev/null 2>&1; then
+    ${EXEC} sh -c 'update-alternatives --query iptables 2>/dev/null | grep -E "Value:|Status:" || echo "  (update-alternatives not configured)"' | sed 's/^/  /'
+fi
+if ${EXEC} which iptables &>/dev/null 2>&1; then
+    CT_IPTVER=$(${EXEC} iptables --version 2>/dev/null || true)
+    echo "  Container iptables: ${CT_IPTVER}"
+    if echo "${CT_IPTVER}" | grep -qi 'nf_tables\|nft'; then
+        echo "  [INFO] Container uses iptables-nft. Check nftables too:"
+        ${EXEC} nft list ruleset 2>/dev/null | grep -E 'DROP|REJECT' | sed 's/^/    /' || \
+            echo "    (nft not available or no DROP/REJECT rules)"
+    elif echo "${CT_IPTVER}" | grep -qi 'legacy'; then
+        echo "  [INFO] Container uses iptables-legacy."
+    fi
+fi
+
+echo ""
+
+# ── DNS resolution from inside container ──────────────────────────────────────
+echo "── DNS Resolution inside container ──────────"
+echo "  Checking /etc/resolv.conf:"
+${EXEC} cat /etc/resolv.conf 2>/dev/null | sed 's/^/  /' || echo "  (not readable)"
+echo ""
+echo "  DNS lookup test (google.com):"
+if ${EXEC} which nslookup &>/dev/null 2>&1; then
+    ${EXEC} sh -c 'nslookup google.com 2>&1 | tail -5' | sed 's/^/    /' || echo "    [FAIL] nslookup failed"
+elif ${EXEC} which dig &>/dev/null 2>&1; then
+    ${EXEC} sh -c 'dig +short google.com 2>&1 | head -3' | sed 's/^/    /' || echo "    [FAIL] dig failed"
+elif ${EXEC} which getent &>/dev/null 2>&1; then
+    ${EXEC} sh -c 'getent hosts google.com 2>&1' | sed 's/^/    /' || echo "    [FAIL] getent failed"
+else
+    ${EXEC} sh -c 'cat /etc/hosts | grep -v "^#" | head -10' 2>/dev/null | sed 's/^    /  /' || true
+    echo "    (no DNS tools available — checking /etc/hosts only)"
+fi
+echo ""
+if [[ -n "${RHEL8_IP}" ]]; then
+    echo "  Reverse lookup of RHEL8 IP ${RHEL8_IP}:"
+    ${EXEC} sh -c "nslookup ${RHEL8_IP} 2>&1 | tail -4 || host ${RHEL8_IP} 2>&1 | tail -2 || echo '  (reverse lookup failed — use IP directly)'" | sed 's/^/    /'
+fi
+
+echo ""
 echo "============================================="
 echo " If container cannot reach RHEL8:${PORT}:"
 echo "  1. Check ufw/iptables above"
-echo "  2. Check RHEL8 firewall: check_firewall.sh ${PORT}"
-echo "  3. Check RHEL8 custom layers: check_custom_rhel8.sh ${RHEL8_IP:-<IP>} ${PORT}"
-echo "  4. Re-launch with correct nc syntax for Debian:"
+echo "  2. Check AppArmor — launch with: --security-opt apparmor=unconfined"
+echo "  3. Check RHEL8 firewall: check_firewall.sh ${PORT}"
+echo "  4. Check RHEL8 custom layers: check_custom_rhel8.sh ${RHEL8_IP:-<IP>} ${PORT}"
+echo "  5. Re-launch with correct nc syntax for Debian:"
 echo "     podman exec ${CONTAINER} nc -l ${PORT}   # openbsd nc"
 echo "     podman exec ${CONTAINER} ncat -lvk -p ${PORT}   # ncat"
 echo "============================================="

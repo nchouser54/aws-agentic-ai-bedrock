@@ -18,23 +18,32 @@ network-test-scripts/
 ├── ec2-to-ec2/
 │   ├── server.sh              # nc listener on the receiver EC2
 │   ├── client.sh              # nc connect from the sender EC2
-│   └── multi_port_test.sh     # scan multiple ports at once
+│   ├── multi_port_test.sh     # scan multiple ports at once
+│   └── alt_connect_test.sh    # alternative connection methods (curl, socat, etc.)
 │
 ├── ec2-to-podman/
 │   ├── podman_server_setup.sh # launch an nc listener container on RHEL9
 │   ├── client_test.sh         # connect from RHEL8 to the Podman container
-│   └── check_podman_config.sh # inspect Podman networking config
+│   └── check_podman_config.sh # inspect Podman networking config (incl.
+│                              #   aardvark-dns, Docker daemon conflict, CNI)
 │
 ├── diagnostics/
-│   ├── full_diagnostic.sh     # run everything and save a report
+│   ├── full_diagnostic.sh     # run ALL checks below and save a report
 │   ├── tcpdump_capture.sh     # capture + interpret traffic on a port
 │   ├── check_firewall.sh      # inspect firewalld / iptables / nftables
 │   ├── check_selinux.sh       # check SELinux status and denials
-│   └── check_iptables.sh      # show Podman iptables/nftables chains
+│   ├── check_iptables.sh      # show Podman iptables/nftables chains
+│   ├── check_conntrack.sh     # conntrack table usage + stale entries
+│   ├── check_tcp_wrappers.sh  # hosts.allow / hosts.deny (RHEL8 receiver)
+│   ├── check_custom_rhel8.sh  # hardening checks: fail2ban, ipset, rp_filter,
+│   │                          #   FIPS, EDR agents, eBPF/XDP, tc filters, VPN
+│   └── check_debian_pod.sh    # Debian container: ufw, AppArmor, iptables
+│                              #   variant, nc flavour, DNS resolution
 │
 └── fixes/
     ├── fix_podman_firewall.sh     # fix firewalld, masquerade, Netavark
     ├── fix_selinux_podman.sh      # fix SELinux booleans and port labels
+    ├── fix_conntrack.sh           # flush stale conntrack entries, tune limits
     └── restart_podman_network.sh  # clean restart of container + networking
 ```
 
@@ -124,9 +133,13 @@ Then trigger the nc test from RHEL8 in a third terminal.
 
 Run on **both** hosts and compare:
 ```bash
-./diagnostics/full_diagnostic.sh <OTHER_HOST_IP> 9000
+./diagnostics/full_diagnostic.sh <OTHER_HOST_IP> 9000 [CONTAINER_NAME]
 ```
 Output is saved to `/tmp/network_diag_<hostname>_<timestamp>.log`.
+
+This now automatically runs all specialized sub-scripts below (conntrack,
+firewall, SELinux, iptables, TCP wrappers, RHEL8 hardening, Podman config,
+and the Debian pod check if the container is running).
 
 ### Step 3 — Check firewall
 
@@ -145,6 +158,30 @@ Output is saved to `/tmp/network_diag_<hostname>_<timestamp>.log`.
 
 ```bash
 ./diagnostics/check_iptables.sh 9000     # run on RHEL9
+```
+
+### Step 6 — Check conntrack (silent drops when table is full)
+
+```bash
+./diagnostics/check_conntrack.sh 9000    # run on either host
+```
+
+### Step 7 — Check TCP Wrappers (RHEL8 receiver)
+
+```bash
+./diagnostics/check_tcp_wrappers.sh <RHEL9_IP>   # run on RHEL8
+```
+
+### Step 8 — Check custom RHEL8 hardening (fail2ban, eBPF, VPN, EDR)
+
+```bash
+./diagnostics/check_custom_rhel8.sh <RHEL9_IP> 9000   # run on RHEL8
+```
+
+### Step 9 — Check Debian developer pod (AppArmor, iptables variant, DNS)
+
+```bash
+./diagnostics/check_debian_pod.sh dev-pod 9000 <RHEL8_IP>   # run on RHEL9
 ```
 
 ---
@@ -184,14 +221,23 @@ This applies:
 
 ## Root Causes Addressed
 
-| Symptom | Root Cause | Fix Script |
-|---------|-----------|------------|
+| Symptom | Root Cause | Script |
+|---------|-----------|--------|
 | tcpdump sees SYN but no SYN-ACK | firewalld blocking port | `fix_podman_firewall.sh` |
 | No packets seen at all on receiver | Podman container traffic not leaving RHEL9 | `fix_podman_firewall.sh` (masquerade) |
 | Packets arrive, nc still times out | SELinux denying bind/accept | `fix_selinux_podman.sh` |
 | Works as root but not as user | Rootless Podman slirp4netns limitation | Use `--network=host` or run as root |
 | Intermittent timeouts | Netavark/firewalld nftables conflict | `fix_podman_firewall.sh` (trusted zone) |
 | Port published to 127.0.0.1 only | Missing `0.0.0.0` in `-p` flag | `podman_server_setup.sh` (re-run) |
+| Connection reset after repeated failures | fail2ban banned the sender IP | `check_custom_rhel8.sh` [1] |
+| Intermittent drops, no firewall rule match | conntrack table full (stale NAT entries) | `fix_conntrack.sh` |
+| RHEL8 nc accepts then immediately closes | TCP Wrappers `hosts.deny ALL:ALL` | `check_tcp_wrappers.sh` |
+| Container cannot resolve hostnames | aardvark-dns not running | `check_podman_config.sh` |
+| Container nc works but app connections fail | Docker daemon iptables conflict | `check_podman_config.sh` |
+| Packets dropped before iptables on RHEL8 | XDP/eBPF program on NIC or tc ingress filter | `check_custom_rhel8.sh` [15] |
+| Traffic rerouted through VPN tunnel | VPN client (OpenVPN/WireGuard/AnyConnect) running | `check_custom_rhel8.sh` [16] |
+| nc works, app still times out | AppArmor confining nc inside Debian container | `check_debian_pod.sh` |
+| iptables rules invisible / no effect | iptables-nft vs iptables-legacy mismatch in container | `check_debian_pod.sh` |
 
 ---
 

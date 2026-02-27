@@ -262,6 +262,101 @@ done
 [[ "${FOUND}" == "false" ]] && echo "  [OK ] No known EDR agents detected."
 
 echo ""
+
+# ── 14. tc (traffic control) queuing disciplines ──────────────────────────────
+echo "── [14] Traffic control (tc) filters ───────"
+echo "  [INFO] tc/qdisc filters can rate-limit or drop traffic outside iptables."
+echo "         Enterprise/STIG builds sometimes add ingress policers."
+TC_FILTERS=false
+for iface in $(ip link show 2>/dev/null | awk -F': ' '/^[0-9]+:/{print $2}' | tr -d '@' | cut -d' ' -f1); do
+    TC_OUT=$(tc qdisc show dev "${iface}" 2>/dev/null | grep -v '^$' || true)
+    if echo "${TC_OUT}" | grep -qvE 'noqueue|mq|fq_codel|pfifo_fast|pfifo'; then
+        echo "  [WARN] Non-default qdisc on ${iface}:"
+        echo "${TC_OUT}" | sed 's/^/    /'
+        TC_INGRESS=$(tc filter show dev "${iface}" ingress 2>/dev/null || true)
+        if [[ -n "${TC_INGRESS}" ]]; then
+            echo "  [WARN] Ingress filter on ${iface} — may DROP packets before iptables:"
+            echo "${TC_INGRESS}" | head -10 | sed 's/^/    /'
+            ISSUES+=("tc ingress filter on ${iface}")
+        fi
+        TC_FILTERS=true
+    fi
+done
+[[ "${TC_FILTERS}" == "false" ]] && echo "  [OK ] No unusual tc queuing disciplines found."
+
+echo ""
+
+# ── 15. eBPF programs attached to interfaces ──────────────────────────────────
+echo "── [15] eBPF programs (XDP / TC BPF) ──────"
+echo "  [INFO] XDP or TC BPF programs can drop packets before iptables even sees them."
+if command -v bpftool &>/dev/null || ${SUDO} bpftool --version &>/dev/null 2>&1; then
+    EBPF_PROGS=$(${SUDO} bpftool net list 2>/dev/null || true)
+    if [[ -n "${EBPF_PROGS}" ]]; then
+        echo "  eBPF programs attached to network interfaces:"
+        echo "${EBPF_PROGS}" | grep -E 'xdp|tc' | sed 's/^/    /' || echo "    (none attached to xdp/tc)"
+        XDP_PROGS=$(echo "${EBPF_PROGS}" | grep -c xdp || echo 0)
+        if [[ "${XDP_PROGS}" -gt 0 ]]; then
+            echo "  [WARN] XDP programs found — these can silently drop packets!"
+            ISSUES+=("XDP eBPF program(s) attached to interface(s)")
+        fi
+    else
+        echo "  [OK ] No eBPF programs attached to network interfaces."
+    fi
+elif ${SUDO} ip link show 2>/dev/null | grep -q 'xdp'; then
+    echo "  [WARN] XDP program detected via ip link show:"
+    ${SUDO} ip link show 2>/dev/null | grep -A1 'xdp' | sed 's/^/    /'
+    ISSUES+=("XDP program visible in ip link show")
+else
+    echo "  bpftool not available. Manual check: ip link show | grep xdp"
+fi
+
+echo ""
+
+# ── 16. VPN clients / routing table interference ──────────────────────────────
+echo "── [16] VPN / overlay routing interference ─"
+echo "  [INFO] VPN clients add routes that may redirect container traffic."
+VPN_FOUND=false
+declare -A VPN_DAEMONS=(
+    ["openvpn"]="OpenVPN"
+    ["wireguard"]="WireGuard"
+    ["vpnagentd"]="Cisco AnyConnect"
+    ["GlobalProtect"]="Palo Alto GlobalProtect"
+    ["fortivpn"]="FortiVPN"
+)
+for proc in "${!VPN_DAEMONS[@]}"; do
+    if pgrep -x "${proc}" &>/dev/null 2>&1 || systemctl is-active --quiet "${proc}" 2>/dev/null; then
+        echo "  [WARN] ${VPN_DAEMONS[$proc]} (${proc}) is running."
+        VPN_FOUND=true
+        ISSUES+=("VPN client running: ${VPN_DAEMONS[$proc]}")
+    fi
+done
+# Check for WireGuard interfaces
+WG_IFACES=$(ip link show type wireguard 2>/dev/null | grep -c wg || echo 0)
+if [[ "${WG_IFACES}" -gt 0 ]]; then
+    echo "  [WARN] WireGuard interfaces active (wg*):"
+    ip link show type wireguard 2>/dev/null | sed 's/^/    /'
+    VPN_FOUND=true
+    ISSUES+=("WireGuard interface active")
+fi
+# Check for OpenVPN tun interfaces
+TUN_IFACES=$(ip link show 2>/dev/null | grep -E '^[0-9]+: tun[0-9]+' || true)
+if [[ -n "${TUN_IFACES}" ]]; then
+    echo "  [WARN] TUN interface(s) present — VPN may be routing your traffic:"
+    echo "${TUN_IFACES}" | sed 's/^/    /'
+    VPN_FOUND=true
+    ISSUES+=("TUN interface active (likely VPN)")
+fi
+# Show default route and any policy routes
+echo ""
+echo "  Default route:"
+ip route show default 2>/dev/null | sed 's/^/    /' || echo "    (none)"
+echo ""
+echo "  Policy routing rules (ip rule):"
+ip rule list 2>/dev/null | grep -v 'from all lookup main' | grep -v 'from all lookup default' | \
+    sed 's/^/    /' || echo "    (none)"
+[[ "${VPN_FOUND}" == "false" ]] && echo "  [OK ] No VPN/overlay routing interference detected."
+
+echo ""
 echo "============================================="
 echo " SUMMARY — ${#ISSUES[@]} issue(s) found"
 echo "============================================="

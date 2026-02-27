@@ -2,9 +2,10 @@
 # full_diagnostic.sh - Run all network diagnostics for EC2 <-> Podman issues.
 # Run this on BOTH hosts and compare output.
 #
-# Usage: ./full_diagnostic.sh [TARGET_IP] [PORT]
-#   TARGET_IP  Remote host IP to include in connectivity checks (optional)
-#   PORT       Port to check specifically (optional, default: 21240)
+# Usage: ./full_diagnostic.sh [TARGET_IP] [PORT] [CONTAINER_NAME]
+#   TARGET_IP       Remote host IP for connectivity checks (optional)
+#   PORT            Port to check specifically (optional, default: 21240)
+#   CONTAINER_NAME  Podman container for Debian pod check (optional, default: dev-pod)
 #
 # Output is written to a timestamped log file for easy sharing.
 
@@ -12,7 +13,12 @@ set -uo pipefail
 
 TARGET_IP="${1:-}"
 PORT="${2:-21240}"
+CONTAINER_NAME="${3:-dev-pod}"
 LOGFILE="/tmp/network_diag_$(hostname -s)_$(date +%Y%m%d_%H%M%S).log"
+
+# Resolve sibling script directories relative to this file's location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 run_section() {
     local title="$1"
@@ -113,6 +119,48 @@ elif command -v tracepath &>/dev/null; then
 else
     echo 'traceroute/tracepath not available'
 fi"
+fi
+
+echo ""
+
+# ── Specialized sub-script: conntrack ──────────────────────────────────────────
+run_section "CONNTRACK (connection tracking)" \
+    "\"${SCRIPT_DIR}/check_conntrack.sh\" \"${PORT}\" 2>/dev/null || true"
+
+# ── Specialized sub-script: firewall detail ────────────────────────────────────
+run_section "FIREWALL DETAIL (firewalld/iptables/nftables)" \
+    "\"${SCRIPT_DIR}/check_firewall.sh\" \"${PORT}\" tcp 2>/dev/null || true"
+
+# ── Specialized sub-script: SELinux detail ─────────────────────────────────────
+run_section "SELINUX DETAIL" \
+    "\"${SCRIPT_DIR}/check_selinux.sh\" \"${PORT}\" 2>/dev/null || true"
+
+# ── Specialized sub-script: iptables/nftables deep dive ───────────────────────
+run_section "IPTABLES / NFTABLES DEEP" \
+    "\"${SCRIPT_DIR}/check_iptables.sh\" \"${PORT}\" 2>/dev/null || true"
+
+# ── Specialized sub-script: TCP Wrappers (run on RHEL8 receiver) ───────────────
+run_section "TCP WRAPPERS (hosts.allow / hosts.deny)" \
+    "\"${SCRIPT_DIR}/check_tcp_wrappers.sh\" \"${TARGET_IP:-}\" 2>/dev/null || true"
+
+# ── Specialized sub-script: custom RHEL8 hardening ────────────────────────────
+run_section "CUSTOM RHEL8 HARDENING (fail2ban, ipset, rp_filter, EDR, eBPF, VPN)" \
+    "\"${SCRIPT_DIR}/check_custom_rhel8.sh\" \"${TARGET_IP:-}\" \"${PORT}\" 2>/dev/null || true"
+
+# ── Specialized sub-script: Podman config ─────────────────────────────────────
+if command -v podman &>/dev/null; then
+    run_section "PODMAN CONFIG (aardvark-dns, Docker conflict, CNI)" \
+        "\"${REPO_ROOT}/ec2-to-podman/check_podman_config.sh\" 2>/dev/null || true"
+
+    # Only attempt Debian pod check if the container is running
+    if podman ps --format '{{.Names}}' 2>/dev/null | grep -q "${CONTAINER_NAME}"; then
+        run_section "DEBIAN DEVELOPER POD (AppArmor, iptables variant, DNS)" \
+            "\"${SCRIPT_DIR}/check_debian_pod.sh\" \"${CONTAINER_NAME}\" \"${PORT}\" \"${TARGET_IP:-}\" 2>/dev/null || true"
+    else
+        echo ""
+        echo "══ DEBIAN POD CHECK: container '${CONTAINER_NAME}' not running — skipped ══"
+        echo "   Re-run with container name as 3rd arg, or start the container first."
+    fi
 fi
 
 echo ""
