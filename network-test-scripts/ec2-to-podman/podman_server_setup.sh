@@ -5,18 +5,18 @@
 # Run this on the RHEL9 EC2 that hosts the Podman container.
 #
 # Usage: ./podman_server_setup.sh [HOST_PORT] [CONTAINER_PORT] [IMAGE]
-#   HOST_PORT       Port exposed on the RHEL9 EC2 host (default: 9000)
-#   CONTAINER_PORT  Port nc listens on inside the container (default: 9000)
+#   HOST_PORT       Port exposed on the RHEL9 EC2 host (default: 21240)
+#   CONTAINER_PORT  Port nc listens on inside the container (default: 21240)
 #   IMAGE           Container image to use (default: registry.access.redhat.com/ubi9/ubi-minimal)
 #
 # Example:
-#   ./podman_server_setup.sh 9000 9000
+#   ./podman_server_setup.sh 21240 21240
 #   ./podman_server_setup.sh 8080 8080 debian:12
 
 set -euo pipefail
 
-HOST_PORT="${1:-9000}"
-CONTAINER_PORT="${2:-9000}"
+HOST_PORT="${1:-21240}"
+CONTAINER_PORT="${2:-21240}"
 IMAGE="${3:-registry.access.redhat.com/ubi9/ubi-minimal}"
 CONTAINER_NAME="nc-test-server"
 

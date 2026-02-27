@@ -10,7 +10,7 @@
 # Run this on EITHER host while running the nc test from the other side.
 #
 # Usage: ./tcpdump_capture.sh [PORT] [INTERFACE] [DURATION_SECS]
-#   PORT       Port to capture (default: 9000)
+#   PORT       Port to capture (default: 21240)
 #   INTERFACE  Network interface (default: auto-detected)
 #   DURATION   How long to capture in seconds (default: 30)
 #
@@ -18,7 +18,7 @@
 
 set -uo pipefail
 
-PORT="${1:-9000}"
+PORT="${1:-21240}"
 IFACE="${2:-}"
 DURATION="${3:-30}"
 CAPFILE="/tmp/capture_port${PORT}_$(date +%Y%m%d_%H%M%S).pcap"

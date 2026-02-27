@@ -11,12 +11,12 @@
 #   - firewall-cmd --list-all doesn't show the port as allowed
 #
 # Usage: ./fix_podman_firewall.sh [PORT] [ZONE]
-#   PORT  Port to open (default: 9000)
+#   PORT  Port to open (default: 21240)
 #   ZONE  firewalld zone (default: public)
 
 set -euo pipefail
 
-PORT="${1:-9000}"
+PORT="${1:-21240}"
 ZONE="${2:-public}"
 PROTO="tcp"
 

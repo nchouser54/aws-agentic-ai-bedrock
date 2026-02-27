@@ -4,12 +4,12 @@
 # Run on EITHER host.
 #
 # Usage: ./check_firewall.sh [PORT] [PROTOCOL]
-#   PORT      Port to check (default: 9000)
+#   PORT      Port to check (default: 21240)
 #   PROTOCOL  tcp or udp (default: tcp)
 
 set -uo pipefail
 
-PORT="${1:-9000}"
+PORT="${1:-21240}"
 PROTO="${2:-tcp}"
 
 echo "============================================="

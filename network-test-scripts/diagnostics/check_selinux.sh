@@ -4,11 +4,11 @@
 # Run on the RHEL8 or RHEL9 host.
 #
 # Usage: ./check_selinux.sh [PORT]
-#   PORT  Specific port to check labeling for (optional, default: 9000)
+#   PORT  Specific port to check labeling for (optional, default: 21240)
 
 set -uo pipefail
 
-PORT="${1:-9000}"
+PORT="${1:-21240}"
 
 echo "============================================="
 echo " SELINUX NETWORK & PODMAN CHECK"

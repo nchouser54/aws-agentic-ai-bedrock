@@ -6,12 +6,12 @@
 # Run on the RHEL9 EC2 (Podman host) as root / with sudo.
 #
 # Usage: ./fix_selinux_podman.sh [PORT] [MODE]
-#   PORT  Port the container is using (default: 9000)
+#   PORT  Port the container is using (default: 21240)
 #   MODE  'fix' to apply changes, 'diagnose' to only report (default: diagnose)
 
 set -uo pipefail
 
-PORT="${1:-9000}"
+PORT="${1:-21240}"
 MODE="${2:-diagnose}"
 
 echo "============================================="

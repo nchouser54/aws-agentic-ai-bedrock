@@ -5,7 +5,7 @@
 #
 # Usage: ./multi_port_test.sh <HOST> [PORT_LIST] [TIMEOUT_SECS]
 #   HOST        Target IP or hostname
-#   PORT_LIST   Comma-separated ports (default: 80,443,8080,8443,9000,9090,5000,6000)
+#   PORT_LIST   Comma-separated ports (default: 21240,80,443,8080,8443,9000,9090,5000,6000)
 #   TIMEOUT     Per-port timeout in seconds (default: 3)
 #
 # Example:
@@ -16,7 +16,7 @@
 set -euo pipefail
 
 HOST="${1:-}"
-PORT_LIST="${2:-80,443,8080,8443,9000,9090,5000,6000}"
+PORT_LIST="${2:-21240,80,443,8080,8443,9000,9090,5000,6000}"
 TIMEOUT="${3:-3}"
 
 if [[ -z "${HOST}" ]]; then
