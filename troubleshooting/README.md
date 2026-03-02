@@ -4,6 +4,8 @@
 
 ## 📦 Structure
 
+**All networking/connectivity testing scripts are consolidated here.** Scripts were previously duplicated across `/scripts/` and `/troubleshooting/scripts/` — this is now the single source of truth for EC2 connectivity diagnostics.
+
 ```
 troubleshooting/
 ├── README.md (this file)
@@ -44,9 +46,6 @@ cd troubleshooting/scripts/
 ---
 
 ### Step 2: RHEL8 Instance Check  
-**SSH to RHEL8:**
-
-```bash
 ./verify_instance_networking.sh <RHEL8_IP> <RHEL9_IP> 8080
 ```
 
@@ -73,7 +72,6 @@ cd troubleshooting/scripts/
 - ✓ RHEL9's firewall allows outbound
 
 **If successful:** Instances can communicate! ✅
-
 ---
 
 ## 📊 Decision Tree
@@ -86,7 +84,6 @@ Does the check PASS?
 │     → Fix security groups, NACLs, or routes
 │
 ├─ RHEL8 check FAILS?
-│  └─ Check docs/INSTANCE_NETWORKING_CHECKLIST.md#rhel8
 │     → Service not listening? Start it
 │     → Firewall blocking? Fix with firewall-cmd
 │     → SELinux blocking? Fix with semanage
@@ -96,7 +93,6 @@ Does the check PASS?
       → AWS SG not allowing RHEL9→RHEL8? Add rule
 ```
 
----
 
 ## 📋 Full Documentation
 
@@ -108,9 +104,9 @@ Does the check PASS?
 | [INSTANCE_NETWORKING_CHECKLIST.md](INSTANCE_NETWORKING_CHECKLIST.md) | Detailed OS-level checks | SRE / Ops |
 | [COMMON_ISSUES.md](COMMON_ISSUES.md) | Specific error solutions | Troubleshooter |
 
----
 
 ## 🔧 Scripts Reference
+**Last Consolidated:** March 2, 2026 — All scripts moved from `/scripts/` to `/troubleshooting/scripts/`
 
 ### `verify_vpc_connectivity.sh` (AWS CLI)
 **Checks AWS infrastructure:**
